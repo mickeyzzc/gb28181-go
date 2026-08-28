@@ -147,7 +147,7 @@ func TestParseSDP_SessionType(t *testing.T) {
 			if tc.s != "" {
 				body = "s=" + tc.s + "\n" + body
 			}
-			_, _, got, err := parseSDP(body)
+			_, _, got, _, err := parseSDP(body)
 			if err != nil {
 				t.Fatalf("parseSDP: %v", err)
 			}
