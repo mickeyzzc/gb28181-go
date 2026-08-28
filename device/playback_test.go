@@ -108,7 +108,7 @@ func startPlaybackServer(t *testing.T, idx RecordingIndex) (*Server, int, contex
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	go func() { _ = server.Start(ctx) }()
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 	return server, sipPort, cancel
 }
 
@@ -880,7 +880,7 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 	defer cancel()
 	go func() { _ = server.Start(ctx) }()
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	mediaSock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {

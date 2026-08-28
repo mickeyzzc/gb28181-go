@@ -95,4 +95,3 @@ type SegmentMeta struct {
 	Frames    int    `json:"frames"`    // number of access units
 	Keyframes int    `json:"keyframes"` // number of keyframe access units
 }
-
