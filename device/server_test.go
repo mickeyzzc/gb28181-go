@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// waitSIPPort polls until the server's SIP listener is bound (Start runs
+// concurrently) and returns its port.
+func waitSIPPort(t *testing.T, s *Server) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if port, err := s.SIPPort(); err == nil {
+			return port
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("SIP listener never bound")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // buildInvite builds a synthetic INVITE message for testing.
 func buildInvite(callID, from, to, contact string) SipMessage {
 	sdp := `v=0
@@ -86,7 +102,7 @@ func TestServer_AttachesSubscriberOnInvite(t *testing.T) {
 
 	// Wait for server to start and get actual SIP port
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 	t.Logf("Server started on SIP port %d", sipPort)
 
 	// Check initial subscriber count (should be 0)
@@ -181,7 +197,7 @@ func TestServer_Sends200OKBeforeMedia(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	// Send INVITE
 	callID := "test-call-456@example.com"
@@ -293,7 +309,7 @@ func TestServer_200OK_ContainsDeviceSDP(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	// Send INVITE
 	callID := "test-call-789@example.com"
@@ -388,7 +404,7 @@ func TestServer_EchoesSSRC(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	// Send INVITE with specific SSRC y=0100000001 (decimal 100000001)
 	callID := "test-call-ssrc@example.com"
@@ -470,7 +486,7 @@ func TestServer_ByeCleansUpSubscriberAndSocket(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	// Send INVITE
 	callID := "test-call-bye@example.com"
@@ -620,7 +636,7 @@ func TestServer_SendsRtpToSdpAddressNotSipPeer(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	// Bind the "platform media" socket the SDP will point to.
 	mediaSock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
@@ -715,7 +731,7 @@ func TestServer_ReInviteReplacesPreviousSession(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	clientConn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: sipPort})
 	if err != nil {
@@ -943,7 +959,7 @@ func TestRecvLoop_Subscribe_Gets200(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	sipPort := server.sipConn.LocalAddr().(*net.UDPAddr).Port
+	sipPort := waitSIPPort(t, server)
 
 	subscribe := SipMessage{
 		Method:     "SUBSCRIBE",

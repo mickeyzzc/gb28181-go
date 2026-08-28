@@ -45,8 +45,8 @@ func TestServer_TCPTransport_HandlesFramedSIP(t *testing.T) {
 	var tcpPort int
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if server.tcpListener != nil {
-			tcpPort = server.tcpListener.Addr().(*net.TCPAddr).Port
+		if p, err := server.SIPTCPPort(); err == nil {
+			tcpPort = p
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

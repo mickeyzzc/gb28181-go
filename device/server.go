@@ -116,7 +116,9 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("binding SIP UDP on port %d: %w", s.cfg.LocalSIPPort, err)
 	}
+	s.mu.Lock()
 	s.sipConn = sipConn
+	s.mu.Unlock()
 	slog.Info("gb28181: SIP UDP listener started", "port", s.cfg.LocalSIPPort)
 
 	// Run REGISTER lifecycle (skip in test mode). A failed initial
@@ -264,12 +266,40 @@ func (s *Server) Stop() {
 	if s.mediaTCPConn != nil {
 		s.mediaTCPConn.Close()
 	}
-	if s.tcpListener != nil {
-		s.tcpListener.Close()
+	s.mu.Lock()
+	sipConn := s.sipConn
+	tcpListener := s.tcpListener
+	s.mu.Unlock()
+	if tcpListener != nil {
+		tcpListener.Close()
 	}
-	if s.sipConn != nil {
-		s.sipConn.Close()
+	if sipConn != nil {
+		sipConn.Close()
 	}
+}
+
+// SIPPort returns the bound local SIP UDP port. Safe to call while the
+// server is starting concurrently; returns an error until the listener
+// is bound (or if the server runs in TCP mode).
+func (s *Server) SIPPort() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sipConn == nil {
+		return 0, fmt.Errorf("gb28181: SIP UDP listener not bound")
+	}
+	return s.sipConn.LocalAddr().(*net.UDPAddr).Port, nil
+}
+
+// SIPTCPPort returns the bound local SIP TCP port (TCP transport mode).
+// Safe to call while the server is starting concurrently; returns an
+// error until the listener is bound (or if the server runs in UDP mode).
+func (s *Server) SIPTCPPort() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tcpListener == nil {
+		return 0, fmt.Errorf("gb28181: SIP TCP listener not bound")
+	}
+	return s.tcpListener.Addr().(*net.TCPAddr).Port, nil
 }
 
 // sendSIP sends a SIP message to the given peer, dispatching to UDP or TCP.
