@@ -96,12 +96,3 @@ type SegmentMeta struct {
 	Keyframes int    `json:"keyframes"` // number of keyframe access units
 }
 
-// RecordingSource serves recorded-segment metadata. Implemented by the
-// host over its recording index; segment reading uses [OpenSegment].
-type RecordingSource interface {
-	// Lookup returns all segments overlapping the inclusive
-	// [startMS, endMS] range.
-	Lookup(startMS, endMS int64) []SegmentMeta
-	// Root is the absolute path segment File values are relative to.
-	Root() string
-}
