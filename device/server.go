@@ -320,38 +320,61 @@ func (s *Server) sendSIP(data []byte, addr net.Addr) error {
 // The session type comes from the s= line (Play|Playback|Download,
 // case-insensitive, defaulting to "Play").
 // Returns (mediaAddr "ip:port", ssrc, sessionType, err).
-func parseSDP(body string) (string, uint32, string, error) {
+// sdpMediaTransport classifies the INVITE SDP offer's media transport
+// (issue #14): TCP in the m= line plus the RFC 4145 a=setup value decides
+// which side connects.
+type sdpMediaTransport int
+
+const (
+	// mediaUDP is classic RTP/AVP over UDP.
+	mediaUDP sdpMediaTransport = iota
+	// mediaTCPConnect: TCP/RTP/AVP + setup:passive/actpass — the platform
+	// listens and the device connects.
+	mediaTCPConnect
+	// mediaTCPListen: TCP/RTP/AVP + setup:active — the platform dials the
+	// device (unsupported; refused with 488).
+	mediaTCPListen
+)
+
+func parseSDP(body string) (string, uint32, string, sdpMediaTransport, error) {
 	var mediaIP string
 	var mediaPort int
 	var ssrc uint32
 	var ssrcFound bool
+	var mLineProto string
+	var setupVal string
 	sessionType := "Play"
 
 	lines := strings.Split(body, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "c=") {
+		if strings.HasPrefix(line, "a=setup:") {
+			setupVal = strings.TrimPrefix(line, "a=setup:")
+		} else if strings.HasPrefix(line, "c=") {
 			// Connection: c=IN IP4 <address>
 			parts := strings.Fields(line)
 			if len(parts) >= 3 {
 				mediaIP = parts[2]
 			}
 		} else if strings.HasPrefix(line, "m=video ") {
-			// Media: m=video <port> RTP/AVP 96
+			// Media: m=video <port> <proto> <pt>
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				port, err := strconv.Atoi(parts[1])
 				if err != nil {
-					return "", 0, "", fmt.Errorf("invalid media port in m= line: %s: %w", parts[1], err)
+					return "", 0, "", mediaUDP, fmt.Errorf("invalid media port in m= line: %s: %w", parts[1], err)
 				}
 				mediaPort = port
+			}
+			if len(parts) >= 3 {
+				mLineProto = parts[2]
 			}
 		} else if strings.HasPrefix(line, "y=") {
 			// SSRC: y=<10-digit decimal>
 			ssrcStr := strings.TrimPrefix(line, "y=")
 			ssrcVal, err := strconv.ParseUint(ssrcStr, 10, 32)
 			if err != nil {
-				return "", 0, "", fmt.Errorf("invalid SSRC value: %s: %w", ssrcStr, err)
+				return "", 0, "", mediaUDP, fmt.Errorf("invalid SSRC value: %s: %w", ssrcStr, err)
 			}
 			ssrc = uint32(ssrcVal)
 			ssrcFound = true
@@ -361,13 +384,25 @@ func parseSDP(body string) (string, uint32, string, error) {
 	}
 
 	if !ssrcFound {
-		return "", 0, "", fmt.Errorf("SDP missing y= SSRC line")
+		return "", 0, "", mediaUDP, fmt.Errorf("SDP missing y= SSRC line")
 	}
 	if mediaIP == "" || mediaPort == 0 {
-		return "", 0, "", fmt.Errorf("SDP missing c= media IP or m=video media port")
+		return "", 0, "", mediaUDP, fmt.Errorf("SDP missing c= media IP or m=video media port")
 	}
 
-	return net.JoinHostPort(mediaIP, strconv.Itoa(mediaPort)), ssrc, sessionType, nil
+	// Media transport from the offer: TCP in the m= proto plus the RFC 4145
+	// setup value. actpass lets the answerer choose — this device connects.
+	mt := mediaUDP
+	if strings.Contains(mLineProto, "TCP") {
+		switch setupVal {
+		case "active":
+			mt = mediaTCPListen
+		default: // passive, actpass, or absent
+			mt = mediaTCPConnect
+		}
+	}
+
+	return net.JoinHostPort(mediaIP, strconv.Itoa(mediaPort)), ssrc, sessionType, mt, nil
 }
 
 // normalizeSessionType maps an SDP s= value to a canonical session type.
@@ -395,7 +430,7 @@ o=%s 0 0 IN IP4 %s
 s=%s
 c=IN IP4 %s
 t=0 0
-m=video %d TCP/RTP/AVP 0
+m=video %d TCP/RTP/AVP 96
 a=setup:active
 a=connection:new
 a=sendonly
@@ -648,7 +683,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// Parse SDP for RTP destination and SSRC — the media address comes from the
 	// SDP c=/m= lines, NEVER from the SIP peer address (streaming to the SIP
 	// port floods the platform's signaling socket).
-	mediaAddr, ssrc, sessionType, err := parseSDP(msg.Body)
+	mediaAddr, ssrc, sessionType, mediaTransport, err := parseSDP(msg.Body)
 	if err != nil {
 		slog.Warn("gb28181: failed to parse INVITE SDP", "error", err)
 		return
@@ -719,6 +754,26 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	s.playbackCtl = nil
 	s.mu.Unlock()
 
+	// TCP media where the platform dials the device (a=setup:active in the
+	// offer) is not supported — this device has no media listener. Refuse
+	// with 488 instead of answering a mismatched transport (issue #14).
+	if mediaTransport == mediaTCPListen {
+		slog.Warn("gb28181: TCP media with setup:active unsupported — 488")
+		reject := SipMessage{
+			StatusCode: 488,
+			Via:        msg.Via,
+			From:       msg.From,
+			To:         msg.To,
+			CallID:     msg.CallID,
+			CSeq:       msg.CSeq,
+			Headers:    make(map[string]string),
+		}
+		if err := s.sendSIP(reject.Serialize(), fromAddr); err != nil {
+			slog.Warn("gb28181: failed to send 488", "error", err)
+		}
+		return
+	}
+
 	// Bind local media UDP on ephemeral port
 	mediaConn, err := net.ListenUDP("udp", nil)
 	if err != nil {
@@ -739,7 +794,14 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Warn("gb28181: failed to determine local IP, falling back to interface scan", "error", err)
 		localIPAddr = localIP()
 	}
-	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, localMediaPort, ssrc, s.cfg.Transport, sessionType)
+	// The answer's m= transport mirrors the offer (RFC 3264): TCP media is
+	// offered via TCP/RTP/AVP in the SDP regardless of the SIP signaling
+	// transport (issue #14).
+	answerTransport := "udp"
+	if mediaTransport == mediaTCPConnect {
+		answerTransport = "tcp"
+	}
+	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, localMediaPort, ssrc, answerTransport, sessionType)
 
 	// Send 200 OK with SDP answer
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
@@ -748,10 +810,11 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		return
 	}
 
-	// For TCP transport, actively connect to the platform's media port
-	// (device connects TO platform - active mode per GB/T 28181).
+	// For TCP media (offer said TCP/RTP/AVP with setup:passive/actpass),
+	// actively connect to the platform's media port — the device is the
+	// active side per GB/T 28181 Annex C / RFC 4145 (issue #14).
 	var mediaTCPConn *net.TCPConn
-	if s.cfg.Transport == "tcp" {
+	if mediaTransport == mediaTCPConnect {
 		conn, err := net.Dial("tcp", mediaAddr)
 		if err != nil {
 			slog.Warn("gb28181: failed to connect to TCP media port", "addr", mediaAddr, "error", err)
@@ -783,6 +846,8 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 
 	// Subscribe to AUHub
 	sub := s.hub.Subscribe(ctx)
+	slog.Info("DEBUG srv hub ptr", "ptr", fmt.Sprintf("%p", s.hub))
+	slog.Info("gb28181: DEBUG subscribed, channel buf cap", "cap", cap(sub.Channel), "id", sub.ID)
 	s.mu.Lock()
 	s.sub = sub
 	s.remoteRTPAddr = rtpDest

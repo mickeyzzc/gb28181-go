@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -138,8 +139,10 @@ func TestServer_TCPTransport_HandlesFramedSIP(t *testing.T) {
 	}
 }
 
-// TestWriteRTPOverTCP_Framing verifies $-framing (Annex C.2): each RTP packet
-// is prefixed with 0x24 '$' + 2-byte big-endian length.
+// TestWriteRTPOverTCP_Framing verifies $-framing (Annex C.2, RTSP-interleaved
+// style as demuxed by GB28181 platforms): each RTP packet is prefixed with
+// 0x24 '$' + channel byte 0x00 + 2-byte big-endian length — a 4-byte header
+// (issue #14).
 func TestWriteRTPOverTCP_Framing(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -151,8 +154,8 @@ func TestWriteRTPOverTCP_Framing(t *testing.T) {
 		done <- writeRTPOverTCP(server, rtpPkt)
 	}()
 
-	buf := make([]byte, 3+len(rtpPkt))
-	if _, err := client.Read(buf); err != nil {
+	buf := make([]byte, 4+len(rtpPkt))
+	if _, err := io.ReadFull(client, buf); err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
 	if err := <-done; err != nil {
@@ -162,14 +165,17 @@ func TestWriteRTPOverTCP_Framing(t *testing.T) {
 	if buf[0] != 0x24 {
 		t.Fatalf("framing byte = 0x%02x, want 0x24 ('$')", buf[0])
 	}
+	if buf[1] != 0x00 {
+		t.Fatalf("channel byte = 0x%02x, want 0x00", buf[1])
+	}
 	wantLen := len(rtpPkt)
-	gotLen := int(buf[1])<<8 | int(buf[2])
+	gotLen := int(buf[2])<<8 | int(buf[3])
 	if gotLen != wantLen {
 		t.Fatalf("length = %d, want %d", gotLen, wantLen)
 	}
 	for i, b := range rtpPkt {
-		if buf[3+i] != b {
-			t.Fatalf("payload byte %d = 0x%02x, want 0x%02x", i, buf[3+i], b)
+		if buf[4+i] != b {
+			t.Fatalf("payload byte %d = 0x%02x, want 0x%02x", i, buf[4+i], b)
 		}
 	}
 }

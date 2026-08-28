@@ -69,13 +69,16 @@ func BuildRtpPacket(payload []byte, marker bool, ssrc uint32, seqNum uint16, tim
 }
 
 // writeRTPOverTCP frames an RTP packet with GB/T 28181 $-framing.
-// Per Annex C.2: [0x24 '$'] [2-byte big-endian length] [RTP packet bytes]
+// RTSP-interleaved style (Annex C.2 as demuxed by GB28181 platforms and
+// ZLMediaKit/wvp-class receivers):
+// [0x24 '$'] [channel 0x00] [2-byte big-endian length] [RTP packet bytes]
 func writeRTPOverTCP(conn net.Conn, rtpPkt []byte) error {
-	frame := make([]byte, 3+len(rtpPkt))
+	frame := make([]byte, 4+len(rtpPkt))
 	frame[0] = 0x24 // '$' framing byte
-	frame[1] = byte(len(rtpPkt) >> 8)
-	frame[2] = byte(len(rtpPkt))
-	copy(frame[3:], rtpPkt)
+	frame[1] = 0x00 // channel
+	frame[2] = byte(len(rtpPkt) >> 8)
+	frame[3] = byte(len(rtpPkt))
+	copy(frame[4:], rtpPkt)
 	_, err := conn.Write(frame)
 	return err
 }

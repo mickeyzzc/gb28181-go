@@ -585,7 +585,7 @@ a=rtpmap:96 PS/90000
 a=recvonly
 y=0100000001`
 
-	addr, ssrc, _, err := parseSDP(sdp)
+	addr, ssrc, _, _, err := parseSDP(sdp)
 	if err != nil {
 		t.Fatalf("parseSDP failed: %v", err)
 	}
@@ -602,7 +602,7 @@ y=0100000001`
 // RTP destination (it would flood the platform's signaling port).
 func TestParseSDP_RejectsMissingMediaLines(t *testing.T) {
 	sdp := "v=0\ns=Play\ny=0100000001\n"
-	if _, _, _, err := parseSDP(sdp); err == nil {
+	if _, _, _, _, err := parseSDP(sdp); err == nil {
 		t.Error("expected error for SDP missing c=/m= lines, got nil")
 	}
 }
