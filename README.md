@@ -21,6 +21,7 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 | `platform/sip/` | SIP UAS server on gosip — REGISTER + digest auth (qop=auth), keepalive/offline detection, catalog refresh + SUBSCRIBE (Catalog/Alarm/MobilePosition), INVITE/BYE with firmware-quirk patches (speculative ACK, dialog reset, REGISTER source-port rotation, long-GOP IDR watchdog), playback/talk domains, alarm-triggered stream linkage. Persistence via the `DeviceStore` interface; events via the built-in lossy `EventBus`. | MiBeeNvr `internal/gb28181/sip` |
 | `psmux/` | PS/RTP muxer (H.264/H.265, G.711 audio, >60KB AU splitting, RTP fragmentation) shared by device push and platform/cascade forwarding | MiBeeNvr `internal/gb28181/psmux` |
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
+| `platform/cascade/` | Cascade client — this platform registers as a LOWER platform to an upper platform: aggregated catalog upload with stable first-seen channel IDs, INVITE forwarding (FrameHub subscribe → psmux → RTP), playback from recorded segments, BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS handling, protocol-level loopback tests. Local cameras via `CameraSource`, persistence via `Store`, segment reading via `SegmentParser` — all host-injected. | MiBeeNvr `internal/gb28181/cascade` |
 
 ## Usage (device)
 
@@ -55,7 +56,7 @@ This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## Status
 
-`device/` + `manscdp/` shipped; `platform/` extraction batches 1–3 of 4 landed (PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager, SIP UAS server). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
+`device/` + `manscdp/` shipped; `platform/` extraction complete (4/4 batches: PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager, SIP UAS server, cascade). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
 
 ## License
 
