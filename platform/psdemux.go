@@ -395,7 +395,35 @@ feedLoop:
 			d.esBuf = nil
 		}
 	}
+	d.maybeLatchCodecFromNALUs(nalus)
 	return nalus, nil
+}
+
+// maybeLatchCodecFromNALUs fills an unset codec from definitive parameter-set
+// NALUs in the extracted AU. PSM-less senders exist (compliant ones whose PSM
+// never arrives on a mid-stream join, or non-compliant devices); without a
+// codec the demuxer reports "" — AU splitting and downstream IDR detection
+// then run in generic mode. Only first bytes that are unambiguous across BOTH
+// syntaxes count: H.264 SPS/PPS (0x67/0x68 → h265 reading 51/52, not param
+// sets) and H.265 VPS/SPS/PPS (0x40/0x42/0x44 → h264 reading 0/2/4, not param
+// sets). A PSM declaration still wins — this only fills the empty state.
+func (d *PSDemuxer) maybeLatchCodecFromNALUs(nalus [][]byte) {
+	if d.naluType != "" {
+		return
+	}
+	for _, n := range nalus {
+		if len(n) == 0 || n[0]&0x80 != 0 {
+			continue
+		}
+		switch n[0] {
+		case 0x67, 0x68:
+			d.naluType = "h264"
+			return
+		case 0x40, 0x42, 0x44:
+			d.naluType = "h265"
+			return
+		}
+	}
 }
 
 // DropPartialVideo discards the in-progress video AU (pending PES + ES
