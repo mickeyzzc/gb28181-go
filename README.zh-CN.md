@@ -21,6 +21,7 @@
 | `platform/sip/` | 基于 gosip 的 SIP UAS 服务器 —— REGISTER + 摘要认证（qop=auth）、保活/离线判定、目录刷新 + SUBSCRIBE（目录/报警/移动位置）、INVITE/BYE（含固件 quirk 补丁：speculative ACK、dialog reset、REGISTER 源端口轮换、长 GOP IDR watchdog）、回放/对讲域、报警联动拉流。持久化走 `DeviceStore` 接口；事件走内置有损 `EventBus`。 | MiBeeNvr `internal/gb28181/sip` |
 | `psmux/` | PS/RTP 打包 muxer（H.264/H.265、G.711 音频、>60KB AU 分段、RTP 分片），设备端推流与平台/级联转发共用 | MiBeeNvr `internal/gb28181/psmux` |
 | `nalutil/` | NALU 工具（IDR 判定、参数集提取/比较）—— 平台收流与未来设备侧共用 | MiBeeNvr `internal/model/nalutil` |
+| `platform/cascade/` | 级联客户端 —— 本平台作为下级平台向上级平台注册：聚合目录上报（GB 通道 ID 首见分配、跨重启稳定）、INVITE 转发拉流（FrameHub 订阅 → psmux → RTP）、录像段回放、BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS 处理、协议级回环测试。本地摄像头经 `CameraSource` 注入、持久化经 `Store`、录像段读取经 `SegmentParser` —— 全部宿主接缝。 | MiBeeNvr `internal/gb28181/cascade` |
 
 ## 使用（设备端）
 
@@ -56,7 +57,7 @@ err := srv.Start(ctx)
 
 ## 状态
 
-`device/` 与 `manscdp/` 已发布；`platform/` 抽取批次 1–3/4 已入库（PS 解复用/复用、注册表、端口池、PTZ、RTP 接收、会话编排、SIP UAS 服务器）。API 面趋于稳定但尚未冻结。在 [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) 每日对 MiBee NVR 国标平台生产验证。
+`device/` 与 `manscdp/` 已发布；`platform/` 抽取全部 4 批完成（PS 解复用/复用、注册表、端口池、PTZ、RTP 接收、会话编排、SIP UAS 服务器、级联）。API 面趋于稳定但尚未冻结。在 [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) 每日对 MiBee NVR 国标平台生产验证。
 
 ## 许可
 

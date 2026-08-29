@@ -64,3 +64,28 @@ func TestFrameHubDropOnFull(t *testing.T) {
 	require.Eventually(t, func() bool { return got.Load() == 151 }, 2*time.Second, 5*time.Millisecond)
 	require.EqualValues(t, 49, h.Dropped())
 }
+
+func TestFrameHubAudioFanOut(t *testing.T) {
+	h := NewFrameHub()
+	var got atomic.Int64
+	require.NoError(t, h.SubscribeAudio("aud", func(pts int64, codec string, data []byte) { got.Add(1) }))
+	h.BroadcastAudio(1000, "g711a", []byte{0x55})
+	require.Eventually(t, func() bool { return got.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	h.UnsubscribeAudio("aud")
+	h.BroadcastAudio(2000, "g711a", []byte{0x55})
+	time.Sleep(30 * time.Millisecond)
+	require.EqualValues(t, 1, got.Load())
+}
+
+func TestFrameHubConsumerCount(t *testing.T) {
+	h := NewFrameHub()
+	require.Zero(t, h.ConsumerCount())
+	require.NoError(t, h.Subscribe("v", func(pts int64, au [][]byte) {}))
+	require.EqualValues(t, 1, h.ConsumerCount())
+	require.NoError(t, h.SubscribeAudio("a", func(pts int64, codec string, data []byte) {}))
+	require.EqualValues(t, 2, h.ConsumerCount())
+	h.Unsubscribe("v")
+	h.UnsubscribeAudio("a")
+	require.Zero(t, h.ConsumerCount())
+}

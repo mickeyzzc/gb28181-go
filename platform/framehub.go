@@ -26,10 +26,11 @@ const frameHubQueueSize = 150
 // drop-on-full. Hosts needing the full NVR feature set (IDR fast-start
 // replay, jitter reorder, drop-rate telemetry) adapt Subscribe on their side.
 type FrameHub struct {
-	cameraID  string
-	mu        sync.Mutex
-	consumers map[string]*frameHubConsumer
-	dropped   atomic.Int64
+	cameraID       string
+	mu             sync.Mutex
+	consumers      map[string]*frameHubConsumer
+	audioConsumers map[string]*frameHubAudioConsumer
+	dropped        atomic.Int64
 }
 
 type frameHubConsumer struct {
@@ -109,6 +110,13 @@ func (h *FrameHub) Broadcast(pts int64, au [][]byte, isIDR bool) {
 // Dropped reports the number of frames dropped due to full consumer queues.
 func (h *FrameHub) Dropped() int64 { return h.dropped.Load() }
 
+// ConsumerCount reports the number of active subscribers (video + audio).
+func (h *FrameHub) ConsumerCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.consumers) + len(h.audioConsumers)
+}
+
 func (c *frameHubConsumer) drain() {
 	for {
 		select {
@@ -116,6 +124,81 @@ func (c *frameHubConsumer) drain() {
 			c.cb(f.pts, f.au)
 		case <-c.done:
 			return
+		}
+	}
+}
+
+// AudioCallback receives one demuxed audio frame (codec: "g711a"|"g711u"|"aac").
+type AudioCallback func(pts int64, codec string, data []byte)
+
+type frameHubAudioConsumer struct {
+	cb   AudioCallback
+	ch   chan frameHubAudioFrame
+	done chan struct{}
+}
+
+type frameHubAudioFrame struct {
+	pts   int64
+	codec string
+	data  []byte
+}
+
+// SubscribeAudio registers an audio consumer under a unique ID, with the
+// same delivery semantics as Subscribe (dedicated goroutine, drop-on-full).
+func (h *FrameHub) SubscribeAudio(id string, cb AudioCallback) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.audioConsumers == nil {
+		h.audioConsumers = make(map[string]*frameHubAudioConsumer)
+	}
+	if _, ok := h.audioConsumers[id]; ok {
+		return fmt.Errorf("audio consumer %q already subscribed", id)
+	}
+	c := &frameHubAudioConsumer{
+		cb:   cb,
+		ch:   make(chan frameHubAudioFrame, frameHubQueueSize),
+		done: make(chan struct{}),
+	}
+	h.audioConsumers[id] = c
+	go func() {
+		for {
+			select {
+			case f := <-c.ch:
+				c.cb(f.pts, f.codec, f.data)
+			case <-c.done:
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// UnsubscribeAudio removes an audio consumer. Unknown IDs are a no-op.
+func (h *FrameHub) UnsubscribeAudio(id string) {
+	h.mu.Lock()
+	c, ok := h.audioConsumers[id]
+	if ok {
+		delete(h.audioConsumers, id)
+	}
+	h.mu.Unlock()
+	if ok {
+		close(c.done)
+	}
+}
+
+// BroadcastAudio fans one audio frame out to all audio consumers, non-blocking.
+func (h *FrameHub) BroadcastAudio(pts int64, codec string, data []byte) {
+	h.mu.Lock()
+	consumers := make([]*frameHubAudioConsumer, 0, len(h.audioConsumers))
+	for _, c := range h.audioConsumers {
+		consumers = append(consumers, c)
+	}
+	h.mu.Unlock()
+	for _, c := range consumers {
+		select {
+		case c.ch <- frameHubAudioFrame{pts: pts, codec: codec, data: data}:
+		default:
+			h.dropped.Add(1)
 		}
 	}
 }
