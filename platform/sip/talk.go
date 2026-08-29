@@ -384,12 +384,13 @@ func sdpAudioCodec(sdp []byte) string {
 		case strings.HasPrefix(line, "m="):
 			inAudio = strings.HasPrefix(line, "m=audio ")
 		case inAudio && strings.HasPrefix(line, "a=rtpmap:"):
-			// a=rtpmap:<pt> <encoding>/<clock> [/<params>]
+			// a=rtpmap:<pt> <encoding>/<clock> [/<params>] — compare the
+			// encoding name only, before the clock separator.
 			fields := strings.Fields(strings.TrimPrefix(line, "a=rtpmap:"))
 			if len(fields) < 2 {
 				continue
 			}
-			switch strings.ToUpper(fields[1]) {
+			switch strings.ToUpper(strings.SplitN(fields[1], "/", 2)[0]) {
 			case "PCMA":
 				return platform.AudioCodecG711A
 			case "PCMU":
