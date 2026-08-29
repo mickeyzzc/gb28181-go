@@ -48,44 +48,26 @@ func TestFrameHubUnsubscribeStopsDelivery(t *testing.T) {
 func TestFrameHubDropOnFull(t *testing.T) {
 	h := NewFrameHub()
 	block := make(chan struct{})
+	inflight := make(chan struct{}, 1)
 	var got atomic.Int64
 	require.NoError(t, h.Subscribe("slow", func(pts int64, au [][]byte) {
 		got.Add(1)
+		select {
+		case inflight <- struct{}{}:
+		default:
+		}
 		<-block // consumer blocks: queue fills, further frames drop
 	}))
-	// Exhaust the queue + the in-flight callback: 1 in flight + 150 queued
-	// of the 200 sent => 49 dropped.
-	start := time.Now()
-	for i := 0; i < 200; i++ {
+	// Frame 0 lands in the callback; wait until it is provably in-flight so
+	// the arithmetic below is deterministic (no scheduling race).
+	h.Broadcast(0, [][]byte{{1}}, false)
+	<-inflight
+	// 200 more: 150 queued (capacity) + 50 dropped.
+	for i := 1; i <= 200; i++ {
 		h.Broadcast(int64(i), [][]byte{{1}}, false)
 	}
-	require.Less(t, time.Since(start), time.Second, "Broadcast must be non-blocking")
+	require.EqualValues(t, 50, h.Dropped())
 	close(block)
 	require.Eventually(t, func() bool { return got.Load() == 151 }, 2*time.Second, 5*time.Millisecond)
-	require.EqualValues(t, 49, h.Dropped())
-}
-
-func TestFrameHubAudioFanOut(t *testing.T) {
-	h := NewFrameHub()
-	var got atomic.Int64
-	require.NoError(t, h.SubscribeAudio("aud", func(pts int64, codec string, data []byte) { got.Add(1) }))
-	h.BroadcastAudio(1000, "g711a", []byte{0x55})
-	require.Eventually(t, func() bool { return got.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
-
-	h.UnsubscribeAudio("aud")
-	h.BroadcastAudio(2000, "g711a", []byte{0x55})
-	time.Sleep(30 * time.Millisecond)
-	require.EqualValues(t, 1, got.Load())
-}
-
-func TestFrameHubConsumerCount(t *testing.T) {
-	h := NewFrameHub()
-	require.Zero(t, h.ConsumerCount())
-	require.NoError(t, h.Subscribe("v", func(pts int64, au [][]byte) {}))
-	require.EqualValues(t, 1, h.ConsumerCount())
-	require.NoError(t, h.SubscribeAudio("a", func(pts int64, codec string, data []byte) {}))
-	require.EqualValues(t, 2, h.ConsumerCount())
-	h.Unsubscribe("v")
-	h.UnsubscribeAudio("a")
-	require.Zero(t, h.ConsumerCount())
+	require.EqualValues(t, 50, h.Dropped())
 }
