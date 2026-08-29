@@ -846,8 +846,6 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 
 	// Subscribe to AUHub
 	sub := s.hub.Subscribe(ctx)
-	slog.Info("DEBUG srv hub ptr", "ptr", fmt.Sprintf("%p", s.hub))
-	slog.Info("gb28181: DEBUG subscribed, channel buf cap", "cap", cap(sub.Channel), "id", sub.ID)
 	s.mu.Lock()
 	s.sub = sub
 	s.remoteRTPAddr = rtpDest
