@@ -36,8 +36,10 @@ type Server struct {
 	mediaTCPConn *net.TCPConn
 	// tcpListener is the TCP SIP listener (transport="tcp" only)
 	tcpListener net.Listener
-	// tcpConns tracks active TCP SIP connections keyed by remote address
-	tcpConns    sync.Map
+	// tcpConns tracks active TCP/TLS SIP connections keyed by remote address
+	tcpConns sync.Map
+	// tlsRemote is the SIPS connection's remote-address key (transport="tls")
+	tlsRemote   string
 	mu          sync.Mutex
 	cancel      context.CancelFunc
 	mediaCancel context.CancelFunc
@@ -110,6 +112,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return s.startTCPListener(ctx)
 	}
 
+	// SIPS transport (GB/T 28181-2022 A-level): dial the platform over TLS
+	// and run the full REGISTER/keepalive lifecycle over the connection.
+	if s.cfg.Transport == "tls" {
+		if err := s.startTLSClient(ctx); err != nil {
+			return err
+		}
+		s.startLifecycles(ctx)
+		return nil
+	}
+
 	// Bind SIP UDP
 	sipAddr := &net.UDPAddr{Port: s.cfg.LocalSIPPort}
 	sipConn, err := net.ListenUDP("udp", sipAddr)
@@ -133,67 +145,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Keepalive + registration lifecycle (skip in test mode)
-	if !s.testMode {
-		heartbeatInterval := time.Duration(s.cfg.HeartbeatIntervalSecs) * time.Second
-		go func() {
-			ticker := time.NewTicker(heartbeatInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if err := s.sendKeepalive(ctx); err != nil {
-						failures := s.keepaliveFailures.Add(1)
-						slog.Warn("gb28181: keepalive send failed", "error", err, "failures", failures)
-						if failures >= int32(s.cfg.HeartbeatTimeoutCount) {
-							slog.Warn("gb28181: too many keepalive failures, re-registering")
-							s.signalReRegister()
-							s.keepaliveFailures.Store(0)
-						}
-					}
-				}
-			}
-		}()
-
-		// Re-registration lifecycle: periodic refresh before Expires and
-		// immediate retry when the platform rejects us (401/403 keepalive —
-		// e.g. after an NVR restart that forgot our registration).
-		go func() {
-			registerInterval := time.Duration(s.cfg.RegisterIntervalSecs) * time.Second
-			ticker := time.NewTicker(registerInterval)
-			defer ticker.Stop()
-			// Log re-register failures as state transitions, not per-tick
-			// noise: the platform routinely ignores refresh REGISTERs
-			// (NVR-observed) while keepalives keep the registration alive,
-			// which used to emit one WARN per interval forever.
-			consecFails := 0
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					slog.Debug("gb28181: periodic re-registration")
-				case <-s.reRegisterCh:
-					slog.Info("gb28181: re-registration triggered (keepalive rejected or failures)")
-				}
-				if err := s.reregister(ctx); err != nil {
-					consecFails++
-					// First failure, then roughly once per half hour at the
-					// default 60s cadence.
-					if consecFails == 1 || consecFails%30 == 0 {
-						slog.Warn("gb28181: re-register failed", "error", err, "consecutive_failures", consecFails)
-					}
-					continue
-				}
-				if consecFails > 0 {
-					slog.Info("gb28181: re-registration recovered", "consecutive_failures", consecFails)
-				}
-				consecFails = 0
-			}
-		}()
-	}
+	s.startLifecycles(ctx)
 
 	// Enter SIP recv loop
 	buf := make([]byte, 4096)
@@ -460,6 +412,72 @@ y=%d`,
 		deviceID, localIP, sessionType, localIP, mediaPort, ssrc)
 }
 
+// startLifecycles spawns the keepalive and re-registration goroutines
+// (skipped in test mode) — shared by the UDP and SIPS transports.
+func (s *Server) startLifecycles(ctx context.Context) {
+	if s.testMode {
+		return
+	}
+	heartbeatInterval := time.Duration(s.cfg.HeartbeatIntervalSecs) * time.Second
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.sendKeepalive(ctx); err != nil {
+					failures := s.keepaliveFailures.Add(1)
+					slog.Warn("gb28181: keepalive send failed", "error", err, "failures", failures)
+					if failures >= int32(s.cfg.HeartbeatTimeoutCount) {
+						slog.Warn("gb28181: too many keepalive failures, re-registering")
+						s.signalReRegister()
+						s.keepaliveFailures.Store(0)
+					}
+				}
+			}
+		}
+	}()
+
+	// Re-registration lifecycle: periodic refresh before Expires and
+	// immediate retry when the platform rejects us (401/403 keepalive —
+	// e.g. after an NVR restart that forgot our registration).
+	go func() {
+		registerInterval := time.Duration(s.cfg.RegisterIntervalSecs) * time.Second
+		ticker := time.NewTicker(registerInterval)
+		defer ticker.Stop()
+		// Log re-register failures as state transitions, not per-tick
+		// noise: the platform routinely ignores refresh REGISTERs
+		// (NVR-observed) while keepalives keep the registration alive,
+		// which used to emit one WARN per interval forever.
+		consecFails := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				slog.Debug("gb28181: periodic re-registration")
+			case <-s.reRegisterCh:
+				slog.Info("gb28181: re-registration triggered (keepalive rejected or failures)")
+			}
+			if err := s.reregister(ctx); err != nil {
+				consecFails++
+				// First failure, then roughly once per half hour at the
+				// default 60s cadence.
+				if consecFails == 1 || consecFails%30 == 0 {
+					slog.Warn("gb28181: re-register failed", "error", err, "consecutive_failures", consecFails)
+				}
+				continue
+			}
+			if consecFails > 0 {
+				slog.Info("gb28181: re-registration recovered", "consecutive_failures", consecFails)
+			}
+			consecFails = 0
+		}
+	}()
+}
+
 // localIP detects a local IP address or returns 0.0.0.0 placeholder.
 func localIP() string {
 	addrs, err := net.InterfaceAddrs()
@@ -574,6 +592,37 @@ func (s *Server) runRegisterLifecycle(ctx context.Context) error {
 	return s.runRegisterLifecycleWith(ctx, s.socketResponseSource())
 }
 
+// sendToPlatform sends a lifecycle message (REGISTER, keepalive) to the
+// platform over the configured transport: UDP write to the platform address,
+// or a write on the SIPS connection for transport "tls".
+func (s *Server) sendToPlatform(msg SipMessage, platformAddr *net.UDPAddr) error {
+	if s.cfg.Transport == "tls" {
+		s.mu.Lock()
+		remote := s.tlsRemote
+		s.mu.Unlock()
+		if conn, ok := s.tcpConns.Load(remote); ok {
+			_, err := conn.(net.Conn).Write(msg.Serialize())
+			return err
+		}
+		return fmt.Errorf("gb28181: no SIPS connection to platform")
+	}
+	_, err := s.sipConn.WriteToUDP(msg.Serialize(), platformAddr)
+	return err
+}
+
+// viaTransportLabel returns the Via header transport token for the
+// configured signaling transport.
+func (s *Server) viaTransportLabel() string {
+	switch s.cfg.Transport {
+	case "tls":
+		return "TLS"
+	case "tcp":
+		return "TCP"
+	default:
+		return "UDP"
+	}
+}
+
 // runRegisterLifecycleWith performs the REGISTER authentication flow
 // using the given response source.
 func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regResponseSource) error {
@@ -594,13 +643,14 @@ func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regR
 	callID := fmt.Sprintf("%d@%s", time.Now().Unix(), localIPAddr)
 	cseq := "1 REGISTER"
 	contact := fmt.Sprintf("<sip:%s@%s:%d>", s.cfg.DeviceID, localIPAddr, s.cfg.LocalSIPPort)
-	via := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%016x", localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
+	viaTransport := s.viaTransportLabel()
+	via := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", viaTransport, localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
 
 	// Initial REGISTER
 	slog.Info("gb28181: sending initial REGISTER")
 	regMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, "")
 	regMsg.Via = via
-	if _, err := s.sipConn.WriteToUDP(regMsg.Serialize(), platformAddr); err != nil {
+	if err := s.sendToPlatform(regMsg, platformAddr); err != nil {
 		return fmt.Errorf("sending REGISTER: %w", err)
 	}
 
@@ -621,10 +671,10 @@ func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regR
 		authHeader := BuildAuthorizationHeader(auth, s.cfg.DeviceID, s.cfg.Password, requestURI, "REGISTER")
 		cseq = "2 REGISTER"
 		authMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, authHeader)
-		via2 := fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%016x", localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
+		via2 := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", viaTransport, localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
 		authMsg.Via = via2
 
-		if _, err := s.sipConn.WriteToUDP(authMsg.Serialize(), platformAddr); err != nil {
+		if err := s.sendToPlatform(authMsg, platformAddr); err != nil {
 			return fmt.Errorf("sending authenticated REGISTER: %w", err)
 		}
 
@@ -676,9 +726,9 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 	msg.CallID = callID
 	msg.Contact = contact
 	msg.CSeq = "1 MESSAGE"
-	msg.Via = fmt.Sprintf("SIP/2.0/UDP %s:%d;branch=z9hG4bK%016x", localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
+	msg.Via = fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", s.viaTransportLabel(), localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
 
-	if _, err := s.sipConn.WriteToUDP(msg.Serialize(), platformAddr); err != nil {
+	if err := s.sendToPlatform(msg, platformAddr); err != nil {
 		return fmt.Errorf("sending keepalive MESSAGE: %w", err)
 	}
 

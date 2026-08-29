@@ -17,6 +17,7 @@ import (
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
+	gosiptransport "github.com/ghettovoice/gosip/transport"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/mickeyzzc/gb28181-go/platform"
 )
@@ -319,6 +320,23 @@ func (s *Server) Start(ctx context.Context) error {
 			return fmt.Errorf("gb28181: listen TCP %s: %w", addr, err)
 		}
 	}
+	// SIPS (GB/T 28181-2022 A-level): TLS listener over the same address.
+	// gosip's connection pool reuses the device-registered connection for
+	// platform-initiated requests addressed with ;transport=tls.
+	if s.cfg.SIPTransport == "tls" {
+		if s.cfg.TLSCertFile == "" || s.cfg.TLSKeyFile == "" {
+			s.startFailed(cancel)
+			return fmt.Errorf("gb28181: sip_transport tls requires tls_cert_file and tls_key_file")
+		}
+		if err := srv.Listen("TLS", addr, gosiptransport.TLSConfig{
+			Domain: host,
+			Cert:   s.cfg.TLSCertFile,
+			Key:    s.cfg.TLSKeyFile,
+		}); err != nil {
+			s.startFailed(cancel)
+			return fmt.Errorf("gb28181: listen TLS %s: %w", addr, err)
+		}
+	}
 	s.deviceMgr.Start(srvCtx)
 	// Periodic catalog refresh (cfg.CatalogInterval, default 30m) keeps
 	// channel lists current: newly added channels on a device get discovered
@@ -477,9 +495,10 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 		},
 	}
 	recipient := &sip.SipUri{
-		FUser: sip.String{Str: deviceID},
-		FHost: devHost,
-		FPort: &portVal,
+		FUser:      sip.String{Str: deviceID},
+		FHost:      devHost,
+		FPort:      &portVal,
+		FUriParams: s.tlsTransportParams(),
 	}
 
 	req, err := s.buildRequest(sip.MESSAGE, serverHost, from, to, recipient, "", "Application/MANSCDP+xml", string(body))
@@ -498,6 +517,16 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 // it), Via carrying the platform's SIP port (not the default 5060), and a
 // fresh branch/CSeq. contentType/body are set when non-empty; subject adds
 // the GB28181 Subject header ("<channelID>:<ssrc>,<serverID>:0" on INVITE).
+// tlsTransportParams returns URI params forcing TLS routing (;transport=tls)
+// when the platform runs in SIPS mode — gosip then reuses the pooled TLS
+// connection the device registered over. Nil in UDP/TCP modes.
+func (s *Server) tlsTransportParams() sip.Params {
+	if s.cfg.SIPTransport != "tls" {
+		return nil
+	}
+	return sip.NewParams().Add("transport", sip.String{Str: "tls"})
+}
+
 func (s *Server) buildRequest(method sip.RequestMethod, serverHost string, from, to *sip.Address, recipient *sip.SipUri, subject, contentType, body string) (sip.Request, error) {
 	_, sipPort, err := parseSIPListen(s.cfg.SIPListen)
 	if err != nil {
@@ -657,7 +686,7 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		DisplayName: sip.String{Str: channelID},
 		Uri:         &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal},
 	}
-	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.tlsTransportParams()}
 
 	// GB28181 convention: Subject "<channelID>:<ssrc>,<serverID>:0".
 	subject := fmt.Sprintf("%s:%s,%s:0", channelID, sdpSSRC(sdp), s.cfg.ServerID)
@@ -886,7 +915,7 @@ func (s *Server) sendDialogReset(deviceID, channelID, deviceAddr string) {
 
 	from := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.ServerID}, FHost: serverHost}}
 	to := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}}
-	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.tlsTransportParams()}
 	bye, err := s.buildRequest(sip.BYE, serverHost, from, to, recipient, "", "", "")
 	if err != nil {
 		return

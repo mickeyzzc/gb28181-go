@@ -56,8 +56,13 @@ func handleTCPConnection(ctx context.Context, conn net.Conn, s *Server) {
 	s.tcpConns.Store(remoteAddr, conn)
 	defer s.tcpConns.Delete(remoteAddr)
 
-	reader := bufio.NewReader(conn)
+	readSIPStream(ctx, bufio.NewReader(conn), conn, s)
+}
 
+// readSIPStream reads Content-Length framed SIP messages from reader and
+// dispatches them; replies go back over conn (looked up by remote address).
+// Shared by the TCP listener and the SIPS client.
+func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *Server) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -138,7 +143,7 @@ func handleTCPConnection(ctx context.Context, conn net.Conn, s *Server) {
 			case "INFO":
 				s.handleInfo(ctx, msg, tcpAddr)
 			case "SUBSCRIBE", "NOTIFY", "OPTIONS":
-				slog.Info("gb28181: received method, responding 200 OK", "method", msg.Method, "from", remoteAddr)
+				slog.Info("gb28181: received method, responding 200 OK", "method", msg.Method, "from", conn.RemoteAddr().String())
 				ok200 := Build200OK(msg, "", "")
 				if err := s.sendSIP(ok200.Serialize(), tcpAddr); err != nil {
 					slog.Warn("gb28181: failed to send 200 OK", "method", msg.Method, "error", err)

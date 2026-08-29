@@ -39,7 +39,15 @@ type Config struct {
 	RegisterIntervalSecs  int    `yaml:"register_interval_secs"`  // SIP REGISTER interval (seconds)
 	HeartbeatIntervalSecs int    `yaml:"heartbeat_interval_secs"` // SIP keepalive heartbeat interval (seconds)
 	HeartbeatTimeoutCount int    `yaml:"heartbeat_timeout_count"` // Missed heartbeats before declaring timeout
-	Transport             string `yaml:"transport"`               // SIP transport: udp (default) or tcp
+	Transport             string `yaml:"transport"`               // SIP transport: udp (default), tcp, or tls (SIPS, GB/T 28181-2022 A-level)
+
+	// TLS fields (Transport "tls" only — SIPS signaling per GB/T 28181-2022
+	// A-level security). The GB convention is a self-signed CA whose serial
+	// is the device/platform ID; the host provisions the files.
+	TLSCAFile             string `yaml:"tls_ca_file,omitempty"`              // CA (or the platform's self-signed cert) used to verify the platform
+	TLSCertFile           string `yaml:"tls_cert_file,omitempty"`            // optional client certificate (mutual auth)
+	TLSKeyFile            string `yaml:"tls_key_file,omitempty"`             // client certificate key
+	TLSInsecureSkipVerify bool   `yaml:"tls_insecure_skip_verify,omitempty"` // accept any platform cert (lab only)
 }
 
 // DeviceInfo identifies the device in Catalog/DeviceInfo responses.
