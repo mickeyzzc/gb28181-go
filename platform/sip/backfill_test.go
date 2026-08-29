@@ -141,29 +141,18 @@ func TestSendDialogResetEmitsBye(t *testing.T) {
 	client := newSIPClient(t, cfg.SIPListen)
 
 	// sendDialogReset is fire-and-forget; the BYE just has to reach the
-	// device's socket.
-	gotBye := make(chan sip.Request, 4)
-	go func() {
-		for {
-			req := client.nextRequest(3 * time.Second)
-			if req == nil {
-				return
-			}
-			if req.Method() == sip.BYE {
-				gotBye <- req
-				client.respondRaw(req, 200, "OK", "", "")
-			}
-		}
-	}()
-
+	// device's socket. Poll in the test goroutine (a background answering
+	// goroutine could outlive the test and t.Fatalf on the closed socket).
 	srv.sendDialogReset(testDeviceID, fakeChannelID, client.conn.LocalAddr().String())
 
-	select {
-	case req := <-gotBye:
-		require.Equal(t, sip.BYE, req.Method())
-	case <-time.After(5 * time.Second):
-		t.Fatal("dialog-reset BYE never reached the device")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if req := client.nextRequest(300 * time.Millisecond); req != nil && req.Method() == sip.BYE {
+			return // BYE observed; unanswered retransmissions die with the socket
+		}
 	}
+
+	t.Fatal("dialog-reset BYE never reached the device")
 }
 
 // --- playback INFO control (resume / seek / errors) ---
@@ -318,26 +307,10 @@ func TestByeAllSessionsLiveSession(t *testing.T) {
 
 	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
 
-	// Answer the teardown BYE (and retransmissions) while ByeAllSessions runs.
-	stopAnswering := make(chan struct{})
-	go func() {
-		for {
-			req := client.nextRequest(200 * time.Millisecond)
-			if req == nil {
-				select {
-				case <-stopAnswering:
-					return
-				default:
-					continue
-				}
-			}
-			if req.Method() == sip.BYE {
-				client.respondRaw(req, 200, "OK", "", "")
-			}
-		}
-	}()
-
-	// Install a live session the blanket BYE must tear down.
+	// Install a live session the blanket BYE must tear down. The teardown
+	// BYE is not answered — the local session is gone the moment
+	// sessionMgr.Bye runs; unanswered retransmissions die with the socket
+	// (a background responder risks t.Fatalf-ing after test cleanup).
 	ch := &platform.Channel{ID: fakeChannelID, DeviceID: testDeviceID}
 	ch.Status.Store(platform.ChannelIdle)
 	offer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
@@ -348,8 +321,8 @@ func TestByeAllSessionsLiveSession(t *testing.T) {
 	srv.ByeAllSessions()
 
 	require.Eventually(t, func() bool {
+		// Drain the socket so the BYE's send path is exercised end to end.
+		_ = client.nextRequest(50 * time.Millisecond)
 		return srv.sessionMgr.GetReceiver(fakeChannelID) == nil
 	}, 5*time.Second, 50*time.Millisecond, "blanket BYE must tear the session down")
-
-	close(stopAnswering)
 }
