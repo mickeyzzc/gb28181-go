@@ -17,8 +17,9 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 |---|---|---|
 | `device/` | **UAC** — register a camera with a SIP platform: REGISTER + digest auth, catalog/deviceinfo/keepalive, INVITE-driven RTP/PS live streaming, RecordInfo, paced playback/download with SIP INFO control. UDP and TCP. | `mibee-eye-raspi-go` `internal/gb28181` |
 | `manscdp/` | shared MANSCDP XML codec (element+attribute forms, GB2312/GBK/GB18030/UTF-8) | MiBeeNvr `internal/gb28181/manscdp` |
-| `platform/` | **UAS** (migration batch 1/4 landed) — device/channel registry with keepalive liveness, MPEG-PS demux (PSM-less audio fallback heuristic), port pool, PTZ/A505 command building. RTP receive/session orchestration/SIP UAS server land in later batches. | MiBeeNvr `internal/gb28181` |
+| `platform/` | **UAS** (migration batches 1–2/4 landed) — device/channel registry with keepalive liveness, MPEG-PS demux (PSM-less audio fallback heuristic), port pool, PTZ/A505 command building, RTP receive/reassembly (UDP + TCP-passive, jitter buffer, SSRC latch), INVITE/BYE SessionManager with FrameHub fan-out. SIP UAS server lands in a later batch. | MiBeeNvr `internal/gb28181` |
 | `psmux/` | PS/RTP muxer (H.264/H.265, G.711 audio, >60KB AU splitting, RTP fragmentation) shared by device push and platform/cascade forwarding | MiBeeNvr `internal/gb28181/psmux` |
+| `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 
 ## Usage (device)
 
@@ -53,7 +54,7 @@ This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## Status
 
-`device/` + `manscdp/` shipped; `platform/` extraction batch 1 of 4 landed (PS demux/mux, registry, portmanager, PTZ). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
+`device/` + `manscdp/` shipped; `platform/` extraction batches 1–2 of 4 landed (PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
 
 ## License
 
