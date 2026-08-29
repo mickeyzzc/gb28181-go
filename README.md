@@ -51,6 +51,16 @@ Host seams (interfaces, host-injected):
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
 
+## Examples
+
+Runnable examples under [`examples/`](examples/) — each is a `main` package you can `go run`:
+
+| Example | Role | Shows |
+|---|---|---|
+| [`device-register`](examples/device-register/main.go) | Device (UAC) | SIP registration, keepalive, catalog answers, synthetic frames through `device.FrameHub`, INVITE-driven streaming |
+| [`platform-uas`](examples/platform-uas/main.go) | Platform (UAS) | SIP server with digest auth, in-memory `DeviceStore` seam, alarm `EventBus` subscription, INVITE/ByeChannel flow |
+| [`psmux-rtp`](examples/psmux-rtp/main.go) | Media path | H.264 Annex-B → MPEG-PS → RTP packetization to a UDP receiver |
+
 ## Development
 
 This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). CI enforces `gofmt`, `go vet`, and `go test -race`; `main` is protected (PR-only merges, CI required).
