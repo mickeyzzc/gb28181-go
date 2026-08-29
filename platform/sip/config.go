@@ -59,9 +59,17 @@ type Config struct {
 	// "tcp-passive" (default), "udp", or "tcp-active".
 	MediaTransport string `yaml:"media_transport"`
 
-	// SIPTransport selects the SIP signaling listener: "udp" (default) or
-	// "tcp" (adds a SIP-over-TCP listener alongside UDP).
+	// SIPTransport selects the SIP signaling listener: "udp" (default),
+	// "tcp" (adds a SIP-over-TCP listener alongside UDP), or "tls" (SIPS —
+	// TLS listener per GB/T 28181-2022 A-level security; outbound requests
+	// to devices then carry ;transport=tls and reuse the connection the
+	// device registered over).
 	SIPTransport string `yaml:"sip_transport"`
+
+	// TLSCertFile / TLSKeyFile are the SIPS server certificate pair
+	// (PEM). Required when SIPTransport is "tls".
+	TLSCertFile string `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile  string `yaml:"tls_key_file,omitempty"`
 
 	// SubscribeCatalog enables SUBSCRIBE Catalog. Default: on when Enabled.
 	SubscribeCatalog *bool `yaml:"subscribe_catalog,omitempty"`

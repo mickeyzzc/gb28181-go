@@ -1,9 +1,18 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -228,4 +237,99 @@ func (lb *loopback) awaitHub(t *testing.T) *platform.FrameHub {
 	}
 	t.Fatal("live session hub never appeared")
 	return nil
+}
+
+// --- SIPS (GB/T 28181-2022 A-level): signaling over TLS ---------------------
+
+// genSelfSignedCert writes a throwaway self-signed server certificate to
+// dir and returns (certFile, keyFile).
+func genSelfSignedCert(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "127.0.0.1"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	certFile := filepath.Join(dir, "cert.pem")
+	keyFile := filepath.Join(dir, "key.pem")
+	certOut := &bytes.Buffer{}
+	require.NoError(t, pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	require.NoError(t, os.WriteFile(certFile, certOut.Bytes(), 0o600))
+	keyOut := &bytes.Buffer{}
+	require.NoError(t, pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	require.NoError(t, os.WriteFile(keyFile, keyOut.Bytes(), 0o600))
+	return certFile, keyFile
+}
+
+// TestLoopback_SIPSRegisterCatalog: the full signaling baseline over SIPS —
+// the platform listens with a self-signed certificate, the device dials TLS
+// (verifying via TLSCAFile), REGISTER+digest completes, and the platform's
+// post-REGISTER catalog query reaches the device over the pooled TLS
+// connection.
+func TestLoopback_SIPSRegisterCatalog(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := genSelfSignedCert(t, dir)
+
+	ctx := context.Background()
+	sipPort := freeUDPPort(t)
+	mediaBase := 23000 + 100*freeUDPPort(t)%400
+
+	cfg := sip.Config{
+		SIPListen:      fmt.Sprintf("127.0.0.1:%d", sipPort),
+		ServerID:       lbServerID,
+		Realm:          lbDomain,
+		Password:       lbPassword,
+		PortRange:      fmt.Sprintf("%d-%d", mediaBase, mediaBase+99),
+		MediaTransport: "udp",
+		SIPTransport:   "tls",
+		TLSCertFile:    certFile,
+		TLSKeyFile:     keyFile,
+	}
+	dm := platform.NewDeviceManager(60 * time.Second)
+	sm := platform.NewSessionManager(platform.NewPortManager(uint16(mediaBase), uint16(mediaBase+99)), cfg.ServerID)
+	psrv := sip.NewServer(cfg, dm, sm, nil)
+	require.NoError(t, psrv.Start(ctx))
+	t.Cleanup(func() { _ = psrv.Stop() })
+
+	fh := device.NewFrameHub()
+	dcfg := device.Config{
+		Enabled:               true,
+		PlatformSIPAddress:    "127.0.0.1",
+		PlatformSIPPort:       sipPort,
+		DeviceID:              lbDeviceID,
+		ChannelID:             lbChannelID,
+		SIPDomain:             lbDomain,
+		Password:              lbPassword,
+		LocalSIPPort:          freeUDPPort(t),
+		RegisterIntervalSecs:  3600,
+		HeartbeatIntervalSecs: 60,
+		HeartbeatTimeoutCount: 3,
+		Transport:             "tls",
+		TLSCAFile:             certFile, // trust the platform's self-signed cert
+	}
+	dsrv := device.New(dcfg, device.DeviceInfo{Name: "SIPS Cam"}, fh)
+	startErr := make(chan error, 1)
+	go func() { startErr <- dsrv.Start(ctx) }()
+	t.Cleanup(func() {
+		dsrv.Stop()
+		select {
+		case err := <-startErr:
+			require.NoError(t, err, "device server exited with error")
+		case <-time.After(5 * time.Second):
+			t.Error("device server did not exit after Stop")
+		}
+	})
+
+	lb := &loopback{platformSrv: psrv, devices: dm, sessions: sm, deviceSrv: dsrv, frames: fh}
+	dev := lb.onlineDevice(t)
+	require.Equal(t, platform.DeviceOnline, dev.Status.Load())
+	lb.channelOf(t) // catalog query + answer rode the TLS connection
 }
