@@ -235,11 +235,13 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 	if firstRTP != nil {
 		receiver.OnFirstRTP = func() { firstRTP(channelID) }
 	}
+	// The receiver already broadcasts every AU to its (session) hub in
+	// emitAULocked — the callback only forwards to the host's onAU. A second
+	// hub.Broadcast here double-delivered every frame to hub subscribers on
+	// the onAU==nil path (caught by the conformance loopback suite).
 	receiver.AUCallback = func(au [][]byte, ptsTicks int64, isIDR bool) {
 		if onAU != nil {
 			onAU(au, ptsTicks, isIDR)
-		} else if hub != nil {
-			hub.Broadcast(ptsTicks, au, isIDR)
 		}
 	}
 	receiver.AudioCallback = onAudio

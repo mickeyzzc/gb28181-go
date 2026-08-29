@@ -257,14 +257,23 @@ func (s *Server) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.mediaCancel != nil {
-		s.mediaCancel()
+	// The media fields are written under s.mu by the SIP recv goroutine's
+	// INVITE/BYE handling — read them under the same lock (an unlocked read
+	// races a concurrent handleInvite at teardown; found by the conformance
+	// loopback suite under -race).
+	s.mu.Lock()
+	mediaCancel := s.mediaCancel
+	mediaConn := s.mediaConn
+	mediaTCPConn := s.mediaTCPConn
+	s.mu.Unlock()
+	if mediaCancel != nil {
+		mediaCancel()
 	}
-	if s.mediaConn != nil {
-		s.mediaConn.Close()
+	if mediaConn != nil {
+		mediaConn.Close()
 	}
-	if s.mediaTCPConn != nil {
-		s.mediaTCPConn.Close()
+	if mediaTCPConn != nil {
+		mediaTCPConn.Close()
 	}
 	s.mu.Lock()
 	sipConn := s.sipConn
