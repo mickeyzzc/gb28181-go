@@ -369,3 +369,39 @@ func TestEncodeSubscribe(t *testing.T) {
 		}
 	}
 }
+
+// --- GB/T 28181-2022: voice broadcast (语音广播) -----------------------------
+
+func TestBroadcastEncode(t *testing.T) {
+	body, err := Encode(Broadcast{
+		CmdType:  CmdBroadcast,
+		SN:       17,
+		SourceID: "34020000002000000001",
+		TargetID: "34020000001320000001",
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(body), "<Notify><CmdType>Broadcast</CmdType><SN>17</SN>")
+	require.Contains(t, string(body), "<SourceID>34020000002000000001</SourceID>")
+	require.Contains(t, string(body), "<TargetID>34020000001320000001</TargetID>")
+}
+
+func TestBroadcastDecode(t *testing.T) {
+	// Attribute form (NVR-side quirk convention) and element form both parse.
+	attr := []byte(`<Notify CmdType="Broadcast" SN="17"><SourceID>s</SourceID><TargetID>t</TargetID></Notify>`)
+	ct, v, err := Decode(attr)
+	require.NoError(t, err)
+	require.Equal(t, CmdBroadcast, ct)
+	b1, ok := v.(Broadcast)
+	require.True(t, ok, "decoded type %T", v)
+	require.Equal(t, 17, b1.SN)
+	require.Equal(t, "s", b1.SourceID)
+	require.Equal(t, "t", b1.TargetID)
+
+	elem := []byte(`<?xml version="1.0"?><Notify><CmdType>Broadcast</CmdType><SN>18</SN><SourceID>s2</SourceID><TargetID>t2</TargetID></Notify>`)
+	ct2, v2, err := Decode(elem)
+	require.NoError(t, err)
+	require.Equal(t, CmdBroadcast, ct2)
+	b2, ok := v2.(Broadcast)
+	require.True(t, ok)
+	require.Equal(t, "s2", b2.SourceID)
+}

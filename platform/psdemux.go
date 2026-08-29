@@ -30,6 +30,8 @@ const (
 const (
 	streamTypeH264  = 0x1B // AVC video stream
 	streamTypeH265  = 0x24 // H.265/HEVC video stream (GB/T 28181-2022)
+	streamTypeSVACV = 0x80 // SVAC video stream (GB/T 28181-2022)
+	streamTypeSVAC2 = 0x81 // SVAC audio stream (GB/T 28181-2022)
 	streamTypeAAC   = 0x0F // AAC audio stream (ADTS framing)
 	streamTypeG711A = 0x90 // G.711 A-law
 	streamTypeG711U = 0x91 // G.711 μ-law
@@ -60,7 +62,9 @@ type AudioFrame struct {
 type AudioFrameHandler func(frame AudioFrame)
 
 // audioStreamCodec maps a PSM stream_type to the demuxable audio codec (""
-// when the NVR cannot handle it — G.722/G.723/G.729/SVAC have no muxer path).
+// when there is no handler — G.722/G.723/G.729 have no muxer path). SVAC
+// audio frames are opaque payloads passed through as-is (both the 2022
+// stream_type 0x81 and the 0x9B seen from real devices map to "svac").
 func audioStreamCodec(streamType byte) string {
 	switch streamType {
 	case streamTypeG711A:
@@ -69,6 +73,8 @@ func audioStreamCodec(streamType byte) string {
 		return AudioCodecG711U
 	case streamTypeAAC:
 		return AudioCodecAAC
+	case streamTypeSVAC2, streamTypeSVACA:
+		return "svac"
 	default:
 		return ""
 	}
@@ -265,6 +271,10 @@ feedLoop:
 						d.naluType = "h264"
 					case streamTypeH265:
 						d.naluType = "h265"
+					case streamTypeSVACV:
+						// SVAC is not Annex-B NALU structured — the ES is an
+						// opaque access unit; extractNALUs passes it through.
+						d.naluType = "svac"
 					}
 				}
 				if d.audioCodecs == nil {

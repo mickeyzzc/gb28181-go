@@ -24,6 +24,7 @@ const (
 	CmdDeviceControl   CmdType = "DeviceControl"
 	CmdAlarm           CmdType = "Alarm"
 	CmdTimeSync        CmdType = "TimeSync"
+	CmdBroadcast       CmdType = "Broadcast"
 	CmdMobilePosition  CmdType = "MobilePosition"
 )
 
@@ -212,6 +213,31 @@ type Alarm struct {
 	AlarmTime        string   `xml:"AlarmTime"`
 	AlarmDescription string   `xml:"AlarmDescription"`
 	AlarmType        string   `xml:"AlarmType"`
+	// Attribute-form aliases (see Catalog).
+	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
+	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+func (m *Broadcast) normalize() {
+	if m.CmdType == "" {
+		m.CmdType = m.CmdTypeAttr
+	}
+	if m.SN == 0 {
+		m.SN = m.SNAttr
+	}
+}
+
+// Broadcast is the voice-broadcast notification (语音广播通知,
+// GB/T 28181 §9.2.2): the platform sends it as a MESSAGE Notify so the
+// device prepares its audio path for the subsequent talk INVITE.
+type Broadcast struct {
+	XMLName xml.Name `xml:"Notify"`
+	CmdType CmdType  `xml:"CmdType"`
+	SN      int      `xml:"SN"`
+	// SourceID is the broadcast-origin device/platform ID; TargetID is the
+	// channel the broadcast addresses.
+	SourceID string `xml:"SourceID"`
+	TargetID string `xml:"TargetID"`
 	// Attribute-form aliases (see Catalog).
 	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
 	SNAttr      int     `xml:"SN,attr,omitempty"`

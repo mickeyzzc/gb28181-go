@@ -14,6 +14,9 @@ import (
 const (
 	streamTypeH264  = 0x1B
 	streamTypeH265  = 0x24
+	streamTypeSVACV = 0x80 // SVAC video (GB/T 28181-2022)
+	streamTypeSVACA = 0x81 // SVAC audio (GB/T 28181-2022)
+
 	streamTypeG711A = 0x90
 	streamTypeG711U = 0x91
 )
@@ -52,6 +55,8 @@ func (m *Muxer) SetVideoCodec(codec string) {
 	switch codec {
 	case "h265":
 		m.videoType = streamTypeH265
+	case "svac":
+		m.videoType = streamTypeSVACV
 	default:
 		m.videoType = streamTypeH264
 	}
@@ -67,6 +72,8 @@ func (m *Muxer) SetAudioCodec(codec string) {
 		m.audioType = streamTypeG711A
 	case "g711u":
 		m.audioType = streamTypeG711U
+	case "svac":
+		m.audioType = streamTypeSVACA
 	default:
 		m.audioType = 0
 	}
