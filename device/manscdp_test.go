@@ -1053,3 +1053,35 @@ func TestParsePlaybackControl_MissingInfoTolerated(t *testing.T) {
 		t.Errorf("expected empty control, got Value=%q StartTime=%v EndTime=%v Speed=%v", pc.Value, pc.StartTime, pc.EndTime, pc.Speed)
 	}
 }
+
+// --- GB/T 28181-2022: voice broadcast notification --------------------------
+
+// TestDispatchBroadcastNotify: a Broadcast Notify MESSAGE is acknowledged
+// with 200 OK and fires the host's OnBroadcast hook with the source/target
+// IDs (the platform follows with a talk INVITE; preparing the audio path is
+// host business).
+func TestDispatchBroadcastNotify(t *testing.T) {
+	var gotSource, gotTarget string
+	dev := DeviceContext{DeviceID: "34020000001320000001", OnBroadcast: func(sourceID, targetID string) {
+		gotSource, gotTarget = sourceID, targetID
+	}}
+	msg := SipMessage{
+		Method: "MESSAGE",
+		CallID: "bcast@test",
+		CSeq:   "1 MESSAGE",
+		Body:   `<?xml version="1.0"?><Notify CmdType="Broadcast" SN="17"><SourceID>34020000002000000001</SourceID><TargetID>34020000001320000001</TargetID></Notify>`,
+	}
+	ok200, queued, err := DispatchInboundMessage(msg, dev, nil)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if ok200.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", ok200.StatusCode)
+	}
+	if queued != nil {
+		t.Fatalf("broadcast must not queue a response")
+	}
+	if gotSource != "34020000002000000001" || gotTarget != "34020000001320000001" {
+		t.Fatalf("OnBroadcast got %q/%q", gotSource, gotTarget)
+	}
+}

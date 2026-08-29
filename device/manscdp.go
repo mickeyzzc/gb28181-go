@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // RecordActive reports whether the device is currently recording.
@@ -221,6 +223,12 @@ type DeviceContext struct {
 	Firmware     string
 	LocalIP      string
 	LocalPort    int
+	// OnBroadcast fires when a voice-broadcast notification (语音广播,
+	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
+	// SourceID → TargetID and follows with a talk INVITE. Preparing the
+	// audio path (answering the talk, routing audio to a speaker) is host
+	// business. Optional.
+	OnBroadcast func(sourceID, targetID string)
 }
 
 // buildChannel creates a ChannelItem from DeviceContext.
@@ -436,6 +444,15 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 	if msg.Body == "" {
 		// No body to parse — just acknowledge
 		return SipMessage{}, nil, nil
+	}
+
+	// Voice broadcast notification (GB/T 28181 §9.2.2): acknowledge and
+	// surface to the host; no queued MANSCDP response.
+	if ct, v, err := manscdp.Decode([]byte(msg.Body)); err == nil && ct == manscdp.CmdBroadcast {
+		if b, ok := v.(manscdp.Broadcast); ok && dev.OnBroadcast != nil {
+			dev.OnBroadcast(b.SourceID, b.TargetID)
+		}
+		return Build200OK(msg, "", ""), nil, nil
 	}
 
 	// Try to parse as Query (Catalog, DeviceInfo, RecordInfo, DeviceStatus, Control commands)

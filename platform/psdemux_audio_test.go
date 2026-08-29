@@ -211,3 +211,13 @@ func buildADTS(payload []byte, sampleRate int, channels int) []byte {
 	}
 	return append(hdr, payload...)
 }
+
+// --- GB/T 28181-2022: SVAC audio stream_type recognition --------------------
+
+func TestAudioStreamCodecSVAC(t *testing.T) {
+	// 0x81 per GB/T 28181-2022; 0x9B seen from real devices — both map to
+	// the opaque "svac" passthrough codec.
+	require.Equal(t, "svac", audioStreamCodec(0x81))
+	require.Equal(t, "svac", audioStreamCodec(0x9B))
+	require.Equal(t, "", audioStreamCodec(0x92), "G.722 stays undemuxable")
+}

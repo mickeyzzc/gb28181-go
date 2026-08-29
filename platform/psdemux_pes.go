@@ -8,6 +8,14 @@ import (
 // The naluType parameter determines which NALU type mask to use.
 // Returns NALUs with start codes stripped.
 func extractNALUs(data []byte, naluType string) [][]byte {
+	if naluType == "svac" {
+		// SVAC access units are not start-code framed — pass the ES through
+		// as one opaque unit (GB/T 28181-2022 stream_type 0x80).
+		if len(data) == 0 {
+			return nil
+		}
+		return [][]byte{data}
+	}
 	if len(data) == 0 {
 		return nil
 	}
@@ -294,7 +302,7 @@ func findVideoStreamType(psmData []byte) (byte, bool) {
 
 		// Check if this is a video stream (elementary_stream_id 0xE0-0xEF)
 		if esID >= startCodeVideoMin && esID <= startCodeVideoMax {
-			if streamType == streamTypeH264 || streamType == streamTypeH265 {
+			if streamType == streamTypeH264 || streamType == streamTypeH265 || streamType == streamTypeSVACV {
 				return streamType, true
 			}
 		}

@@ -138,6 +138,8 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		return unmarshalAs[DeviceControl](body, CmdDeviceControl)
 	case CmdAlarm:
 		return unmarshalAs[Alarm](body, CmdAlarm)
+	case CmdBroadcast:
+		return unmarshalAs[Broadcast](body, CmdBroadcast)
 	default:
 		return "", nil, fmt.Errorf("manscdp: unsupported CmdType %q", probe.CmdType)
 	}

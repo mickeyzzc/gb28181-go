@@ -175,3 +175,35 @@ func TestRoundTripVideoWithAppendedAudio(t *testing.T) {
 	}
 	_ = dmx.DrainAudio() // audio path exercised; content checked by audio roundtrip
 }
+
+// --- GB/T 28181-2022: SVAC stream types (PSM 0x80 video / 0x81 audio) -------
+
+// TestSVACVideoRoundTrip: SVAC video is NOT Annex-B NALU structured — it is
+// muxed and demuxed as an opaque access unit, with the PSM declaring
+// stream_type 0x80.
+func TestSVACVideoRoundTrip(t *testing.T) {
+	m := New()
+	m.SetVideoCodec("svac")
+	d := gb.NewPSDemuxer()
+
+	blob := bytes.Repeat([]byte{0xA5, 0x5A}, 900) // 1800B opaque SVAC AU > MTU-relevant but < PES chunk
+	ps := m.WriteAU(blob, 90000, true)
+	nalus, err := d.FeedAU(ps, 9000, true)
+	require.NoError(t, err)
+	require.Len(t, nalus, 1, "SVAC AU passes through as one opaque unit")
+	require.Equal(t, blob, nalus[0])
+	require.Equal(t, "svac", d.Codec())
+}
+
+// TestSVACPSMDeclaresStreamTypes pins the PSM bytes: stream_type 0x80 for
+// SVAC video and 0x81 for SVAC audio (GB/T 28181-2022 Table).
+func TestSVACPSMDeclaresStreamTypes(t *testing.T) {
+	m := New()
+	m.SetVideoCodec("svac")
+	m.SetAudioCodec("svac")
+	ps := m.WriteAU([]byte{0x01}, 90000, true)
+	// PSM entries are (stream_type, elementary_stream_ID) pairs: SVAC video
+	// on the video ES 0xE0, SVAC audio on the audio ES 0xC0.
+	require.Contains(t, string(ps), string([]byte{0x80, 0xE0}), "PSM must declare SVAC video (0x80, ES 0xE0)")
+	require.Contains(t, string(ps), string([]byte{0x81, 0xC0}), "PSM must declare SVAC audio (0x81, ES 0xC0)")
+}
