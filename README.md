@@ -17,7 +17,8 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 |---|---|---|
 | `device/` | **UAC** — register a camera with a SIP platform: REGISTER + digest auth, catalog/deviceinfo/keepalive, INVITE-driven RTP/PS live streaming, RecordInfo, paced playback/download with SIP INFO control. UDP and TCP. | `mibee-eye-raspi-go` `internal/gb28181` |
 | `manscdp/` | shared MANSCDP XML codec (element+attribute forms, GB2312/GBK/GB18030/UTF-8) | MiBeeNvr `internal/gb28181/manscdp` |
-| `platform/` | *(planned)* **UAS** — SIP platform: device/channel management, INVITE/BYE sessions, RTP receive + PS demux | MiBeeNvr `internal/gb28181` |
+| `platform/` | **UAS** (migration batch 1/4 landed) — device/channel registry with keepalive liveness, MPEG-PS demux (PSM-less audio fallback heuristic), port pool, PTZ/A505 command building. RTP receive/session orchestration/SIP UAS server land in later batches. | MiBeeNvr `internal/gb28181` |
+| `psmux/` | PS/RTP muxer (H.264/H.265, G.711 audio, >60KB AU splitting, RTP fragmentation) shared by device push and platform/cascade forwarding | MiBeeNvr `internal/gb28181/psmux` |
 
 ## Usage (device)
 
@@ -52,7 +53,7 @@ This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## Status
 
-v0.1.0 — `device/` shipped; `platform/` + `manscdp/` extraction in progress. API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
+`device/` + `manscdp/` shipped; `platform/` extraction batch 1 of 4 landed (PS demux/mux, registry, portmanager, PTZ). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
 
 ## License
 
