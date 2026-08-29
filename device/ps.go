@@ -112,9 +112,21 @@ func encodePtsDts(value uint64, prefix byte) [5]byte {
 // pts: Presentation Time Stamp
 // dts: Decode Time Stamp
 //
+// Layout (byte-identical to gb28181-rs build_pes_packet, the reference
+// implementation validated against the NVR platform):
+//
+//	[00 00 01 streamID] [PES_packet_length] [flags] [header_data_length]
+//	[PTS/DTS optional fields] [0x00 gap] [payload]
+//
+// The header carries TWO explicit bytes (flags + header_data_length) followed
+// by the optional fields and ONE gap byte, while PES_packet_length counts
+// three header bytes: 3 + header_data_length + len(payload). The gap byte is
+// the third byte the length field counts — omitting it leaves every PES one
+// byte longer than its bytes, and strict receivers honoring the 16-bit length
+// never complete reassembly (issue #15: "AU ended mid-PES" frame drops).
+//
 // Reference: ISO/IEC 13818-1 §2.4.3.6, translated from
-// notebook-cam/crates/protocols/src/gb28181/ps.rs build_pes_packet
-// NOTE: Does NOT include the 0x00 gap byte from the parser quirk - standard ISO layout.
+// gb28181-rs/src/ps.rs build_pes_packet
 func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 	pes := make([]byte, 0, 6+3+10+len(payload)) // Pre-allocate with space for worst case
 
@@ -132,11 +144,15 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 		optionalHeaderLen += 5
 	}
 
-	// Packet length = optional header (3 + optionalHeaderLen) + payload
-	// Use 0 if length would exceed 65535 (unbounded)
-	packetLen := uint16(3) + uint16(optionalHeaderLen) + uint16(len(payload))
-	if packetLen > 65535-3 || (optionalHeaderLen == 0 && len(payload) == 0) {
-		packetLen = 0
+	// Packet length = 3 header bytes (flags + hdrlen + gap) + optional fields
+	// + payload, with the 16-bit field's own cap honored: compute wide, then
+	// fall back to unbounded (0) only for oversized payloads. MuxH264ToPS
+	// splits large access units so its PES packets stay bounded.
+	var packetLen uint16
+	if optionalHeaderLen > 0 || len(payload) > 0 {
+		if declared := uint32(3) + uint32(optionalHeaderLen) + uint32(len(payload)); declared <= 65535 {
+			packetLen = uint16(declared)
+		}
 	}
 	pes = append(pes, byte(packetLen>>8), byte(packetLen))
 
@@ -170,11 +186,25 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 		pes = append(pes, enc[:]...)
 	}
 
-	// Add payload (no gap byte - standard ISO layout)
+	// Gap byte: the third header byte PES_packet_length counts (twin layout —
+	// see the function comment). For a PES without timestamps it doubles as a
+	// zero PES_header_data_length at the standard byte-8 position, so
+	// standard-layout receivers locate the payload at 9 + 0 as well.
+	pes = append(pes, 0x00)
+
+	// Add payload
 	pes = append(pes, payload...)
 
 	return pes
 }
+
+// maxPESChunkBytes bounds the elementary-stream bytes carried by one PES
+// packet. PES_packet_length is a 16-bit field counting 3 header bytes +
+// optional fields + payload (≤ 65535), so an access unit larger than ~64KB
+// MUST be split across continuation PES packets — receivers accumulate the ES
+// of one access unit across its PES packets. 65000 leaves headroom below the
+// field's cap.
+const maxPESChunkBytes = 65000
 
 // MuxH264ToPS multiplexes H.264 NAL units into an MPEG-PS packet.
 // Returns a complete PS pack including pack header, optional PSM, and PES packet.
@@ -186,9 +216,13 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 //
 // CRITICAL: Emits pack header (0x000001BA) at start of EVERY access unit.
 // Emits PSM only on keyframes (IDR).
-// Packs multiple NALs into one PES via Annex-B start-code concatenation (0x00000001).
+// Packs multiple NALs into the PES elementary stream via Annex-B start-code
+// concatenation (0x00000001), then splits the ES across bounded PES packets:
+// the first carries PTS/DTS, continuation PES packets (access units larger
+// than maxPESChunkBytes) carry none — the ES is continuous across the PES
+// packets of one access unit.
 //
-// Reference: translated from notebook-cam/crates/protocols/src/gb28181/ps.rs mux_h264_to_ps
+// Reference: translated from gb28181-rs/src/ps.rs mux_h264_to_ps
 func MuxH264ToPS(nalus [][]byte, isKeyFrame bool, pts, dts time.Time) []byte {
 	ps := make([]byte, 0, 128) // Pre-allocate reasonable capacity
 
@@ -218,8 +252,24 @@ func MuxH264ToPS(nalus [][]byte, isKeyFrame bool, pts, dts time.Time) []byte {
 		payload = append(payload, nalu...)
 	}
 
-	// Add PES packet
-	ps = append(ps, BuildPesPacket(0xE0, payload, pts, dts)...)
+	// Add PES packets: split the ES into bounded chunks. Only the first PES
+	// carries PTS/DTS; a 16-bit PES_packet_length cannot describe an access
+	// unit larger than ~64KB in one packet, and letting the field wrap
+	// truncates every large IDR (issue #15).
+	for start := 0; ; start += maxPESChunkBytes {
+		end := start + maxPESChunkBytes
+		if end > len(payload) {
+			end = len(payload)
+		}
+		if start == 0 {
+			ps = append(ps, BuildPesPacket(0xE0, payload[:end], pts, dts)...)
+		} else {
+			ps = append(ps, BuildPesPacket(0xE0, payload[start:end], time.Time{}, time.Time{})...)
+		}
+		if end == len(payload) {
+			break
+		}
+	}
 
 	return ps
 }
@@ -230,7 +280,10 @@ func timeTo90kHz(t time.Time) uint64 {
 	if t.IsZero() {
 		return 0
 	}
-	// Unix epoch in 90kHz: nanos * 9 / 100,000,000
+	// Unix epoch in 90kHz: nanos * 9 / 100,000. The product is computed in
+	// the unsigned domain — signed int64 overflow (nanos*9 exceeds 2^63 for
+	// dates past 2026-05) would wrap the same bits, but the uint64 arithmetic
+	// states the intent and keeps the mapping monotonic by construction.
 	nanos := t.UnixNano()
-	return uint64(nanos * 9 / 100_000)
+	return uint64(nanos) * 9 / 100_000
 }
