@@ -67,6 +67,12 @@ type mediaSession struct {
 	audioPending []audioPendingFrame
 
 	closed atomic.Bool
+	// psStarted latches on the first forwarded AU: that burst must carry the
+	// PSM even when the hub started delivering mid-GOP (P-frames only) —
+	// receivers latch demuxer codec and IDR tracking from the PSM, and an
+	// IDR-less start would hide it for up to a full GOP (observed as H.265
+	// channels mis-detected on the upper platform — MiBeeNvr issue #625).
+	psStarted atomic.Bool
 }
 
 // audioPendingFrame is one buffered G.711 frame awaiting the next video AU.
@@ -407,7 +413,8 @@ func (ms *mediaSession) run(hub *platform.FrameHub) {
 		pending := ms.audioPending
 		ms.audioPending = nil
 		ms.audioMu.Unlock()
-		ps := ms.mux.WriteAU(annexB, pts, auIsIDR(au, ms.codecHint))
+		firstBurst := !ms.psStarted.Swap(true)
+		ps := ms.mux.WriteAU(annexB, pts, firstBurst || auIsIDR(au, ms.codecHint))
 		for _, f := range pending {
 			ps = ms.mux.AppendAudioPES(ps, f.data, f.pts)
 		}
