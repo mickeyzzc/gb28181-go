@@ -5,7 +5,7 @@
 [![CI](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
-![Tests](https://img.shields.io/badge/tests-89%2B%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
 
 **GB/T 28181-2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。
 
@@ -17,7 +17,8 @@
 |---|---|---|
 | `device/` | **UAC** —— 摄像头注册到 SIP 平台：REGISTER + 摘要认证、目录/设备信息/保活、INVITE 驱动的 RTP/PS 直播、RecordInfo、按帧节奏的回放/下载与 SIP INFO 控制。UDP 与 TCP。 | `mibee-eye-raspi-go` `internal/gb28181` |
 | `manscdp/` | 共享 MANSCDP XML 编解码（元素+属性双形式，GB2312/GBK/GB18030/UTF-8） | MiBeeNvr `internal/gb28181/manscdp` |
-| `platform/` | **UAS**（迁移批次 1–2/4 已入）—— 设备/通道注册表（保活离线判定）、MPEG-PS 解复用（含 PSM-less 音频回退启发式）、端口池、PTZ/A505 指令构建、RTP 接收/乱序重组（UDP + TCP 被动、抖动缓冲、SSRC 锁定）、INVITE/BYE 会话编排（FrameHub 扇出）。SIP UAS 服务器随后批次迁入。 | MiBeeNvr `internal/gb28181` |
+| `platform/` | **UAS**（迁移批次 1–3/4 已入）—— 设备/通道注册表（保活离线判定）、MPEG-PS 解复用（含 PSM-less 音频回退启发式）、端口池、PTZ/A505 指令构建、RTP 接收/乱序重组（UDP + TCP 被动、抖动缓冲、SSRC 锁定）、INVITE/BYE 会话编排（FrameHub 扇出）。 | MiBeeNvr `internal/gb28181` |
+| `platform/sip/` | 基于 gosip 的 SIP UAS 服务器 —— REGISTER + 摘要认证（qop=auth）、保活/离线判定、目录刷新 + SUBSCRIBE（目录/报警/移动位置）、INVITE/BYE（含固件 quirk 补丁：speculative ACK、dialog reset、REGISTER 源端口轮换、长 GOP IDR watchdog）、回放/对讲域、报警联动拉流。持久化走 `DeviceStore` 接口；事件走内置有损 `EventBus`。 | MiBeeNvr `internal/gb28181/sip` |
 | `psmux/` | PS/RTP 打包 muxer（H.264/H.265、G.711 音频、>60KB AU 分段、RTP 分片），设备端推流与平台/级联转发共用 | MiBeeNvr `internal/gb28181/psmux` |
 | `nalutil/` | NALU 工具（IDR 判定、参数集提取/比较）—— 平台收流与未来设备侧共用 | MiBeeNvr `internal/model/nalutil` |
 
@@ -55,7 +56,7 @@ err := srv.Start(ctx)
 
 ## 状态
 
-`device/` 与 `manscdp/` 已发布；`platform/` 抽取批次 1–2/4 已入库（PS 解复用/复用、注册表、端口池、PTZ、RTP 接收、会话编排）。API 面趋于稳定但尚未冻结。在 [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) 每日对 MiBee NVR 国标平台生产验证。
+`device/` 与 `manscdp/` 已发布；`platform/` 抽取批次 1–3/4 已入库（PS 解复用/复用、注册表、端口池、PTZ、RTP 接收、会话编排、SIP UAS 服务器）。API 面趋于稳定但尚未冻结。在 [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) 每日对 MiBee NVR 国标平台生产验证。
 
 ## 许可
 

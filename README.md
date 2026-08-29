@@ -5,7 +5,7 @@
 [![CI](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
-![Tests](https://img.shields.io/badge/tests-89%2B%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
 
 GB/T 28181-2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard.
 
@@ -17,7 +17,8 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 |---|---|---|
 | `device/` | **UAC** — register a camera with a SIP platform: REGISTER + digest auth, catalog/deviceinfo/keepalive, INVITE-driven RTP/PS live streaming, RecordInfo, paced playback/download with SIP INFO control. UDP and TCP. | `mibee-eye-raspi-go` `internal/gb28181` |
 | `manscdp/` | shared MANSCDP XML codec (element+attribute forms, GB2312/GBK/GB18030/UTF-8) | MiBeeNvr `internal/gb28181/manscdp` |
-| `platform/` | **UAS** (migration batches 1–2/4 landed) — device/channel registry with keepalive liveness, MPEG-PS demux (PSM-less audio fallback heuristic), port pool, PTZ/A505 command building, RTP receive/reassembly (UDP + TCP-passive, jitter buffer, SSRC latch), INVITE/BYE SessionManager with FrameHub fan-out. SIP UAS server lands in a later batch. | MiBeeNvr `internal/gb28181` |
+| `platform/` | **UAS** (migration batches 1–3/4 landed) — device/channel registry with keepalive liveness, MPEG-PS demux (PSM-less audio fallback heuristic), port pool, PTZ/A505 command building, RTP receive/reassembly (UDP + TCP-passive, jitter buffer, SSRC latch), INVITE/BYE SessionManager with FrameHub fan-out. | MiBeeNvr `internal/gb28181` |
+| `platform/sip/` | SIP UAS server on gosip — REGISTER + digest auth (qop=auth), keepalive/offline detection, catalog refresh + SUBSCRIBE (Catalog/Alarm/MobilePosition), INVITE/BYE with firmware-quirk patches (speculative ACK, dialog reset, REGISTER source-port rotation, long-GOP IDR watchdog), playback/talk domains, alarm-triggered stream linkage. Persistence via the `DeviceStore` interface; events via the built-in lossy `EventBus`. | MiBeeNvr `internal/gb28181/sip` |
 | `psmux/` | PS/RTP muxer (H.264/H.265, G.711 audio, >60KB AU splitting, RTP fragmentation) shared by device push and platform/cascade forwarding | MiBeeNvr `internal/gb28181/psmux` |
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 
@@ -54,7 +55,7 @@ This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). 
 
 ## Status
 
-`device/` + `manscdp/` shipped; `platform/` extraction batches 1–2 of 4 landed (PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
+`device/` + `manscdp/` shipped; `platform/` extraction batches 1–3 of 4 landed (PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager, SIP UAS server). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
 
 ## License
 
