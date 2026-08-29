@@ -52,6 +52,16 @@ err := srv.Start(ctx)
 
 录像段使用 `device.OpenSegment` 读取的参考格式：裸 Annex-B H.264 + 每帧 `.ts.jsonl` sidecar。测试可使用现成的 `device.FrameHub`（有界通道、满则丢弃语义的 `FrameSource` 实现）。
 
+## 示例
+
+[`examples/`](examples/) 下可直接 `go run` 的完整示例：
+
+| 示例 | 角色 | 演示 |
+|---|---|---|
+| [`device-register`](examples/device-register/main.go) | 设备端（UAC） | SIP 注册、保活、目录应答、经 `device.FrameHub` 喂帧、INVITE 拉流 |
+| [`platform-uas`](examples/platform-uas/main.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
+| [`psmux-rtp`](examples/psmux-rtp/main.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
+
 ## 开发
 
 本项目严格执行 **TDD**，见 [CONTRIBUTING.md](CONTRIBUTING.md)。CI 强制 `gofmt`、`go vet`、`go test -race`；`main` 分支受保护（仅 PR 合入，CI 必过）。
