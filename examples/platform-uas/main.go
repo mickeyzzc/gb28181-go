@@ -149,7 +149,7 @@ func main() {
 	//
 	//   sdpAnswer, err := srv.InviteChannel(deviceID, channelID)
 	//   hub := sessions.GetHub(channelID)  // demuxed AU fan-out
-	//   hub.Subscribe("recorder", func(pts int64, au [][]byte) { ... })
+	//   hub.Subscribe("recorder", func(pts int64, au [][]byte, isIDR bool) { ... })
 	//   ...
 	//   _ = srv.ByeChannel(deviceID, channelID)
 	select {}

@@ -72,7 +72,7 @@ func TestFrameHubConsumerCountVideo(t *testing.T) {
 	h := NewFrameHub()
 	require.Equal(t, 0, h.ConsumerCount())
 
-	require.NoError(t, h.Subscribe("video", func(int64, [][]byte) {}))
+	require.NoError(t, h.Subscribe("video", func(int64, [][]byte, bool) {}))
 	require.Equal(t, 1, h.ConsumerCount())
 
 	h.Unsubscribe("video")

@@ -13,8 +13,8 @@ func TestFrameHubFanOut(t *testing.T) {
 	h.SetCameraID("cam-1")
 
 	var a, b atomic.Int64
-	require.NoError(t, h.Subscribe("a", func(pts int64, au [][]byte) { a.Add(1) }))
-	require.NoError(t, h.Subscribe("b", func(pts int64, au [][]byte) { b.Add(1) }))
+	require.NoError(t, h.Subscribe("a", func(pts int64, au [][]byte, isIDR bool) { a.Add(1) }))
+	require.NoError(t, h.Subscribe("b", func(pts int64, au [][]byte, isIDR bool) { b.Add(1) }))
 
 	h.Broadcast(100, [][]byte{{0x65, 0x01}}, true)
 	h.Broadcast(200, [][]byte{{0x41, 0x01}}, false)
@@ -25,15 +25,15 @@ func TestFrameHubFanOut(t *testing.T) {
 
 func TestFrameHubDuplicateSubscribe(t *testing.T) {
 	h := NewFrameHub()
-	require.NoError(t, h.Subscribe("dup", func(pts int64, au [][]byte) {}))
-	err := h.Subscribe("dup", func(pts int64, au [][]byte) {})
+	require.NoError(t, h.Subscribe("dup", func(pts int64, au [][]byte, isIDR bool) {}))
+	err := h.Subscribe("dup", func(pts int64, au [][]byte, isIDR bool) {})
 	require.Error(t, err)
 }
 
 func TestFrameHubUnsubscribeStopsDelivery(t *testing.T) {
 	h := NewFrameHub()
 	var n atomic.Int64
-	require.NoError(t, h.Subscribe("c", func(pts int64, au [][]byte) { n.Add(1) }))
+	require.NoError(t, h.Subscribe("c", func(pts int64, au [][]byte, isIDR bool) { n.Add(1) }))
 	h.Broadcast(1, [][]byte{{1}}, true)
 	require.Eventually(t, func() bool { return n.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
 
@@ -50,7 +50,7 @@ func TestFrameHubDropOnFull(t *testing.T) {
 	block := make(chan struct{})
 	inflight := make(chan struct{}, 1)
 	var got atomic.Int64
-	require.NoError(t, h.Subscribe("slow", func(pts int64, au [][]byte) {
+	require.NoError(t, h.Subscribe("slow", func(pts int64, au [][]byte, isIDR bool) {
 		got.Add(1)
 		select {
 		case inflight <- struct{}{}:
@@ -70,4 +70,20 @@ func TestFrameHubDropOnFull(t *testing.T) {
 	close(block)
 	require.Eventually(t, func() bool { return got.Load() == 151 }, 2*time.Second, 5*time.Millisecond)
 	require.EqualValues(t, 50, h.Dropped())
+}
+
+func TestFrameHubPassesIDRFlag(t *testing.T) {
+	h := NewFrameHub()
+
+	got := make(chan bool, 4)
+	require.NoError(t, h.Subscribe("idr-probe", func(_ int64, _ [][]byte, isIDR bool) {
+		got <- isIDR
+	}))
+	defer h.Unsubscribe("idr-probe")
+
+	h.Broadcast(100, [][]byte{{0x65}}, true)
+	h.Broadcast(200, [][]byte{{0x41}}, false)
+
+	require.Equal(t, true, <-got, "keyframe flag must reach the consumer")
+	require.Equal(t, false, <-got, "non-keyframe flag must reach the consumer")
 }

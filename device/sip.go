@@ -274,7 +274,7 @@ func BuildRegister(requestUri, from, to, callId, cseq, contact, authHeader strin
 		Contact:     contact,
 		MaxForwards: "70",
 		Expires:     "3600",
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 	if authHeader != "" {
@@ -294,7 +294,7 @@ func BuildBye(requestUri, from, to, callId, cseq, contact string) SipMessage {
 		CSeq:        cseq,
 		Contact:     contact,
 		MaxForwards: "70",
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -322,7 +322,7 @@ func Build200OK(req SipMessage, contentType, body string) SipMessage {
 		CSeq:        req.CSeq,
 		ContentType: contentType,
 		Body:        body,
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }

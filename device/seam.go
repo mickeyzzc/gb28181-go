@@ -61,6 +61,12 @@ type DeviceInfo struct {
 	SerialNumber string `yaml:"serial_number"` // Device serial number
 }
 
+// UserAgent is the SIP User-Agent stamped on every message the device
+// role emits. The neutral default carries no host brand — hosts rebrand
+// by assigning their own value before calling New/Start (concurrent
+// mutation afterwards races the message builders).
+var UserAgent = "GB28181-Go/1.0"
+
 // NALU is one H.264 NAL unit (payload without Annex-B start code).
 type NALU struct {
 	Type  byte   // NALU type (first byte & 0x1F)

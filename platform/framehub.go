@@ -6,8 +6,10 @@ import (
 	"sync/atomic"
 )
 
-// FrameCallback receives one demuxed video access unit (NALU list, 90kHz PTS).
-type FrameCallback func(pts int64, au [][]byte)
+// FrameCallback receives one demuxed video access unit (NALU list, 90kHz
+// PTS) and whether it is a keyframe (IDR). The IDR flag lets consumers gate
+// segment starts and snapshot extraction without re-parsing the NALUs.
+type FrameCallback func(pts int64, au [][]byte, isIDR bool)
 
 // frameHubQueueSize bounds each consumer's delivery queue (~7.5s at 20fps).
 // Frames delivered to a full queue are dropped — live preview prefers fresh
@@ -121,7 +123,7 @@ func (c *frameHubConsumer) drain() {
 	for {
 		select {
 		case f := <-c.ch:
-			c.cb(f.pts, f.au)
+			c.cb(f.pts, f.au, f.isIDR)
 		case <-c.done:
 			return
 		}

@@ -190,7 +190,7 @@ func TestLoopback_InviteRoundTripBYE(t *testing.T) {
 	var mu sync.Mutex
 	var gotAUs [][][]byte
 	hub := lb.awaitHub(t)
-	require.NoError(t, hub.Subscribe("conformance", func(pts int64, au [][]byte) {
+	require.NoError(t, hub.Subscribe("conformance", func(pts int64, au [][]byte, isIDR bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		gotAUs = append(gotAUs, au)

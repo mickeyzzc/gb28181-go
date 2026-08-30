@@ -104,7 +104,7 @@ func TestReceiverUDPBasic(t *testing.T) {
 	// Subscribe to hub
 	var receivedFrames atomic.Int64
 	var receivedPTS atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		receivedFrames.Add(1)
 		receivedPTS.Store(pts)
 	})
@@ -240,7 +240,7 @@ func TestReceiverJitterBufferMarkerBit(t *testing.T) {
 	defer clientConn.Close()
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestReceiverSequenceWrap(t *testing.T) {
 	defer clientConn.Close()
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestReceiverTCPModeRFC4571(t *testing.T) {
 	require.NoError(t, connErr)
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -421,7 +421,7 @@ func TestReceiverTCPMode0x24(t *testing.T) {
 	require.NoError(t, connErr)
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -484,7 +484,7 @@ func TestReceiverTCPModeAutoDetectRFC4571(t *testing.T) {
 	require.NoError(t, connErr)
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -548,7 +548,7 @@ func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 	require.NoError(t, connErr)
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -669,7 +669,7 @@ func TestReceiverMultipleAUs(t *testing.T) {
 	defer clientConn.Close()
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -716,7 +716,7 @@ func TestReceiverOutOrderPackets(t *testing.T) {
 	defer clientConn.Close()
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -772,7 +772,7 @@ func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	defer clientConn.Close()
 
 	var auCount atomic.Int64
-	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-consumer", func(pts int64, au [][]byte, isIDR bool) {
 		auCount.Add(1)
 	})
 	require.NoError(t, err)
