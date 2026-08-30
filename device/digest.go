@@ -1,6 +1,7 @@
-// Package gb28181 implements SIP digest authentication (RFC 2617)
+// implements SIP digest authentication (RFC 2617)
 // used by GB/T 28181 platforms — Authorization header building and
 // response verification.
+
 package device
 
 import (

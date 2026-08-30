@@ -196,7 +196,7 @@ func (s *Service) Start(ctx context.Context) error {
 	if listen == "" {
 		listen = ":5061"
 	}
-	srv, err := newSIPServer(listen)
+	srv, err := newSIPServer(listen, s.cfg.EffectiveUserAgent())
 	if err != nil {
 		return fmt.Errorf("gb28181-cascade: SIP listen %s: %w", listen, err)
 	}
@@ -669,9 +669,9 @@ func (s *Service) answerDeviceInfo(u *upper, sn int) {
 		CmdType:      manscdp.CmdDeviceInfo,
 		SN:           sn,
 		DeviceID:     u.cfg.LocalDeviceID,
-		DeviceName:   orDefault(s.cfg.DeviceName, "MiBee NVR"),
-		Manufacturer: orDefault(s.cfg.Manufacturer, "MiBee"),
-		Model:        orDefault(s.cfg.Model, "MiBeeNvr"),
+		DeviceName:   orDefault(s.cfg.DeviceName, "GB28181 Platform"),
+		Manufacturer: orDefault(s.cfg.Manufacturer, "Unknown"),
+		Model:        orDefault(s.cfg.Model, "Unknown"),
 	})
 	if err == nil {
 		if err := s.sendMessageBodyTo(u, body, "Application/MANSCDP+xml"); err != nil {
@@ -717,7 +717,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // newSIPServer builds a gosip UDP server bound to listen (":5061") — the
 // same construction the platform-role server uses.
-func newSIPServer(listen string) (gosip.Server, error) {
+func newSIPServer(listen, userAgent string) (gosip.Server, error) {
 	host, portStr, err := net.SplitHostPort(listen)
 	if err != nil || portStr == "" {
 		return nil, fmt.Errorf("invalid listen %q", listen)
@@ -731,7 +731,7 @@ func newSIPServer(listen string) (gosip.Server, error) {
 	}
 	srv := gosip.NewServer(gosip.ServerConfig{
 		Host:      host,
-		UserAgent: "MiBeeNvr-GB28181-Cascade/1.0",
+		UserAgent: userAgent,
 	}, nil, nil, mbsip.SlogLogger(slog.Default().With("component", "gb28181_cascade")))
 	if err := srv.Listen("UDP", net.JoinHostPort(host, strconv.Itoa(port))); err != nil {
 		return nil, err

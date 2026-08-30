@@ -43,10 +43,46 @@ type Config struct {
 
 	// DeviceName / Manufacturer / Model identify this platform in DeviceInfo
 	// answers toward the upper platform. Zero values fall back to the
-	// MiBee NVR identity of the source implementation.
+	// neutral defaults ("GB28181 Platform" / "Unknown" / "Unknown") — never
+	// a product name.
 	DeviceName   string `yaml:"device_name,omitempty"`
 	Manufacturer string `yaml:"manufacturer,omitempty"`
 	Model        string `yaml:"model,omitempty"`
+
+	// UserAgent overrides the SIP User-Agent on outbound requests.
+	// Empty = "gb28181-go/cascade" (neutral). Some vendor platforms
+	// fingerprint the UA — set this if yours does.
+	UserAgent string `yaml:"user_agent,omitempty"`
+
+	// CatalogDefaultManufacturer / CatalogDefaultModel fill in catalog items
+	// for cameras that carry no brand/model of their own. Empty = "Unknown"
+	// (neutral; the previous product-name defaults are gone).
+	CatalogDefaultManufacturer string `yaml:"catalog_default_manufacturer,omitempty"`
+	CatalogDefaultModel        string `yaml:"catalog_default_model,omitempty"`
+}
+
+// EffectiveUserAgent resolves the outbound SIP User-Agent (neutral default).
+func (c Config) EffectiveUserAgent() string {
+	if c.UserAgent != "" {
+		return c.UserAgent
+	}
+	return "gb28181-go/cascade"
+}
+
+// CatalogManufacturer resolves the catalog-item manufacturer default.
+func (c Config) CatalogManufacturer() string {
+	if c.CatalogDefaultManufacturer != "" {
+		return c.CatalogDefaultManufacturer
+	}
+	return "Unknown"
+}
+
+// CatalogModel resolves the catalog-item model default.
+func (c Config) CatalogModel() string {
+	if c.CatalogDefaultModel != "" {
+		return c.CatalogDefaultModel
+	}
+	return "Unknown"
 }
 
 // Upstream is one upper-platform registration: its own REGISTER/keepalive

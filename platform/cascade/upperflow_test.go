@@ -132,7 +132,7 @@ func TestLoopbackDeviceInfoQueryAnswer(t *testing.T) {
 	require.Equal(t, 200, int(res.StatusCode()))
 
 	answer := up.awaitServerRequest(sip.MESSAGE, "<CmdType>DeviceInfo</CmdType>")
-	require.Contains(t, string(answer.Body()), "MiBee NVR", "device-info answer identifies the NVR")
+	require.Contains(t, string(answer.Body()), "GB28181 Platform", "device-info answer carries the (configurable, neutral-default) device name")
 }
 
 // TestLoopbackMediaPump drives real frames through the hub and asserts RTP

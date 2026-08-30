@@ -1,5 +1,6 @@
-// Package gb28181 implements RTP packetization of PS streams and
+// implements RTP packetization of PS streams and
 // UDP/TCP push to the GB/T 28181 platform using github.com/pion/rtp.
+
 package device
 
 import (

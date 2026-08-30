@@ -1,5 +1,6 @@
-// Package gb28181 implements playback/download streaming of recorded
+// implements playback/download streaming of recorded
 // segments for GB/T 28181 INVITE sessions (s=Playback / s=Download).
+
 package device
 
 import (

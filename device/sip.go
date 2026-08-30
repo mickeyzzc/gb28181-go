@@ -1,11 +1,13 @@
-// Package gb28181 implements the GB/T 28181 SIP signaling protocol
+// implements the GB/T 28181 SIP signaling protocol
 // (RFC 3261 subset) by hand — register, invite, keepalive, and bye message
 // parsing/building with no external SIP library.
+
 package device
 
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -299,9 +301,21 @@ func BuildBye(requestUri, from, to, callId, cseq, contact string) SipMessage {
 	}
 }
 
-// dialogTag is a stable To-tag suffix for this process. A single stable
-// tag is sufficient for a single-dialog GB28181 device.
-var dialogTag = fmt.Sprintf("mibee%d", time.Now().UnixNano()&0xFFFFFF)
+// dialogTag is a stable To-tag suffix for this process. A single stable tag
+// is sufficient for a single-dialog GB28181 device. It is drawn from
+// crypto/rand — To-tags must not be predictable across restarts (RFC 3261
+// §19.3), and it carries no product prefix.
+var dialogTag = randomTag()
+
+// randomTag returns 8 lowercase hex chars from crypto/rand, falling back to
+// the clock only if the system CSPRNG is unavailable.
+func randomTag() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%08x", time.Now().UnixNano()&0xFFFFFFFF)
+	}
+	return hex.EncodeToString(b[:])
+}
 
 // Build200OK creates a 200 OK response to an incoming request.
 // Per RFC 3261 §8.2.6.2 it copies the request Via verbatim (required for

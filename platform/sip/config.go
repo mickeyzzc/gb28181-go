@@ -2,6 +2,10 @@ package sip
 
 import "time"
 
+// DefaultUserAgent is the SIP User-Agent the platform sends on outbound
+// requests when Config.UserAgent is empty — neutral, never a product name.
+const DefaultUserAgent = "gb28181-go"
+
 // Config configures the GB/T 28181 platform (UAS) server. Field-compatible
 // with MiBeeNvr's config.GB28181ServerConfig — the host maps its own config
 // onto this struct.
@@ -19,6 +23,15 @@ type Config struct {
 
 	// Password is the SIP digest-auth secret that registered devices must use.
 	Password string `yaml:"password"`
+
+	// UserAgent overrides the SIP User-Agent on outbound requests.
+	// Empty = DefaultUserAgent ("gb28181-go"). Some vendor platforms
+	// fingerprint the UA — set this if yours does.
+	UserAgent string `yaml:"user_agent,omitempty"`
+
+	// InviteResponseTimeout bounds how long InviteChannel waits for the
+	// device's answer to a SIP INVITE. Go duration string; default "32s".
+	InviteResponseTimeout string `yaml:"invite_response_timeout,omitempty"`
 
 	// PortRange is the RTP media port pool, "start-end". Default "30000-30050".
 	PortRange string `yaml:"port_range"`
@@ -124,4 +137,20 @@ func (c Config) AlarmSubscriptionOn() bool {
 		return c.Enabled
 	}
 	return *c.SubscribeAlarm
+}
+
+// EffectiveUserAgent resolves the outbound SIP User-Agent (neutral default).
+func (c Config) EffectiveUserAgent() string {
+	if c.UserAgent != "" {
+		return c.UserAgent
+	}
+	return DefaultUserAgent
+}
+
+// InviteTimeout resolves the INVITE answer timeout (default 32s).
+func (c Config) InviteTimeout() time.Duration {
+	if d, err := time.ParseDuration(c.InviteResponseTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 32 * time.Second
 }

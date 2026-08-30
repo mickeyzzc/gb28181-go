@@ -1,6 +1,7 @@
-// Package gb28181 implements MANSCDP (XML body) command handling —
+// implements MANSCDP (XML body) command handling —
 // device catalog, keepalive, and control command XML between the
 // device and the GB/T 28181 platform.
+
 package device
 
 import (

@@ -144,11 +144,11 @@ func (r *Receiver) Start(ctx context.Context, conn net.Conn) error {
 	// Detect TCP mode
 	if _, ok := conn.(*net.TCPConn); ok {
 		r.isTCP.Store(true)
-		logger.Info("gb28181: receiver started in TCP-passive mode",
+		logger().Info("gb28181: receiver started in TCP-passive mode",
 			"camera_id", r.cameraID, "tcp_mode", r.tcpMode, "remote", conn.RemoteAddr())
 	} else {
 		r.isTCP.Store(false)
-		logger.Info("gb28181: receiver started in UDP mode",
+		logger().Info("gb28181: receiver started in UDP mode",
 			"camera_id", r.cameraID, "local", conn.LocalAddr(), "remote", conn.RemoteAddr())
 	}
 
@@ -172,7 +172,7 @@ func (r *Receiver) Stop() error {
 		close(r.done)
 	}
 
-	logger.Info("gb28181: receiver stopped",
+	logger().Info("gb28181: receiver stopped",
 		"camera_id", r.cameraID,
 		"packets_received", r.rtpPacketsReceived.Load(),
 		"packets_dropped", r.rtpPacketsDropped.Load(),
@@ -228,7 +228,7 @@ func (r *Receiver) SinceLastIDR() (time.Duration, bool) {
 func (r *Receiver) readLoop(ctx context.Context) {
 	defer func() {
 		r.running.Store(false)
-		logger.Info("gb28181: read loop exited", "camera_id", r.cameraID)
+		logger().Info("gb28181: read loop exited", "camera_id", r.cameraID)
 	}()
 
 	buf := make([]byte, rtpReadBufSize)
@@ -248,10 +248,10 @@ func (r *Receiver) readLoop(ctx context.Context) {
 				return
 			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				logger.Info("gb28181: connection closed", "camera_id", r.cameraID)
+				logger().Info("gb28181: connection closed", "camera_id", r.cameraID)
 				return
 			}
-			logger.Warn("gb28181: read error", "camera_id", r.cameraID, "error", err)
+			logger().Warn("gb28181: read error", "camera_id", r.cameraID, "error", err)
 			return
 		}
 
@@ -270,7 +270,7 @@ func (r *Receiver) readLoop(ctx context.Context) {
 		// cloned before the packet is stored in the jitter buffer.
 		var pkt rtp.Packet
 		if err := pkt.Unmarshal(buf[:n]); err != nil {
-			logger.Warn("gb28181: RTP unmarshal failed", "camera_id", r.cameraID, "error", err)
+			logger().Warn("gb28181: RTP unmarshal failed", "camera_id", r.cameraID, "error", err)
 			r.rtpPacketsDropped.Add(1)
 			continue
 		}
@@ -279,7 +279,7 @@ func (r *Receiver) readLoop(ctx context.Context) {
 
 		// Feed to jitter buffer for reassembly
 		if err := r.feedJitterBuffer(&pkt); err != nil {
-			logger.Debug("gb28181: jitter buffer error", "camera_id", r.cameraID, "error", err)
+			logger().Debug("gb28181: jitter buffer error", "camera_id", r.cameraID, "error", err)
 			r.rtpPacketsDropped.Add(1)
 			continue
 		}
@@ -364,7 +364,7 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 		r.foreignDrops.Add(1)
 		if !r.foreignLogged.Load() {
 			r.foreignLogged.Store(true)
-			logger.Warn("gb28181: dropping RTP from foreign SSRC on session port",
+			logger().Warn("gb28181: dropping RTP from foreign SSRC on session port",
 				"camera_id", r.cameraID,
 				"expected_ssrc", r.expectedSSRC.Load(),
 				"foreign_ssrc", pkt.Header.SSRC)
@@ -453,7 +453,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			return
 		}
 		r.packetsDroppedU++
-		logger.Debug("gb28181: RTP packet loss — skipping gap",
+		logger().Debug("gb28181: RTP packet loss — skipping gap",
 			"camera_id", r.cameraID, "from_seq", r.baseSeq, "to_seq", next)
 		// The AU in flight lost bytes on the wire — its pending PES/ES
 		// reassembly would complete from mismatched halves (a frame with a
@@ -495,7 +495,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// Feed to Stage 2: PS demuxer
 	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, endedOnMarker)
 	if err != nil {
-		logger.Debug("gb28181: PS demux error", "camera_id", r.cameraID, "error", err)
+		logger().Debug("gb28181: PS demux error", "camera_id", r.cameraID, "error", err)
 		return
 	}
 
