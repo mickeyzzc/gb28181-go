@@ -107,12 +107,18 @@ func (c *sipClient) answerRetransmits(method sip.RequestMethod, answer func(sip.
 	}
 }
 
-// sendMessage sends a server-directed MESSAGE (device → platform).
+// sendMessage sends a server-directed MESSAGE (device → platform) and awaits
+// the platform's final response. Awaiting is load-bearing: a MESSAGE
+// transaction left in flight when the test tears down races gosip's
+// serverTx.Terminate (closechan) against transportErr (chansend) once the
+// client socket closes — the upstream race that flaked
+// TestQueryChannelRecordsLoopback on CI (2026-08-29).
 func (c *sipClient) sendMessage(body string) {
 	c.t.Helper()
 	req := buildRequest(c.t, sip.MESSAGE, testDeviceID, testServerID, c.addr.String(), c.localPort(), body)
-	if _, err := c.conn.WriteToUDP([]byte(req.String()), c.addr); err != nil {
-		c.t.Fatalf("sendMessage: write: %v", err)
+	res := c.roundTrip(req)
+	if code := res.StatusCode(); code >= 300 {
+		c.t.Fatalf("sendMessage: MESSAGE rejected: %d %s", code, res.Reason())
 	}
 }
 

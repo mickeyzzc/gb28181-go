@@ -98,25 +98,35 @@ func (c *sipClient) localPort() int {
 // skipping provisional responses such as 100 Trying.
 func (c *sipClient) roundTrip(req sip.Request) sip.Response {
 	c.t.Helper()
+	if _, err := c.conn.WriteToUDP([]byte(req.String()), c.addr); err != nil {
+		c.t.Fatalf("roundTrip: write: %v", err)
+	}
+	return c.awaitResponse(req)
+}
+
+// awaitResponse blocks for the first final (>= 200) response to req, matched
+// by Call-ID. Split out of roundTrip so tests that write a request manually
+// (e.g. write-then-observe-hook) can still close the transaction out before
+// teardown — an in-flight server transaction at socket close races gosip's
+// Terminate vs transportErr (upstream closechan/chansend, CI flake class).
+func (c *sipClient) awaitResponse(req sip.Request) sip.Response {
+	c.t.Helper()
 	callID := ""
 	if id, ok := req.CallID(); ok {
 		callID = id.String()
 	}
-	if _, err := c.conn.WriteToUDP([]byte(req.String()), c.addr); err != nil {
-		c.t.Fatalf("roundTrip: write: %v", err)
-	}
 	buf := make([]byte, 65535)
 	for {
 		if err := c.conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
-			c.t.Fatalf("roundTrip: set deadline: %v", err)
+			c.t.Fatalf("awaitResponse: set deadline: %v", err)
 		}
 		n, _, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
-			c.t.Fatalf("roundTrip: read: %v", err)
+			c.t.Fatalf("awaitResponse: read: %v", err)
 		}
 		msg, err := parser.ParseMessage(buf[:n], log.NewDefaultLogrusLogger())
 		if err != nil {
-			c.t.Fatalf("roundTrip: parse response: %v", err)
+			c.t.Fatalf("awaitResponse: parse response: %v", err)
 		}
 		// Skip unsolicited server-initiated requests (e.g. the catalog query
 		// sent right after a successful REGISTER) — they are not responses.
@@ -567,6 +577,13 @@ func TestServer_Bye_Hook(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("hook not called")
+	}
+
+	// Close the BYE transaction out before teardown: the hook observation
+	// alone doesn't prove the 200 landed, and an in-flight tx at socket
+	// close races gosip's Terminate vs transportErr (CI flake 2026-08-29).
+	if res := client.awaitResponse(req); res.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200", res.StatusCode())
 	}
 }
 
