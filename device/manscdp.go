@@ -270,7 +270,7 @@ func BuildCatalogResponseMessage(sn, deviceID string, items []ChannelItem) SipMe
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        string(xmlData),
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -292,7 +292,7 @@ func BuildDeviceInfoResponseMessage(sn, deviceID string, info DeviceItem) SipMes
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        string(xmlData),
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -317,7 +317,7 @@ func BuildKeepaliveMessage(sn, deviceID, status string) SipMessage {
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        string(xmlData),
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -375,7 +375,7 @@ func BuildRecordInfoResponseMessage(sn, deviceID string, items []RecordItem) Sip
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        string(xmlData),
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -412,7 +412,7 @@ func BuildDeviceStatusResponseMessage(sn, deviceID string) SipMessage {
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        body,
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }
@@ -424,7 +424,7 @@ func BuildControlRejectResponseMessage(cmdType, sn, deviceID string) SipMessage 
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",
 		Body:        body,
-		UserAgent:   "MiBee-GB28181/1.0",
+		UserAgent:   UserAgent,
 		Headers:     make(map[string]string),
 	}
 }

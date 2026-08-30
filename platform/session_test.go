@@ -415,7 +415,7 @@ func TestSessionManager_ReceiverBroadcast(t *testing.T) {
 
 	// Subscribe to hub (FrameCallback signature: func(pts int64, au [][]byte))
 	receivedCh := make(chan int64, 10)
-	err = hub.Subscribe("test-sub", func(pts int64, au [][]byte) {
+	err = hub.Subscribe("test-sub", func(pts int64, au [][]byte, isIDR bool) {
 		select {
 		case receivedCh <- pts:
 		default:

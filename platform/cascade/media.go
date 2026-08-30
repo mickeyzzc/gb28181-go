@@ -388,7 +388,7 @@ func (ms *mediaSession) run(hub *platform.FrameHub) {
 	// a NEW dialog while an old one lingers — a channel-only ID collides in
 	// the hub's consumer registry.
 	subID := "cascade-" + ms.callID
-	err := hub.Subscribe(subID, func(pts int64, au [][]byte) {
+	err := hub.Subscribe(subID, func(pts int64, au [][]byte, isIDR bool) {
 		if ms.closed.Load() || len(au) == 0 {
 			return
 		}
