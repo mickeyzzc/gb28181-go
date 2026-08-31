@@ -14,10 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Fixed port ranges in these tests must stay BELOW the Linux ephemeral
+// port range (net.ipv4.ip_local_port_range, 32768+ by default): a fixed
+// test port inside it collides at random with kernel-assigned source
+// ports of unrelated connections and fails with EADDRINUSE. Ranges are
+// also per-test exclusive because SessionManager.Bye releases its socket
+// asynchronously.
+//
 // TestSessionManager_Invite creates a session, verifies port allocation,
 // and checks that the receiver is running.
 func TestSessionManager_Invite(t *testing.T) {
-	pm := NewPortManager(55000, 55010)
+	pm := NewPortManager(25000, 25010)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -55,7 +62,7 @@ func TestSessionManager_Invite(t *testing.T) {
 // TestSessionManager_Invite_NoAvailablePorts verifies that Invite fails
 // when the port pool is exhausted.
 func TestSessionManager_Invite_NoAvailablePorts(t *testing.T) {
-	pm := NewPortManager(55020, 55020) // Only one port
+	pm := NewPortManager(25020, 25020) // Only one port
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -91,7 +98,7 @@ func TestSessionManager_Invite_NoAvailablePorts(t *testing.T) {
 
 // TestSessionManager_Bye stops a session and recycles its port.
 func TestSessionManager_Bye(t *testing.T) {
-	pm := NewPortManager(55030, 55040)
+	pm := NewPortManager(25030, 25040)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -121,7 +128,7 @@ func TestSessionManager_Bye(t *testing.T) {
 	// Port should be recycled (verify by allocating again)
 	allocatedPort, err := pm.Get()
 	require.NoError(t, err, "port should be recycled and available again")
-	require.Equal(t, uint16(55030), allocatedPort, "first port should be recycled and allocated")
+	require.Equal(t, uint16(25030), allocatedPort, "first port should be recycled and allocated")
 
 	pm.Recycle(allocatedPort)
 }
@@ -129,7 +136,7 @@ func TestSessionManager_Bye(t *testing.T) {
 // TestSessionManager_Bye_NonExistent verifies that Bye is a no-op
 // for a non-existent session.
 func TestSessionManager_Bye_NonExistent(t *testing.T) {
-	pm := NewPortManager(55040, 55050)
+	pm := NewPortManager(25040, 25050)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	// Bye on non-existent session should not error
@@ -139,7 +146,7 @@ func TestSessionManager_Bye_NonExistent(t *testing.T) {
 
 // TestSessionManager_GetReceiver returns nil for non-existent sessions.
 func TestSessionManager_GetReceiver(t *testing.T) {
-	pm := NewPortManager(55050, 55060)
+	pm := NewPortManager(25050, 25060)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	receiver := sm.GetReceiver("non-existent-channel")
@@ -148,7 +155,7 @@ func TestSessionManager_GetReceiver(t *testing.T) {
 
 // TestSessionManager_MultipleSessions verifies multiple concurrent sessions.
 func TestSessionManager_MultipleSessions(t *testing.T) {
-	pm := NewPortManager(55060, 55070)
+	pm := NewPortManager(25060, 25070)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
@@ -185,7 +192,7 @@ func TestSessionManager_MultipleSessions(t *testing.T) {
 
 // TestSessionManager_StopAll stops all sessions.
 func TestSessionManager_StopAll(t *testing.T) {
-	pm := NewPortManager(55070, 55080)
+	pm := NewPortManager(25070, 25080)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
@@ -212,7 +219,7 @@ func TestSessionManager_StopAll(t *testing.T) {
 
 // TestSessionManager_Invite_NilChannel verifies error handling for nil channel.
 func TestSessionManager_Invite_NilChannel(t *testing.T) {
-	pm := NewPortManager(55080, 55090)
+	pm := NewPortManager(25080, 25090)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	_, err := sm.Invite(nil, "127.0.0.1", "192.168.1.100:5060", []byte("..."), nil, nil)
@@ -222,7 +229,7 @@ func TestSessionManager_Invite_NilChannel(t *testing.T) {
 
 // TestSessionManager_GetHub returns the StreamHub for a session.
 func TestSessionManager_GetHub(t *testing.T) {
-	pm := NewPortManager(55090, 55100)
+	pm := NewPortManager(25090, 25100)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -246,7 +253,7 @@ func TestSessionManager_GetHub(t *testing.T) {
 
 // TestSessionManager_MarkPlaying verifies the MarkPlaying method.
 func TestSessionManager_MarkPlaying(t *testing.T) {
-	pm := NewPortManager(55100, 55110)
+	pm := NewPortManager(25100, 25110)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -275,7 +282,7 @@ func TestSessionManager_MarkPlaying(t *testing.T) {
 
 // TestSessionManager_MarkPlaying_NonExistent verifies error handling.
 func TestSessionManager_MarkPlaying_NonExistent(t *testing.T) {
-	pm := NewPortManager(55110, 55120)
+	pm := NewPortManager(25110, 25120)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	err := sm.MarkPlaying("non-existent-channel")
@@ -285,7 +292,7 @@ func TestSessionManager_MarkPlaying_NonExistent(t *testing.T) {
 
 // TestSessionManager_SDPAnswerFormat verifies the SDP answer format.
 func TestSessionManager_SDPAnswerFormat(t *testing.T) {
-	pm := NewPortManager(55120, 55130)
+	pm := NewPortManager(25120, 25130)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -318,7 +325,7 @@ func TestSessionManager_SDPAnswerFormat(t *testing.T) {
 
 // TestSessionManager_ConcurrentInvites verifies thread safety.
 func TestSessionManager_ConcurrentInvites(t *testing.T) {
-	pm := NewPortManager(55130, 55145)
+	pm := NewPortManager(25130, 25145)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
@@ -361,7 +368,7 @@ func TestSessionManager_ConcurrentInvites(t *testing.T) {
 
 // TestSessionManager_ChannelStateTransitions verifies state machine.
 func TestSessionManager_ChannelStateTransitions(t *testing.T) {
-	pm := NewPortManager(55145, 55155)
+	pm := NewPortManager(25145, 25155)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -394,7 +401,7 @@ func TestSessionManager_ChannelStateTransitions(t *testing.T) {
 // TestSessionManager_ReceiverBroadcast verifies that the receiver
 // broadcasts NALUs to the hub.
 func TestSessionManager_ReceiverBroadcast(t *testing.T) {
-	pm := NewPortManager(55155, 55165)
+	pm := NewPortManager(25155, 25165)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	channel := &Channel{
@@ -437,7 +444,7 @@ func TestSessionManager_ReceiverBroadcast(t *testing.T) {
 
 // BenchmarkSessionManager_Invite benchmarks the Invite operation.
 func BenchmarkSessionManager_Invite(b *testing.B) {
-	pm := NewPortManager(55165, 55265)
+	pm := NewPortManager(25165, 25265)
 	sm := NewSessionManager(pm, "34020000001320000001")
 
 	sdpOffer := []byte("v=0\r\no=- 0 0 IN IP4 192.168.1.100\r\nc=IN IP4 192.168.1.100\r\nm=video 0 RTP/AVP 96\r\n")
@@ -464,7 +471,7 @@ func BenchmarkSessionManager_Invite(b *testing.B) {
 // that playback sessions use s=Playback with proper NTP timestamps.
 func TestSession_PlaybackSDP(t *testing.T) {
 	t.Helper()
-	pm := NewPortManager(60000, 60100)
+	pm := NewPortManager(26000, 26100)
 	sm := NewSessionManager(pm, "34020000002000000001")
 
 	channel := &Channel{
@@ -702,7 +709,7 @@ func buildRTPPacket(t *testing.T, payload []byte, ts uint32, seq uint16, marker 
 // but negotiates s=Download with the download SSRC prefix, and tears down via
 // the shared ByePlayback fetch path.
 func TestInviteDownload(t *testing.T) {
-	pm := NewPortManager(55000, 55010)
+	pm := NewPortManager(26200, 26210)
 	sm := NewSessionManager(pm, "34020000001320000001")
 	channel := &Channel{
 		DeviceID: "34020000001310000009",
