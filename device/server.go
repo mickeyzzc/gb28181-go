@@ -1,4 +1,4 @@
-// Package gb28181 implements the GB/T 28181 server entrypoint —
+// Package device — implements the GB/T 28181 server entrypoint —
 // SIP UDP listener lifecycle and orchestration of signaling and
 // media streaming components.
 //

@@ -2,6 +2,9 @@ package platform
 
 import "log/slog"
 
-// logger is the package-level logger shared by the platform components.
-// Hosts can re-target it via slog.SetDefault before starting a server.
-var logger = slog.Default().With("component", "gb28181-platform")
+// logger returns the logger used by the platform components, derived from
+// the CURRENT slog default on every call — hosts may retarget logging at
+// any time via slog.SetDefault and this package follows.
+func logger() *slog.Logger {
+	return slog.Default().With("component", "gb28181-platform")
+}

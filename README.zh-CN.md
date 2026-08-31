@@ -9,7 +9,7 @@
 
 **GB/T 28181-2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。
 
-手写 SIP（设备端不依赖任何 SIP 框架；平台端规划构建于 [ghettovoice/gosip](https://github.com/ghettovoice/gosip) 之上）、MANSCDP XML 编解码、RTP/PS 媒体与会话编排。代码从 Mi-Bee Studio 生产实现逐字抽取，经真实国标平台打磨（摘要 qop=auth、Via branch 唯一性、本机 IP 探测、MANSCDP 属性形式、SIP over TCP、TCP 媒体）。
+手写 SIP（设备端不依赖任何 SIP 框架；平台端构建于 [ghettovoice/gosip](https://github.com/ghettovoice/gosip) 之上）、MANSCDP XML 编解码、RTP/PS 媒体与会话编排。代码从 Mi-Bee Studio 生产实现逐字抽取，经真实国标平台打磨（摘要 qop=auth、Via branch 唯一性、本机 IP 探测、MANSCDP 属性形式、SIP over TCP、TCP 媒体）。
 
 ## 包
 
@@ -52,6 +52,18 @@ err := srv.Start(ctx)
 
 录像段使用 `device.OpenSegment` 读取的参考格式：裸 Annex-B H.264 + 每帧 `.ts.jsonl` sidecar。测试可使用现成的 `device.FrameHub`（有界通道、满则丢弃语义的 `FrameSource` 实现）。
 
+## 文档
+
+专题教程在 [`docs/`](docs/)（中文版在 [`docs/zh/`](docs/zh/)，英文版在 [`docs/en/`](docs/en/)）：
+
+| 教程 | 内容 |
+|---|---|
+| [设备端（UAC）](docs/zh/device.md) · [EN](docs/en/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID |
+| [MANSCDP 编解码](docs/zh/manscdp.md) · [EN](docs/en/manscdp.md) | 消息类型、元素/属性双形态、GB2312/GBK/GB18030/UTF-8 字符集 |
+| [PS 封装与 RTP](docs/zh/psmux.md) · [EN](docs/en/psmux.md) | `psmux.Muxer`、RTP 打包器（UDP/TCP）、封装器选型、`nalutil` |
+| [平台端（UAS）](docs/zh/platform.md) · [EN](docs/en/platform.md) | `platform/sip` 服务器：配置、`DeviceStore`、`EventBus`、会话管理、活性 |
+| [级联客户端](docs/zh/cascade.md) · [EN](docs/en/cascade.md) | 注册上级平台：`CameraSource`/`Store`/`SegmentParser` 接缝 |
+
 ## 示例
 
 [`examples/`](examples/) 下可直接 `go run` 的完整示例：
@@ -69,6 +81,26 @@ err := srv.Start(ctx)
 ## 状态
 
 `device/` 与 `manscdp/` 已发布；`platform/` 抽取全部 4 批完成（PS 解复用/复用、注册表、端口池、PTZ、RTP 接收、会话编排、SIP UAS 服务器、级联）。API 面趋于稳定但尚未冻结。在 [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) 每日对 MiBee NVR 国标平台生产验证。
+
+### API 面说明：两套 PS 复用器、两套 MANSCDP 类型
+
+`device.MuxH264ToPS`（经真实平台实战）与 `psmux.New()`（支持 H.265 +
+G.711 音频）有意并存，`device/` 与 `manscdp/` 的 MANSCDP 类型集同理：
+设备侧线上字节与 Rust 孪生库有 golden 逐字节契约，在确定 wire 兼容
+策略前暂缓合并。需要 H.265/音频的新集成选 `psmux`；需要与孪生库字节
+一致时用 `device/` 内置实现。
+
+## 库卫生（v0.3.0 加固）
+
+v0.3.0 移除了线上协议中的产品品牌标识，第三方项目可放心导入。根目录 `hygiene_test.go` 的源码扫描守卫逐条锁定：
+
+- **SIP User-Agent 可配置且默认中性** —— 平台端默认 `gb28181-go`、级联端默认 `gb28181-go/cascade`（原来是写死的 `MiBeeNvr-GB28181/1.0`）。`platform/sip.Config.UserAgent`、`platform/cascade.Config.UserAgent` 可覆盖。
+- **目录/DeviceInfo 身份默认中性** —— 级联目录条目缺省 `Manufacturer`/`Model` 为 `Unknown`（原来是 `MiBee`/`MiBeeNvr`），可用 `CatalogDefaultManufacturer`/`CatalogDefaultModel` 覆盖。
+- **设备端 dialog To-tag 来自 crypto/rand** —— 8 位十六进制，不再带品牌前缀、不再由时间推导（RFC 3261 §19.3）。
+- **平台 logger 跟随 slog.SetDefault** —— 每次调用时从当前默认 logger 派生，宿主随时可重定向（修复了 init 时绑定导致注释与行为不符的问题）。
+- **INVITE 应答超时可配置** —— `platform/sip.Config.InviteResponseTimeout`（默认 32s）。
+- **`device.FormatDeviceID`/`ParseDeviceID`** —— 落实了原空 stub 承诺的 20 位国标编号生成/解析（错误返回 error 而非 panic）。
+- **包注释修正** —— `device` 包 9 个文件的错误 `// Package gb28181` 注释已更正。
 
 ## 许可
 

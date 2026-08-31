@@ -64,8 +64,8 @@ func (s *Service) catalogItems() ([]manscdp.Item, error) {
 			Name:         cam.Name,
 			Parental:     0,
 			Status:       "ON",
-			Manufacturer: orDefault(cam.Brand, "MiBee"),
-			Model:        orDefault(cam.Model, "MiBeeNvr"),
+			Manufacturer: orDefault(cam.Brand, s.cfg.CatalogManufacturer()),
+			Model:        orDefault(cam.Model, s.cfg.CatalogModel()),
 			RegisterWay:  1,
 			// PTZType 3 = pan/tilt/zoom: the upper platform refuses to send
 			// PTZ (404 "PTZ not supported") when this is 0. The cascade

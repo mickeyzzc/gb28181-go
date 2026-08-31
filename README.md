@@ -51,6 +51,18 @@ Host seams (interfaces, host-injected):
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
 
+## Documentation
+
+Topic guides under [`docs/`](docs/) (English, with Chinese counterparts in [`docs/zh/`](docs/zh/)):
+
+| Guide | Covers |
+|---|---|
+| [Device (UAC)](docs/device.md) · [设备端](docs/zh/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs |
+| [MANSCDP codec](docs/manscdp.md) · [MANSCDP 编解码](docs/zh/manscdp.md) | message types, element/attribute dual form, GB2312/GBK/GB18030/UTF-8 charsets |
+| [PS muxer & RTP](docs/psmux.md) · [PS 封装与 RTP](docs/zh/psmux.md) | `psmux.Muxer`, RTP packetizers (UDP/TCP), which muxer to pick, `nalutil` |
+| [Platform (UAS)](docs/platform.md) · [平台端](docs/zh/platform.md) | `platform/sip` server: config, `DeviceStore`, `EventBus`, session manager, liveness |
+| [Cascade client](docs/cascade.md) · [级联客户端](docs/zh/cascade.md) | registering to an upper platform: `CameraSource`/`Store`/`SegmentParser` seams |
+
 ## Examples
 
 Runnable examples under [`examples/`](examples/) — each is a `main` package you can `go run`:
@@ -68,6 +80,28 @@ This project follows strict **TDD** — see [CONTRIBUTING.md](CONTRIBUTING.md). 
 ## Status
 
 `device/` + `manscdp/` shipped; `platform/` extraction complete (4/4 batches: PS demux/mux, registry, portmanager, PTZ, RTP receiver, SessionManager, SIP UAS server, cascade). API surfaces are settling but not frozen. Production-tested daily at [Mi-Bee Studio](https://github.com/Mi-Bee-Studio) against the MiBee NVR GB28181 platform.
+
+### API surface note: two PS muxers, two MANSCDP type sets
+
+`device.MuxH264ToPS` (battle-tested against real platforms) and `psmux.New()`
+(H.265 + G.711 audio capable) intentionally coexist, as do the `device/` and
+`manscdp/` MANSCDP type sets: the device-side wire bytes are golden-tested
+byte-exact against the Rust twin, so consolidation is deferred until a
+wire-compat strategy exists. Pick `psmux` for new integrations needing
+H.265/audio; use the `device/` built-ins when matching the twin's bytes
+matters.
+
+## Library hygiene (v0.3.0 hardening)
+
+v0.3.0 removed product branding from the wire protocol so third parties can import this library as-is. The source-scan guard at the repo root (`hygiene_test.go`) pins each guarantee:
+
+- **Configurable, neutral SIP User-Agent** — platform defaults to `gb28181-go`, cascade to `gb28181-go/cascade` (was hardcoded `MiBeeNvr-GB28181/1.0`). Override via `platform/sip.Config.UserAgent` / `platform/cascade.Config.UserAgent`.
+- **Neutral catalog/DeviceInfo identity** — cascade catalog items default `Manufacturer`/`Model` to `Unknown` (was `MiBee`/`MiBeeNvr`), overridable via `CatalogDefaultManufacturer`/`CatalogDefaultModel`.
+- **Device dialog To-tag from crypto/rand** — 8 hex chars, no product prefix, not time-derived (RFC 3261 §19.3).
+- **Platform logger follows slog.SetDefault** — derived from the current default logger on every call, so hosts can retarget at any time (the init-time binding mismatch is fixed).
+- **INVITE answer timeout is configurable** — `platform/sip.Config.InviteResponseTimeout` (default 32s).
+- **`device.FormatDeviceID`/`ParseDeviceID`** — the previously empty stub now implements 20-digit GB ID formatting/parsing (errors returned, never panicked).
+- **Package comments fixed** — the 9 wrong `// Package gb28181` comments in `device/` are corrected.
 
 ## License
 

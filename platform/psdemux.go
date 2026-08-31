@@ -174,7 +174,7 @@ func (d *PSDemuxer) warnPESOverflow(kind string, size int, pesData []byte) {
 	if len(head) > 16 {
 		head = head[:16]
 	}
-	logger.Warn("gb28181: PES reassembly abandoned — dropping and resyncing",
+	logger().Warn("gb28181: PES reassembly abandoned — dropping and resyncing",
 		"kind", kind, "bytes", size, "bound", maxPendingPESBytes,
 		"head", hex.EncodeToString(head))
 }
@@ -355,7 +355,7 @@ feedLoop:
 					if len(d.esBuf) > maxESBufBytes {
 						if !d.esResyncLogged {
 							d.esResyncLogged = true
-							logger.Warn("gb28181: PS elementary stream exceeded cap with no AU boundary — resyncing",
+							logger().Warn("gb28181: PS elementary stream exceeded cap with no AU boundary — resyncing",
 								"bytes", len(d.esBuf), "cap", maxESBufBytes)
 						}
 						d.esBuf = nil
@@ -384,7 +384,7 @@ feedLoop:
 	// the next marker.
 	if complete {
 		if len(d.videoPesBuf) > 0 {
-			logger.Warn("gb28181: AU ended mid-PES — dropping partial frame and resyncing",
+			logger().Warn("gb28181: AU ended mid-PES — dropping partial frame and resyncing",
 				"pending_pes_bytes", len(d.videoPesBuf), "es_bytes", len(d.esBuf))
 			d.videoPesBuf = nil
 			d.esBuf = nil

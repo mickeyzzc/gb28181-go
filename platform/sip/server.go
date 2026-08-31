@@ -38,6 +38,7 @@ var errDeviceBusy = errors.New("device busy (stale dialog)")
 
 // inviteResponseTimeout bounds how long InviteChannel waits for the device's
 // answer to a SIP INVITE before tearing the half-open session down.
+// Overridable per host via Config.InviteResponseTimeout (Config.InviteTimeout).
 const inviteResponseTimeout = 32 * time.Second
 
 // speculativeAckDelay is how long to wait for a transaction-matched INVITE
@@ -289,7 +290,7 @@ func (s *Server) Start(ctx context.Context) error {
 	logger := slogAdapter{slog.Default().With("component", "gb28181_sip")}
 	srv := gosip.NewServer(gosip.ServerConfig{
 		Host:      host,
-		UserAgent: "MiBeeNvr-GB28181/1.0",
+		UserAgent: s.cfg.EffectiveUserAgent(),
 	}, nil, nil, logger)
 	s.gosipSrv = srv
 
@@ -818,7 +819,7 @@ func (s *Server) watchSession(deviceID, channelID string) {
 // completes the handshake and the stream starts — confirmed by first RTP.
 func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, inviteReq sip.Request) (sip.Response, error) {
 	responses := tx.Responses()
-	deadline := time.NewTimer(inviteResponseTimeout)
+	deadline := time.NewTimer(s.cfg.InviteTimeout())
 	defer deadline.Stop()
 	speculative := time.NewTimer(speculativeAckDelay)
 	defer speculative.Stop()
