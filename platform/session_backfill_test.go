@@ -28,7 +28,7 @@ func udpInviteSession(t *testing.T, pm *PortManager, sm *SessionManager, channel
 }
 
 func TestSessionManager_ByeSenderFiresOnBye(t *testing.T) {
-	pm := NewPortManager(55300, 55310)
+	pm := NewPortManager(25300, 25310)
 	sm := NewSessionManager(pm, "34020000002000000001")
 
 	var mu sync.Mutex
@@ -50,7 +50,7 @@ func TestSessionManager_ByeSenderFiresOnBye(t *testing.T) {
 }
 
 func TestSessionManager_ByeSenderFiresOnSessionReplace(t *testing.T) {
-	pm := NewPortManager(55320, 55330)
+	pm := NewPortManager(25320, 25330)
 	sm := NewSessionManager(pm, "34020000002000000001")
 
 	var mu sync.Mutex
@@ -73,7 +73,7 @@ func TestSessionManager_ByeSenderFiresOnSessionReplace(t *testing.T) {
 }
 
 func TestSessionManager_FirstRTPHook(t *testing.T) {
-	pm := NewPortManager(55340, 55350)
+	pm := NewPortManager(25340, 25350)
 	sm := NewSessionManager(pm, "34020000002000000001")
 
 	var mu sync.Mutex
@@ -113,7 +113,7 @@ func TestSessionManager_FirstRTPHook(t *testing.T) {
 }
 
 func TestSessionManager_ByeDevice(t *testing.T) {
-	pm := NewPortManager(55360, 55380)
+	pm := NewPortManager(25360, 25380)
 	sm := NewSessionManager(pm, "34020000002000000001")
 
 	devA := "34020000001310000001"

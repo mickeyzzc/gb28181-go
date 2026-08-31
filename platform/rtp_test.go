@@ -44,7 +44,7 @@ func TestNewReceiver(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test-cam", hub, pm)
 
 	require.Equal(t, "test-cam", rec.cameraID)
@@ -58,7 +58,7 @@ func TestReceiverStopWithoutStart(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test", hub, pm)
 
 	err := rec.Stop()
@@ -69,7 +69,7 @@ func TestSetTCPMode(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test", hub, pm)
 
 	rec.SetTCPMode(TCPModeRFC4571)
@@ -86,7 +86,7 @@ func TestReceiverUDPBasic(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test-cam", hub, pm)
 
 	// Create UDP socket pair
@@ -147,7 +147,7 @@ func TestReceiverMetrics(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("metrics-test", hub, pm)
 
 	metrics := rec.Metrics()
@@ -160,7 +160,7 @@ func TestReceiverCodec(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test", hub, pm)
 
 	// Initially unknown
@@ -171,7 +171,7 @@ func TestReceiverDoubleStop(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("test", hub, pm)
 
 	err := rec.Stop()
@@ -186,7 +186,7 @@ func TestReceiverStartStopRace(t *testing.T) {
 
 	for range 50 {
 		hub := NewFrameHub()
-		pm := NewPortManager(50000, 50100)
+		pm := NewPortManager(20000, 20100)
 		rec := NewReceiver("race-test", hub, pm)
 
 		serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -225,7 +225,7 @@ func TestReceiverJitterBufferMarkerBit(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("jitter-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -278,7 +278,7 @@ func TestReceiverSequenceWrap(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("wrap-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -334,7 +334,7 @@ func TestReceiverTCPModeRFC4571(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("tcp-test", hub, pm)
 	rec.SetTCPMode(TCPModeRFC4571)
 
@@ -395,7 +395,7 @@ func TestReceiverTCPMode0x24(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("tcp-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPMode0x24)
 
@@ -458,7 +458,7 @@ func TestReceiverTCPModeAutoDetectRFC4571(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("auto-detect-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
 
@@ -522,7 +522,7 @@ func TestReceiverTCPModeAutoDetect0x24(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("auto-detect-0x24-test", hub, pm)
 	rec.SetTCPMode(TCPModeAuto)
 
@@ -588,7 +588,7 @@ func TestReceiverNALUCallback(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("callback-test", hub, pm)
 
 	// Set NALU callback
@@ -639,7 +639,7 @@ func TestReceiverStartNilConn(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("nil-conn-test", hub, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -654,7 +654,7 @@ func TestReceiverMultipleAUs(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("multi-au-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -701,7 +701,7 @@ func TestReceiverOutOrderPackets(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("ooo-test", hub, pm)
 
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -756,7 +756,7 @@ func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	t.Helper()
 
 	hub := NewFrameHub()
-	pm := NewPortManager(50000, 50010)
+	pm := NewPortManager(20000, 20010)
 	rec := NewReceiver("jitter-size-test", hub, pm)
 	rec.maxJitterPackets = 4 // Reduce for testing
 
