@@ -53,15 +53,15 @@ Segment files use the reference format read by `device.OpenSegment`: bare Annex-
 
 ## Documentation
 
-Topic guides under [`docs/`](docs/) (English, with Chinese counterparts in [`docs/zh/`](docs/zh/)):
+Topic guides live under [`docs/en/`](docs/en/) — each has a Chinese counterpart under `docs/zh/`:
 
 | Guide | Covers |
 |---|---|
-| [Device (UAC)](docs/device.md) · [设备端](docs/zh/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs |
-| [MANSCDP codec](docs/manscdp.md) · [MANSCDP 编解码](docs/zh/manscdp.md) | message types, element/attribute dual form, GB2312/GBK/GB18030/UTF-8 charsets |
-| [PS muxer & RTP](docs/psmux.md) · [PS 封装与 RTP](docs/zh/psmux.md) | `psmux.Muxer`, RTP packetizers (UDP/TCP), which muxer to pick, `nalutil` |
-| [Platform (UAS)](docs/platform.md) · [平台端](docs/zh/platform.md) | `platform/sip` server: config, `DeviceStore`, `EventBus`, session manager, liveness |
-| [Cascade client](docs/cascade.md) · [级联客户端](docs/zh/cascade.md) | registering to an upper platform: `CameraSource`/`Store`/`SegmentParser` seams |
+| [Device (UAC)](docs/en/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs |
+| [MANSCDP codec](docs/en/manscdp.md) | message types, element/attribute dual form, GB2312/GBK/GB18030/UTF-8 charsets |
+| [PS muxer & RTP](docs/en/psmux.md) | `psmux.Muxer`, RTP packetizers (UDP/TCP), which muxer to pick, `nalutil` |
+| [Platform (UAS)](docs/en/platform.md) | `platform/sip` server: config, `DeviceStore`, `EventBus`, session manager, liveness |
+| [Cascade client](docs/en/cascade.md) | registering to an upper platform: `CameraSource`/`Store`/`SegmentParser` seams |
 
 ## Examples
 
