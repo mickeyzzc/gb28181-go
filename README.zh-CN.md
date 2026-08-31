@@ -54,15 +54,15 @@ err := srv.Start(ctx)
 
 ## 文档
 
-专题教程在 [`docs/`](docs/)（中文版在 [`docs/zh/`](docs/zh/)，英文版在 [`docs/en/`](docs/en/)）：
+专题教程在 [`docs/zh/`](docs/zh/) —— 每篇在 `docs/en/` 下有英文对照版：
 
 | 教程 | 内容 |
 |---|---|
-| [设备端（UAC）](docs/zh/device.md) · [EN](docs/en/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID |
-| [MANSCDP 编解码](docs/zh/manscdp.md) · [EN](docs/en/manscdp.md) | 消息类型、元素/属性双形态、GB2312/GBK/GB18030/UTF-8 字符集 |
-| [PS 封装与 RTP](docs/zh/psmux.md) · [EN](docs/en/psmux.md) | `psmux.Muxer`、RTP 打包器（UDP/TCP）、封装器选型、`nalutil` |
-| [平台端（UAS）](docs/zh/platform.md) · [EN](docs/en/platform.md) | `platform/sip` 服务器：配置、`DeviceStore`、`EventBus`、会话管理、活性 |
-| [级联客户端](docs/zh/cascade.md) · [EN](docs/en/cascade.md) | 注册上级平台：`CameraSource`/`Store`/`SegmentParser` 接缝 |
+| [设备端（UAC）](docs/zh/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID |
+| [MANSCDP 编解码](docs/zh/manscdp.md) | 消息类型、元素/属性双形态、GB2312/GBK/GB18030/UTF-8 字符集 |
+| [PS 封装与 RTP](docs/zh/psmux.md) | `psmux.Muxer`、RTP 打包器（UDP/TCP）、封装器选型、`nalutil` |
+| [平台端（UAS）](docs/zh/platform.md) | `platform/sip` 服务器：配置、`DeviceStore`、`EventBus`、会话管理、活性 |
+| [级联客户端](docs/zh/cascade.md) | 注册上级平台：`CameraSource`/`Store`/`SegmentParser` 接缝 |
 
 ## 示例
 
