@@ -35,7 +35,7 @@ cfg := device.Config{
     DeviceID:           "34020000001320000001",
     ChannelID:          "34020000001310000001",
     SIPDomain:          "3402000000",
-    Password:           "12345678",
+    Password:           "your-platform-password", // digest-auth secret agreed with the platform — never ship a real one in docs or code
 }
 
 srv := device.New(cfg, device.DeviceInfo{Name: "My Cam"}, frameSource)
