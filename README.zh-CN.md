@@ -35,7 +35,7 @@ cfg := device.Config{
     DeviceID:           "34020000001320000001",
     ChannelID:          "34020000001310000001",
     SIPDomain:          "3402000000",
-    Password:           "12345678",
+    Password:           "your-platform-password", // 与平台约定的摘要认证密码——切勿在文档或代码里放真实值
 }
 
 srv := device.New(cfg, device.DeviceInfo{Name: "My Cam"}, frameSource)
