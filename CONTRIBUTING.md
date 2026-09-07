@@ -26,9 +26,11 @@ Tests are written **together with** the code, never backfilled later. A PR that 
 gofmt -l .   # must print nothing
 go vet ./...
 go test -race ./...
+go vet -tags gb35114 ./...     # GB35114 A-level package (build-tagged)
+go test -race -tags gb35114 ./...
 ```
 
-CI runs exactly these three gates on every push and PR.
+CI runs exactly these five gates on every push and PR.
 
 ---
 
@@ -58,6 +60,8 @@ CI runs exactly these three gates on every push and PR.
 gofmt -l .   # must print nothing
 go vet ./...
 go test -race ./...
+go vet -tags gb35114 ./...     # GB35114 A 级安全包（build tag 隔离）
+go test -race -tags gb35114 ./...
 ```
 
-CI 在每次 push 与 PR 上精确执行以上三道门。
+CI 在每次 push 与 PR 上精确执行以上五道门。
