@@ -23,6 +23,7 @@
 | `nalutil/` | NALU 工具（IDR 判定、参数集提取/比较）—— 平台收流与未来设备侧共用 | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform 自回环 conformance 套件 —— 真实 `device.Server` 对真实平台 SIP 服务器（localhost）：REGISTER+摘要认证 → 目录 → 保活存活 → INVITE 直播 → 字节级 RTP/PS 往返 → BYE；另有 SIPS（TLS 信令）变体。两个角色必须在每次 CI 上对每一条协议理解达成一致。 | 新增（issue #13） |
 | `platform/cascade/` | 级联客户端 —— 本平台作为下级平台向上级平台注册：聚合目录上报（GB 通道 ID 首见分配、跨重启稳定）、INVITE 转发拉流（FrameHub 订阅 → psmux → RTP）、录像段回放、BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS 处理、协议级回环测试。本地摄像头经 `CameraSource` 注入、持久化经 `Store`、录像段读取经 `SegmentParser` —— 全部宿主接缝。 | MiBeeNvr `internal/gb28181/cascade` |
+| `security35114/` | **可选，build tag 隔离（`-tags gb35114`）** —— GB 35114-2017 **A级** 设备安全：基于 SM2 数字证书的 REGISTER 双向认证（`Capability`/`Unidirection`/`Bidirection` 头域）、`cryptkey` SM2 信封内的 VKEK 协商、后续信令的 keyed-SM3 `Note` 头完整性。经 `device.Config.RegisterAuthenticator` 插入。 | 新增（v0.4.0） |
 
 ## 使用（设备端）
 
@@ -51,6 +52,29 @@ err := srv.Start(ctx)
 - `Config` / `DeviceInfo` —— 连接配置与设备身份（YAML 形状与来源项目一致）
 
 录像段使用 `device.OpenSegment` 读取的参考格式：裸 Annex-B H.264 + 每帧 `.ts.jsonl` sidecar。测试可使用现成的 `device.FrameHub`（有界通道、满则丢弃语义的 `FrameSource` 实现）。
+
+## GB35114 A 级安全（v0.4.0，可选）
+
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层。本库只实现 **A级** —— B/C 级额外依赖 SVAC 媒体（GB/T 25724，硬件编解码器），设计上不在范围内。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖：
+
+```go
+// go build -tags gb35114
+import sec "github.com/mickeyzzc/gb28181-go/security35114"
+
+auth, err := sec.New(sec.Options{
+    Device:       devIdentity,     // sec.LoadIdentityFromFiles(cert, key)
+    PlatformCert: platCert,        // sec.LoadCertificate(cert) —— 用于验签 sign2
+    DeviceID:     "34020000001320000001",
+    ServerID:     "34020000002000000001",
+})
+cfg.RegisterAuthenticator = auth   // 取代 REGISTER 生命周期中的摘要认证
+```
+
+握手流程按标准文本并以真实抓包交叉校准：`Capability` 能力宣告 → 401 携带 `random1` → 带 `sign1` 的重注册（SM2 签名 random2‖random1‖serverID）→ 200 OK `SecurityInfo` 携带 SM2 封装的 VKEK（`cryptkey`，DER C1‖C3‖C2 信封）；`Bidirection` 模式另含平台 `sign2`。注册成功后，所有外出请求（保活等）携带以 VKEK 为密钥的 `Date` + `Note: Digest nonce="…",algorithm=SM3`。每个头域由 golden 字符串钉死；端到端测试用真实 `device.Server` 对抗假平台（验签 sign1、解封 VKEK、校验首条保活的 `Note`）。
+
+两处跨实现歧义点做成可配置项（`RandomEncoding`、`Sign2Order`）：签名负载中随机数的表示形式、`sign2` 的 R1/R2 操作数顺序。默认值遵循标准文本（拼接采用抓包观测的线格式字符串；R1 在前）。SM3/SM2 来自 [emmansun/gmsm](https://github.com/emmansun/gmsm)（纯 Go，GM/T 0015-2012 SM2 X.509 证书）。
+
+线格式注意事项：证书预置在带外完成（或对接受 `cnonce` 宣告的平台开启 `Options.IncludeDeviceCert`）；设备侧尚未对平台发来的请求做 `Note` 校验。
 
 ## 文档
 

@@ -23,6 +23,7 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform loopback conformance suite — a real `device.Server` against a real platform SIP server on localhost: REGISTER+digest → catalog → keepalive liveness → INVITE live → byte-exact RTP/PS round-trip → BYE; plus the SIPS (TLS signaling) variant. Both roles must agree on every protocol reading, on every CI run. | new (issue #13) |
 | `platform/cascade/` | Cascade client — this platform registers as a LOWER platform to an upper platform: aggregated catalog upload with stable first-seen channel IDs, INVITE forwarding (FrameHub subscribe → psmux → RTP), playback from recorded segments, BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS handling, protocol-level loopback tests. Local cameras via `CameraSource`, persistence via `Store`, segment reading via `SegmentParser` — all host-injected. | MiBeeNvr `internal/gb28181/cascade` |
+| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 **A-level** device security: SM2-certificate mutual authentication over the REGISTER flow (`Capability`/`Unidirection`/`Bidirection` headers), VKEK negotiation inside the `cryptkey` SM2 envelope, and the keyed-SM3 `Note`-header integrity for subsequent signaling. Plugs into `device.Config.RegisterAuthenticator`. | new (v0.4.0) |
 
 ## Usage (device)
 
@@ -50,6 +51,29 @@ Host seams (interfaces, host-injected):
 - `Config` / `DeviceInfo` — settings and identity (YAML shapes unchanged from the source projects)
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
+
+## GB35114 A-level security (v0.4.0, opt-in)
+
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light:
+
+```go
+// go build -tags gb35114
+import sec "github.com/mickeyzzc/gb28181-go/security35114"
+
+auth, err := sec.New(sec.Options{
+    Device:       devIdentity,     // sec.LoadIdentityFromFiles(cert, key)
+    PlatformCert: platCert,        // sec.LoadCertificate(cert) — verifies sign2
+    DeviceID:     "34020000001320000001",
+    ServerID:     "34020000002000000001",
+})
+cfg.RegisterAuthenticator = auth   // replaces Digest auth in the REGISTER lifecycle
+```
+
+The handshake follows the published standard text cross-checked against real captures: `Capability` announcement → 401 with `random1` → signed re-REGISTER (`sign1` = SM2 over random2‖random1‖serverID) → 200 OK `SecurityInfo` carrying the SM2-sealed VKEK (`cryptkey`, DER C1‖C3‖C2 envelope) and, for `Bidirection`, the platform's `sign2`. After registration every outgoing request (keepalive, …) carries `Date` + `Note: Digest nonce="…",algorithm=SM3` keyed by the VKEK. Golden wire strings pin each header; an end-to-end test drives a real `device.Server` against a fake platform that verifies `sign1`, unseals the VKEK, and validates the first keepalive's `Note`.
+
+Two points are ambiguous across implementations and therefore configurable (`RandomEncoding`, `Sign2Order`): the random representation inside the signed payload, and the R1/R2 operand order of `sign2`. Defaults match the standard text (wire-strings concatenation observed in captures; R1-first). SM3/SM2 come from [emmansun/gmsm](https://github.com/emmansun/gmsm) (pure Go, GM/T 0015-2012 SM2 X.509 certificates).
+
+Wire-format caveats: certificate provisioning is out of band (or `Options.IncludeDeviceCert` for platforms that accept the `cnonce` announcement), and incoming platform requests are not `Note`-verified on the device side yet.
 
 ## Documentation
 
