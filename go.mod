@@ -3,6 +3,7 @@ module github.com/mickeyzzc/gb28181-go
 go 1.26
 
 require (
+	github.com/emmansun/gmsm v0.44.1
 	github.com/ghettovoice/gosip v0.0.0-20260603143348-d1f3b494c69a
 	github.com/pion/rtp v1.10.2
 	github.com/stretchr/testify v1.12.1
@@ -23,6 +24,7 @@ require (
 	github.com/tevino/abool v0.0.0-20170917061928-9b9efcf221b5 // indirect
 	github.com/x-cray/logrus-prefixed-formatter v0.5.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
-	golang.org/x/sys v0.1.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/term v0.45.0 // indirect
 )
