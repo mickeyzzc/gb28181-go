@@ -594,8 +594,19 @@ func (s *Server) runRegisterLifecycle(ctx context.Context) error {
 
 // sendToPlatform sends a lifecycle message (REGISTER, keepalive) to the
 // platform over the configured transport: UDP write to the platform address,
-// or a write on the SIPS connection for transport "tls".
+// or a write on the SIPS connection for transport "tls". When the configured
+// RegisterAuthenticator also implements OutgoingSigner, non-REGISTER
+// requests are stamped with the signer's Date and Note headers first.
 func (s *Server) sendToPlatform(msg SipMessage, platformAddr *net.UDPAddr) error {
+	if signer, ok := s.cfg.RegisterAuthenticator.(OutgoingSigner); ok && signer != nil {
+		if date, note := signer.DecorateOutgoing(msg.Method, msg.From, msg.To, msg.CallID, msg.Body); date != "" {
+			if msg.Headers == nil {
+				msg.Headers = make(map[string]string)
+			}
+			msg.Headers["Date"] = date
+			msg.Headers["Note"] = note
+		}
+	}
 	if s.cfg.Transport == "tls" {
 		s.mu.Lock()
 		remote := s.tlsRemote
@@ -646,9 +657,14 @@ func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regR
 	viaTransport := s.viaTransportLabel()
 	via := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", viaTransport, localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
 
-	// Initial REGISTER
+	// Initial REGISTER — a RegisterAuthenticator may announce capabilities
+	// (GB 35114 Capability); nil keeps the plain Digest-era behavior.
+	var initialAuth string
+	if s.cfg.RegisterAuthenticator != nil {
+		initialAuth = s.cfg.RegisterAuthenticator.InitialAuthorization()
+	}
 	slog.Info("gb28181: sending initial REGISTER")
-	regMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, "")
+	regMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, initialAuth)
 	regMsg.Via = via
 	if err := s.sendToPlatform(regMsg, platformAddr); err != nil {
 		return fmt.Errorf("sending REGISTER: %w", err)
@@ -663,12 +679,19 @@ func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regR
 	// Handle 401 Unauthorized
 	if resp.StatusCode == 401 {
 		slog.Info("gb28181: received 401, authenticating")
-		auth, err := ParseChallenge(resp.WWWAuthenticate)
-		if err != nil {
-			return fmt.Errorf("parsing digest challenge: %w", err)
+		var authHeader string
+		if s.cfg.RegisterAuthenticator != nil {
+			authHeader, err = s.cfg.RegisterAuthenticator.AuthorizeWithChallenge(resp.WWWAuthenticate)
+			if err != nil {
+				return fmt.Errorf("register authentication: %w", err)
+			}
+		} else {
+			auth, err := ParseChallenge(resp.WWWAuthenticate)
+			if err != nil {
+				return fmt.Errorf("parsing digest challenge: %w", err)
+			}
+			authHeader = BuildAuthorizationHeader(auth, s.cfg.DeviceID, s.cfg.Password, requestURI, "REGISTER")
 		}
-
-		authHeader := BuildAuthorizationHeader(auth, s.cfg.DeviceID, s.cfg.Password, requestURI, "REGISTER")
 		cseq = "2 REGISTER"
 		authMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, authHeader)
 		via2 := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", viaTransport, localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
@@ -685,6 +708,11 @@ func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regR
 		}
 
 		if resp.StatusCode == 200 {
+			if s.cfg.RegisterAuthenticator != nil {
+				if err := s.cfg.RegisterAuthenticator.VerifyOK(resp.ExtensionHeader("SecurityInfo")); err != nil {
+					return fmt.Errorf("verifying REGISTER 200 OK: %w", err)
+				}
+			}
 			slog.Info("gb28181: REGISTER successful")
 			return nil
 		}

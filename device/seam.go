@@ -48,6 +48,12 @@ type Config struct {
 	TLSCertFile           string `yaml:"tls_cert_file,omitempty"`            // optional client certificate (mutual auth)
 	TLSKeyFile            string `yaml:"tls_key_file,omitempty"`             // client certificate key
 	TLSInsecureSkipVerify bool   `yaml:"tls_insecure_skip_verify,omitempty"` // accept any platform cert (lab only)
+
+	// RegisterAuthenticator opts into an alternative REGISTER
+	// authentication strategy (e.g. GB 35114 A-level via the tagged
+	// security35114 package). Nil keeps the built-in SIP Digest flow.
+	// Not YAML-serializable: the host wires the implementation in code.
+	RegisterAuthenticator RegisterAuthenticator `yaml:"-"`
 }
 
 // DeviceInfo identifies the device in Catalog/DeviceInfo responses.

@@ -169,6 +169,17 @@ func (m *SipMessage) Serialize() []byte {
 	return buf.Bytes()
 }
 
+// ExtensionHeader returns the value of an extension header by
+// case-insensitive name, or "" when absent.
+func (m *SipMessage) ExtensionHeader(name string) string {
+	for k, v := range m.Headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
+}
+
 // Parse parses a SIP message from bytes.
 // Supports both requests and responses per RFC 3261.
 func Parse(data []byte) (SipMessage, error) {
