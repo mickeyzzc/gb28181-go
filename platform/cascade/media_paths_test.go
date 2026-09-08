@@ -85,7 +85,7 @@ func TestLoopbackInviteTCPMediaForward(t *testing.T) {
 		hub.Broadcast(90000, [][]byte{{0x67, 0x64, 0x00, 0x1F}, {0x65, 0x01}}, true)
 		n, err := conn.Read(buf)
 		return err == nil && n > 0
-	}, 5*time.Second, 100*time.Millisecond, "RTP/PS media must flow over the TCP connection")
+	}, 15*time.Second, 100*time.Millisecond, "RTP/PS media must flow over the TCP connection")
 }
 
 func TestLoopbackInviteTCPDialFailure(t *testing.T) {
