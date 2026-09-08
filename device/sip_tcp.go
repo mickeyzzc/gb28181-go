@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -59,10 +60,34 @@ func handleTCPConnection(ctx context.Context, conn net.Conn, s *Server) {
 	readSIPStream(ctx, bufio.NewReader(conn), conn, s)
 }
 
+// defaultMaxSIPMessageSize is the safe bound applied when
+// Config.MaxSIPMessageSize is unset: ample for any real SIP/MANSCDP
+// message (typical REGISTER < 1 KiB, catalog answers < 64 KiB), while a
+// forged Content-Length can no longer drive an unbounded allocation.
+const defaultMaxSIPMessageSize = 1 << 20 // 1 MiB
+
+// sipMessageLimit resolves the effective per-message byte bound. Negative
+// disables the limit (tests only).
+func (s *Server) sipMessageLimit() int {
+	if s.cfg.MaxSIPMessageSize < 0 {
+		return 0 // unlimited
+	}
+	if s.cfg.MaxSIPMessageSize == 0 {
+		return defaultMaxSIPMessageSize
+	}
+	return s.cfg.MaxSIPMessageSize
+}
+
 // readSIPStream reads Content-Length framed SIP messages from reader and
 // dispatches them; replies go back over conn (looked up by remote address).
 // Shared by the TCP listener and the SIPS client.
+//
+// Framing abuse — a forged Content-Length, or endless header lines — drops
+// the connection instead of allocating (issue #37). Bodies are read with
+// io.ReadFull so a short body can never be dispatched as a truncated
+// message.
 func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *Server) {
+	limit := s.sipMessageLimit()
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,22 +96,38 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 			// Set read deadline for shutdown responsiveness
 			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
-			// Read headers until empty line
+			// Read headers until empty line, bounded by the message
+			// limit — a header flood without the terminating empty
+			// line must not accumulate unboundedly.
 			var headers []string
+			var headerBytes int
 			var contentLength int
+		readHeaders:
 			for {
 				line, err := reader.ReadString('\n')
 				if err != nil {
 					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						continue // Timeout is expected for shutdown check
+						if len(headers) == 0 {
+							continue // Idle timeout between messages is expected
+						}
+						// Mid-headers stall: the 1s shutdown poll would
+						// loop forever; treat as a dead peer.
+						slog.Warn("gb28181: TCP header read stalled", "remote", conn.RemoteAddr().String())
+						return
 					}
 					slog.Warn("gb28181: TCP connection read error", "error", err)
 					return
 				}
 				line = strings.TrimRight(line, "\r\n")
+				headerBytes += len(line) + 2
+				if limit > 0 && headerBytes > limit {
+					slog.Warn("gb28181: SIP header section exceeds message limit, dropping connection",
+						"remote", conn.RemoteAddr().String(), "header_bytes", headerBytes, "limit", limit)
+					return
+				}
 				headers = append(headers, line)
 				if line == "" {
-					break
+					break readHeaders
 				}
 				// Parse Content-Length header
 				if strings.HasPrefix(strings.ToLower(line), "content-length:") {
@@ -103,11 +144,27 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 			fullMsg := strings.Join(headers, "\r\n")
 			fullMsg += "\r\n"
 
-			// Read body if Content-Length > 0
+			// Read body if Content-Length > 0. The declared length is
+			// validated against the message limit BEFORE allocating, and
+			// io.ReadFull guarantees a short body never becomes a
+			// truncated-but-dispatched message.
 			if contentLength > 0 {
+				if limit > 0 && contentLength > limit {
+					slog.Warn("gb28181: SIP Content-Length exceeds message limit, dropping connection",
+						"remote", conn.RemoteAddr().String(), "content_length", contentLength, "limit", limit)
+					return
+				}
 				body := make([]byte, contentLength)
-				_, err := reader.Read(body)
-				if err != nil {
+				if _, err := io.ReadFull(reader, body); err != nil {
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						// The rolling 1s shutdown deadline expired while
+						// waiting for the promised body bytes — keep the
+						// connection only if more bytes arrive; a peer that
+						// stalls mid-body desyncs the stream, so drop it.
+						slog.Warn("gb28181: SIP body read stalled, dropping connection",
+							"remote", conn.RemoteAddr().String(), "want", contentLength)
+						return
+					}
 					slog.Warn("gb28181: TCP body read error", "error", err)
 					return
 				}
@@ -121,8 +178,12 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 				continue
 			}
 
-			// Get TCP address for dispatch
-			tcpAddr := conn.RemoteAddr().(*net.TCPAddr)
+			// Get TCP address for dispatch. Non-TCP peers (net.Pipe in
+			// tests) fall back to an unspecified address.
+			tcpAddr := &net.TCPAddr{}
+			if real, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+				tcpAddr = real
+			}
 
 			// Handle responses vs requests separately
 			if msg.StatusCode > 0 {
