@@ -37,6 +37,15 @@ type Config struct {
 	// 80%). Default 3600.
 	RegisterExpires int `yaml:"register_expires"`
 
+	// RegisterRetryBase is the initial wait after a failed REGISTER; the
+	// wait doubles per consecutive failure up to RegisterRetryMax and
+	// resets on a successful registration (issue #44). Defaults "1s"
+	// (previously a flat 15s).
+	RegisterRetryBase string `yaml:"register_retry_base,omitempty"`
+
+	// RegisterRetryMax caps the REGISTER retry wait. Default "5m".
+	RegisterRetryMax string `yaml:"register_retry_max,omitempty"`
+
 	// Upstreams appends additional upper platforms beyond the legacy single
 	// form (ServerAddr non-empty becomes uppers[0]).
 	Upstreams []Upstream `yaml:"upstreams,omitempty"`

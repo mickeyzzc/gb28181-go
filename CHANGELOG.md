@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(cascade)` REGISTER retry switched from a flat 15s to exponential
+  backoff — base doubles per consecutive failure (default 1s, capped at
+  5m) and resets on a successful registration; configurable via
+  `register_retry_base`/`register_retry_max` (#44)
+- `feat` new `backoff` package: the generic deterministic exponential
+  backoff utility behind the cascade retry (#44)
 - `feat(manscdp)` GB28181-2022 snapshot control + completion notify,
   platform convenience helpers (#50)
 - `test(cascade)` TCP media-forward budget widened to 15s under CI load (#53)
