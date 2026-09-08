@@ -179,3 +179,118 @@ func TestWriteRTPOverTCP_Framing(t *testing.T) {
 		}
 	}
 }
+
+// newFramingTestServer builds the minimal Server readSIPStream needs.
+func newFramingTestServer(t *testing.T) *Server {
+	t.Helper()
+	return New(Config{DeviceID: "34020000001320000001", SIPDomain: "3402000000"}, DeviceInfo{}, NewFrameHub())
+}
+
+// startFramingReader runs readSIPStream and closes the server side when it
+// returns, so the framing layer's drop decision surfaces as a clean EOF on
+// the client end.
+func startFramingReader(ctx context.Context, s *Server, server, client net.Conn) {
+	go func() {
+		readSIPStream(ctx, bufio.NewReader(server), server, s)
+		server.Close()
+	}()
+}
+
+// expectStreamClosed fails unless the server side of the pipe closes (the
+// read loop returned) within the deadline — the framing layer's response to
+// protocol abuse.
+func expectStreamClosed(t *testing.T, client net.Conn) {
+	t.Helper()
+	client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	one := make([]byte, 1)
+	for {
+		if _, err := client.Read(one); err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				t.Fatal("server side did not close the connection within the deadline")
+			}
+			return // EOF or reset — server side closed
+		}
+	}
+}
+
+// TestReadSIPStreamOversizedContentLength pins issue #37: a forged
+// Content-Length must not trigger an unbounded allocation — the connection
+// is dropped instead.
+func TestReadSIPStreamOversizedContentLength(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	s := newFramingTestServer(t)
+	startFramingReader(context.Background(), s, server, client)
+
+	msg := "MESSAGE sip:3402000000@3402000000 SIP/2.0\r\n" +
+		"Content-Length: 1073741824\r\n\r\n"
+	if _, err := client.Write([]byte(msg)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	expectStreamClosed(t, client)
+}
+
+// TestReadSIPStreamCustomLimit verifies MaxSIPMessageSize is honored:
+// a body within a small configured limit passes framing, an oversized one
+// drops the connection.
+func TestReadSIPStreamCustomLimit(t *testing.T) {
+	s := newFramingTestServer(t)
+	s.cfg.MaxSIPMessageSize = 128 // the good message fits (75 B), bad does not
+
+	server, client := net.Pipe()
+	defer client.Close()
+	startFramingReader(context.Background(), s, server, client)
+
+	// A total message (headers + body) under the limit survives framing.
+	// A response is used so dispatch (handleResponse) is pipe-safe.
+	ok := "SIP/2.0 200 OK\r\nCSeq: 1 REGISTER\r\nCall-ID: limit@t\r\nContent-Length: 4\r\n\r\nbody"
+	if _, err := client.Write([]byte(ok)); err != nil {
+		t.Fatalf("write ok: %v", err)
+	}
+	// Give the reader a moment to consume the good message before the bad
+	// one, so the drop below is attributable to the limit, not framing
+	// desync from the previous test step.
+	time.Sleep(100 * time.Millisecond)
+
+	bad := "MESSAGE sip:x SIP/2.0\r\nContent-Length: 5000\r\n\r\nbody"
+	if _, err := client.Write([]byte(bad)); err != nil {
+		t.Fatalf("write bad: %v", err)
+	}
+	expectStreamClosed(t, client)
+}
+
+// TestReadSIPStreamHeaderFlood pins the header-side of issue #37: endless
+// header lines without the terminating empty line must not accumulate
+// unboundedly.
+func TestReadSIPStreamHeaderFlood(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	s := newFramingTestServer(t)
+	startFramingReader(context.Background(), s, server, client)
+
+	for i := 0; i < 20000; i++ {
+		if _, err := client.Write([]byte("X-Flood: aaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n")); err != nil {
+			break // server dropped us — expected
+		}
+	}
+	expectStreamClosed(t, client)
+}
+
+// TestReadSIPStreamShortBody verifies short bodies are not silently
+// truncated into corrupted messages (io.ReadFull semantics): the stream
+// sync is lost, so the connection is dropped.
+func TestReadSIPStreamShortBody(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	s := newFramingTestServer(t)
+	startFramingReader(context.Background(), s, server, client)
+
+	msg := "MESSAGE sip:x SIP/2.0\r\nContent-Length: 100\r\n\r\nshort"
+	if _, err := client.Write([]byte(msg)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Keep the pipe open; the reader must hit its deadline waiting for the
+	// missing body bytes and drop the connection rather than dispatch a
+	// truncated message.
+	expectStreamClosed(t, client)
+}

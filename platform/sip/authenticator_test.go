@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ghettovoice/gosip/sip"
 )
@@ -212,5 +213,89 @@ func TestAuthScheme(t *testing.T) {
 		if got := authScheme(in); got != want {
 			t.Fatalf("authScheme(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// registerNTimes performs n digest REGISTER attempts (fresh challenge each
+// time) with the given password, returning the statuses seen.
+func registerNTimes(t *testing.T, cfg Config, client *sipClient, password string, n int) []int {
+	t.Helper()
+	statuses := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
+		res := client.roundTrip(req)
+		if res.StatusCode() == 401 {
+			auth := digestAuth(t, getChallenge(t, res), req, password)
+			req2 := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "", auth)
+			res2 := client.roundTrip(req2)
+			statuses = append(statuses, int(res2.StatusCode()))
+			continue
+		}
+		statuses = append(statuses, int(res.StatusCode()))
+	}
+	return statuses
+}
+
+func TestRegisterAuthLockout(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RegisterFailureLimit = 3
+	cfg.RegisterLockoutDuration = "500ms"
+	startTestServer(t, cfg)
+	client := newSIPClient(t, cfg.SIPListen)
+
+	// Three failed digests exhaust the budget…
+	got := registerNTimes(t, cfg, client, "wrong", 3)
+	for _, s := range got {
+		if s != 403 {
+			t.Fatalf("failed digests before lockout: statuses %v, want all 403", got)
+		}
+	}
+	// …the fourth REGISTER is locked out before any digest check.
+	req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
+	res := client.roundTrip(req)
+	if res.StatusCode() != 403 {
+		t.Fatalf("locked-out REGISTER status = %d, want 403", res.StatusCode())
+	}
+
+	// The lockout expires and a correct password works again.
+	time.Sleep(600 * time.Millisecond)
+	statuses := registerNTimes(t, cfg, client, cfg.Password, 1)
+	if len(statuses) != 1 || statuses[0] != 200 {
+		t.Fatalf("post-lockout register statuses = %v, want [200]", statuses)
+	}
+}
+
+func TestRegisterAuthLockoutDisabled(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RegisterFailureLimit = -1 // explicit opt-out keeps the legacy behavior
+	startTestServer(t, cfg)
+	client := newSIPClient(t, cfg.SIPListen)
+	got := registerNTimes(t, cfg, client, "wrong", 7)
+	for _, s := range got {
+		if s != 403 {
+			t.Fatalf("statuses = %v, want all 403 (no lockout)", got)
+		}
+	}
+	// Still not locked out: the correct password registers.
+	statuses := registerNTimes(t, cfg, client, cfg.Password, 1)
+	if len(statuses) != 1 || statuses[0] != 200 {
+		t.Fatalf("statuses = %v, want [200]", statuses)
+	}
+}
+
+func TestRegisterStrictAuth(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Password = ""
+	cfg.StrictAuth = true // no password + no A-level authenticator → refuse
+	_, dm := startTestServer(t, cfg)
+	client := newSIPClient(t, cfg.SIPListen)
+
+	req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
+	res := client.roundTrip(req)
+	if res.StatusCode() != 403 {
+		t.Fatalf("strict-auth REGISTER status = %d, want 403", res.StatusCode())
+	}
+	if _, ok := dm.Device(testDeviceID); ok {
+		t.Fatalf("device must not register under strict auth")
 	}
 }

@@ -24,6 +24,24 @@ type Config struct {
 	// Password is the SIP digest-auth secret that registered devices must use.
 	Password string `yaml:"password"`
 
+	// RegisterFailureLimit is the number of REGISTER authentication
+	// failures (digest or GB35114) from one source host before a temporary
+	// lockout; unset = 5, negative disables the limiter (issue #38).
+	RegisterFailureLimit int `yaml:"register_failure_limit,omitempty"`
+
+	// RegisterFailureWindow is how long failures stay counted. Go duration
+	// string; unset = "60s".
+	RegisterFailureWindow string `yaml:"register_failure_window,omitempty"`
+
+	// RegisterLockoutDuration is how long a locked-out source is refused
+	// (403 without an auth challenge). Unset = "60s".
+	RegisterLockoutDuration string `yaml:"register_lockout_duration,omitempty"`
+
+	// StrictAuth refuses REGISTERs outright when no authentication is
+	// configured (empty Password and no RegisterAuthenticator) — fail
+	// closed instead of silently accepting every device (issue #38).
+	StrictAuth bool `yaml:"strict_auth,omitempty"`
+
 	// RegisterAuthenticator authenticates REGISTERs that carry a non-Digest
 	// Authorization scheme (GB 35114 A-level). When set, such REGISTERs are
 	// routed to it (challenge → verify → SecurityInfo on the 200 OK) and the
@@ -162,4 +180,28 @@ func (c Config) InviteTimeout() time.Duration {
 		return d
 	}
 	return 32 * time.Second
+}
+
+// effectiveRegisterFailureLimit resolves the REGISTER failure-lockout
+// budget: unset → 5, explicit 0 → disabled, negative → disabled.
+func (c Config) effectiveRegisterFailureLimit() int {
+	if c.RegisterFailureLimit == 0 {
+		return 5
+	}
+	if c.RegisterFailureLimit < 0 {
+		return 0
+	}
+	return c.RegisterFailureLimit
+}
+
+// effectiveDuration parses a Go duration string, falling back to def when
+// empty or invalid.
+func (c Config) effectiveDuration(v string, def time.Duration) time.Duration {
+	if v == "" {
+		return def
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return d
+	}
+	return def
 }

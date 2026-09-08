@@ -41,6 +41,12 @@ type Config struct {
 	HeartbeatTimeoutCount int    `yaml:"heartbeat_timeout_count"` // Missed heartbeats before declaring timeout
 	Transport             string `yaml:"transport"`               // SIP transport: udp (default), tcp, or tls (SIPS, GB/T 28181-2022 A-level)
 
+	// MaxSIPMessageSize bounds one Content-Length framed message (headers +
+	// body) on the TCP/TLS read path — a forged Content-Length header must
+	// drop the connection, not allocate (issue #37). 0 = default 1 MiB;
+	// >0 = custom limit; <0 = unlimited (tests only).
+	MaxSIPMessageSize int `yaml:"max_sip_message_size,omitempty"`
+
 	// TLS fields (Transport "tls" only — SIPS signaling per GB/T 28181-2022
 	// A-level security). The GB convention is a self-signed CA whose serial
 	// is the device/platform ID; the host provisions the files.

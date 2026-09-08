@@ -165,7 +165,8 @@ type Server struct {
 	alarmLinkage *alarmLinkage
 	talkSeq      int
 
-	perDeviceMu map[string]*sync.Mutex // serialize SIP handling per device
+	perDeviceMu  map[string]*sync.Mutex // serialize SIP handling per device
+	authFailures *authFailureTracker    // REGISTER brute-force backstop (issue #38)
 
 	// gbLoc pins the zone for naive GB/T 28181 device-clock timestamps
 	// (RecordInfo query formatting). nil → time.Local.
@@ -198,6 +199,7 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 		deviceMgr:     deviceMgr,
 		sessionMgr:    sessionMgr,
 		db:            db,
+		authFailures:  newAuthFailureTracker(cfg.effectiveRegisterFailureLimit(), cfg.effectiveDuration(cfg.RegisterFailureWindow, 60*time.Second), cfg.effectiveDuration(cfg.RegisterLockoutDuration, 60*time.Second)),
 		dialogs:       make(map[string]*inviteDialog),
 		playbacks:     make(map[string]*playbackState),
 		pbDialogs:     make(map[string]*inviteDialog),
@@ -1116,13 +1118,24 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			si, err := s.cfg.RegisterAuthenticator.VerifyRegister(deviceID, authVal)
 			if err != nil {
 				slog.Warn("gb28181: GB35114 REGISTER verification failed", "device", deviceID, "source", req.Source(), "error", err)
+				s.authFailures.recordFailure(hostOfAddr(req.Source()))
 				s.respond(req, tx, statusForbidden, "A-level verification failed", nil)
 				return
 			}
+			s.authFailures.recordSuccess(hostOfAddr(req.Source()))
 			securityInfo = si
 			gb35114Authed = true
 			slog.Info("gb28181: GB35114 REGISTER verified", "device", deviceID, "source", req.Source())
 		}
+	}
+
+	// Brute-force backstop: refuse locked-out sources before any auth
+	// work (issue #38).
+	authKey := hostOfAddr(req.Source())
+	if s.authFailures.locked(authKey) {
+		slog.Warn("gb28181: REGISTER refused — source locked out", "device", deviceID, "source", req.Source())
+		s.respond(req, tx, statusForbidden, "Too many auth failures", nil)
+		return
 	}
 
 	if !gb35114Authed && s.cfg.Password != "" {
@@ -1134,9 +1147,20 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		}
 		if !s.validateDigest(auth, deviceID, req) {
 			slog.Warn("gb28181: REGISTER auth failed", "device", deviceID, "source", req.Source())
+			s.authFailures.recordFailure(authKey)
 			s.respond(req, tx, statusForbidden, "Invalid credentials", nil)
 			return
 		}
+		s.authFailures.recordSuccess(authKey)
+	}
+
+	if !gb35114Authed && s.cfg.Password == "" && s.cfg.RegisterAuthenticator == nil {
+		if s.cfg.StrictAuth {
+			slog.Warn("gb28181: REGISTER refused — no authentication configured (strict_auth)", "device", deviceID, "source", req.Source())
+			s.respond(req, tx, statusForbidden, "No authentication configured", nil)
+			return
+		}
+		slog.Warn("gb28181: REGISTER accepted without authentication — configure password / A-level, or strict_auth to refuse", "device", deviceID, "source", req.Source())
 	}
 
 	// Serialize per device so REGISTER/keepalive ordering is preserved.
