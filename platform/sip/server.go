@@ -1093,7 +1093,39 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	if s.cfg.Password != "" {
+	// GB35114 A-level REGISTERs announce themselves through their
+	// Authorization scheme (Capability/Unidirection/Bidirection) instead of
+	// Digest; route them to the configured authenticator when present.
+	var securityInfo string
+	gb35114Authed := false
+	if s.cfg.RegisterAuthenticator != nil {
+		authVal := rawHeaderValue(req, "Authorization")
+		switch authScheme(authVal) {
+		case "Capability":
+			wwwAuth, err := s.cfg.RegisterAuthenticator.Challenge(deviceID, authVal)
+			if err != nil {
+				slog.Warn("gb28181: GB35114 challenge failed", "device", deviceID, "source", req.Source(), "error", err)
+				s.respond(req, tx, statusForbidden, "A-level challenge failed", nil)
+				return
+			}
+			slog.Info("gb28181: GB35114 challenge sent", "device", deviceID, "source", req.Source())
+			s.respond(req, tx, statusUnauthorized, "Unauthorized",
+				[]sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: wwwAuth}})
+			return
+		case "Unidirection", "Bidirection":
+			si, err := s.cfg.RegisterAuthenticator.VerifyRegister(deviceID, authVal)
+			if err != nil {
+				slog.Warn("gb28181: GB35114 REGISTER verification failed", "device", deviceID, "source", req.Source(), "error", err)
+				s.respond(req, tx, statusForbidden, "A-level verification failed", nil)
+				return
+			}
+			securityInfo = si
+			gb35114Authed = true
+			slog.Info("gb28181: GB35114 REGISTER verified", "device", deviceID, "source", req.Source())
+		}
+	}
+
+	if !gb35114Authed && s.cfg.Password != "" {
 		auth := s.getAuthHeader(req)
 		if auth == nil {
 			slog.Info("gb28181: REGISTER challenge sent", "device", deviceID, "source", req.Source())
@@ -1208,7 +1240,11 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	// 200 OK first — the device must see its REGISTER accepted before any
 	// follow-up request (catalog query, INVITE) arrives.
 	exp := sip.Expires(expires)
-	s.respond(req, tx, statusOK, "OK", []sip.Header{&exp})
+	okHeaders := []sip.Header{&exp}
+	if securityInfo != "" {
+		okHeaders = append(okHeaders, &sip.GenericHeader{HeaderName: "SecurityInfo", Contents: securityInfo})
+	}
+	s.respond(req, tx, statusOK, "OK", okHeaders)
 
 	if expires != 0 {
 		// Ask the device for its catalog so real video channels (whose IDs
@@ -1271,6 +1307,17 @@ func (s *Server) teardownDevice(deviceID string) {
 // handleMessage processes device MESSAGE bodies (keepalive, catalog,
 // device-info) via manscdp.
 func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
+	// GB35114: when an A-level authenticator is configured, a Note header on
+	// an incoming MESSAGE is verified against the negotiated VKEK before
+	// the body is trusted. Requests without a Note (Digest devices) pass.
+	if s.cfg.RegisterAuthenticator != nil {
+		if err := s.verifyIncomingNote(req); err != nil {
+			slog.Warn("gb28181: GB35114 Note verification failed", "source", req.Source(), "error", err)
+			s.respond(req, tx, statusForbidden, "Note verification failed", nil)
+			return
+		}
+	}
+
 	body := req.Body()
 	if body == "" {
 		s.respond(req, tx, statusBadRequest, "Empty body", nil)
@@ -1767,6 +1814,56 @@ func (s *Server) send401Challenge(req sip.Request, tx sip.ServerTransaction) {
 	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5`, realm, generateNonce())
 	headers := []sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: value}}
 	s.respond(req, tx, statusUnauthorized, "Unauthorized", headers)
+}
+
+// rawHeaderValue returns the raw text of a header ("" when absent) without
+// re-serializing through gosip's typed headers — GB35114 values must reach
+// the authenticator byte-for-byte as the device emitted them.
+func rawHeaderValue(req sip.Request, name string) string {
+	for _, h := range req.GetHeaders(name) {
+		if gh, ok := h.(*sip.GenericHeader); ok {
+			return strings.TrimSpace(gh.Contents)
+		}
+	}
+	return ""
+}
+
+// authScheme returns the leading scheme word of an Authorization value
+// ("Digest", "Capability", "Bidirection", …). gosip keeps Authorization as
+// a GenericHeader, so the raw text is always available.
+func authScheme(authorization string) string {
+	scheme := authorization
+	if i := strings.IndexAny(scheme, " \t"); i > 0 {
+		scheme = scheme[:i]
+	}
+	return scheme
+}
+
+// verifyIncomingNote routes a MESSAGE's Note header through the configured
+// A-level authenticator. The From/To/Call-ID values are rendered back to
+// their wire form so the digest input matches what the device signed.
+func (s *Server) verifyIncomingNote(req sip.Request) error {
+	note := rawHeaderValue(req, "Note")
+	if note == "" {
+		return nil
+	}
+	deviceID := ""
+	fromVal, toVal, callIDVal := "", "", ""
+	if from, ok := req.From(); ok {
+		deviceID = from.Address.User().String()
+		fromVal = from.Value()
+	}
+	if to, ok := req.To(); ok {
+		toVal = to.Value()
+	}
+	callIDVal = rawHeaderValue(req, "Call-ID")
+	if callIDVal == "" {
+		for _, h := range req.GetHeaders("Call-ID") {
+			callIDVal = strings.TrimSpace(strings.TrimPrefix(h.String(), "Call-ID:"))
+		}
+	}
+	return s.cfg.RegisterAuthenticator.VerifyNote(deviceID, note, string(req.Method()),
+		fromVal, toVal, callIDVal, rawHeaderValue(req, "Date"), req.Body())
 }
 
 // hostOfAddr extracts the IP from a "IP:port" source address. Used to detect

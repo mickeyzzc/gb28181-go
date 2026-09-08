@@ -23,7 +23,7 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform loopback conformance suite — a real `device.Server` against a real platform SIP server on localhost: REGISTER+digest → catalog → keepalive liveness → INVITE live → byte-exact RTP/PS round-trip → BYE; plus the SIPS (TLS signaling) variant. Both roles must agree on every protocol reading, on every CI run. | new (issue #13) |
 | `platform/cascade/` | Cascade client — this platform registers as a LOWER platform to an upper platform: aggregated catalog upload with stable first-seen channel IDs, INVITE forwarding (FrameHub subscribe → psmux → RTP), playback from recorded segments, BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS handling, protocol-level loopback tests. Local cameras via `CameraSource`, persistence via `Store`, segment reading via `SegmentParser` — all host-injected. | MiBeeNvr `internal/gb28181/cascade` |
-| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 **A-level** device security: SM2-certificate mutual authentication over the REGISTER flow (`Capability`/`Unidirection`/`Bidirection` headers), VKEK negotiation inside the `cryptkey` SM2 envelope, and the keyed-SM3 `Note`-header integrity for subsequent signaling. Plugs into `device.Config.RegisterAuthenticator`. | new (v0.4.0) |
+| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 **A-level** security for **both sides**: device-side SM2-certificate mutual authentication over the REGISTER flow (`device.Config.RegisterAuthenticator`) and platform-side challenge/verify/Note state machine (`security35114.Platform`, wired through `platform/sip`'s `Config.RegisterAuthenticator`). VKEK negotiation inside the `cryptkey` SM2 envelope, keyed-SM3 `Note`-header integrity for subsequent signaling. | new (v0.4.0, platform side v0.5.0) |
 
 ## Usage (device)
 
@@ -52,7 +52,7 @@ Host seams (interfaces, host-injected):
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
 
-## GB35114 A-level security (v0.4.0, opt-in)
+## GB35114 A-level security (v0.4.0 device / v0.5.0 platform, opt-in)
 
 [GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light:
 
@@ -74,6 +74,22 @@ The handshake follows the published standard text cross-checked against real cap
 Two points are ambiguous across implementations and therefore configurable (`RandomEncoding`, `Sign2Order`): the random representation inside the signed payload, and the R1/R2 operand order of `sign2`. Defaults match the standard text (wire-strings concatenation observed in captures; R1-first). SM3/SM2 come from [emmansun/gmsm](https://github.com/emmansun/gmsm) (pure Go, GM/T 0015-2012 SM2 X.509 certificates).
 
 Wire-format caveats: certificate provisioning is out of band (or `Options.IncludeDeviceCert` for platforms that accept the `cnonce` announcement), and incoming platform requests are not `Note`-verified on the device side yet.
+
+### Platform side (UAS, v0.5.0)
+
+`security35114.Platform` is the mirror-image state machine for GB/T 28181 platforms: it issues `Bidirection`/`Unidirection` challenges, verifies device `sign1` against the (pre-provisioned or `cnonce`-announced) certificate, seals the VKEK, signs `sign2`, and verifies every subsequent `Note`. `platform/sip.Server` routes non-Digest REGISTER schemes to it and attaches the `SecurityInfo` header to the 200 OK — Digest devices keep flowing through `Password` unchanged:
+
+```go
+// go build -tags gb35114
+plat35114, err := sec.NewPlatform(sec.PlatformConfig{
+    ServerID:    "34020000002000000001",
+    Identity:    platIdentity, // platform SM2 signing cert+key — sign2
+    DeviceCerts: map[string]*smx509.Certificate{deviceID: devCert}, // or trust the cnonce announcement
+})
+sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config; digest path untouched
+```
+
+`Platform` is safe for concurrent use, keys sessions by device ID, keeps the previous VKEK verifying while a device re-registers, answers SIP-over-UDP retransmissions of the completed REGISTER idempotently, and rejects stale `random1` (replay), scheme mismatches, and unknown/mismatched device certificates with sentinel errors (`ErrChallengeMismatch`, `ErrDeviceCert`, …) that map onto 4xx responses. An in-process loopback test drives a real `device.Server` with the device-side authenticator against a real `platform/sip.Server` with `Platform` wired in — handshake, VKEK agreement, and `Note` verification all under real SM2/SM3.
 
 ## Documentation
 
