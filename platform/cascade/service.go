@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
+	"github.com/mickeyzzc/gb28181-go/backoff"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	mbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
@@ -93,6 +94,11 @@ type Service struct {
 
 	sn atomic.Int64 // MANSCDP sequence numbers
 
+	// REGISTER retry backoff bounds (issue #44), resolved from Config in
+	// New; per-upper Backoff objects live inside registerLoop.
+	retryBase time.Duration
+	retryMax  time.Duration
+
 	uppers []*upper // #370: one entry per upper platform
 
 	mu         sync.Mutex
@@ -150,11 +156,33 @@ func (s *Service) SetSubStreamAcquirer(a SubStreamAcquirer) { s.subAcq = a }
 func New(cfg Config, src CameraSource, db Store) *Service {
 	return &Service{
 		cfg: cfg, src: src, db: db,
+		retryBase: parseRetryDuration(cfg.RegisterRetryBase, registerRetryBaseDefault),
+		retryMax:  parseRetryDuration(cfg.RegisterRetryMax, registerRetryMaxDefault),
 		uppers:    buildUppers(cfg),
 		sessions:  make(map[string]*mediaSession),
 		playbacks: make(map[string]*playbackSession),
 		subs:      make(map[string]*catalogSub),
 	}
+}
+
+// REGISTER retry backoff bounds (issue #44): base doubles per
+// consecutive failure, capped; a successful registration resets.
+const (
+	registerRetryBaseDefault = time.Second
+	registerRetryMaxDefault  = 5 * time.Minute
+)
+
+// parseRetryDuration parses a config duration, falling back to def for
+// empty or malformed values (config-style tolerance: a bad unit string
+// must not brick registration).
+func parseRetryDuration(v string, def time.Duration) time.Duration {
+	if v == "" {
+		return def
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
+	}
+	return def
 }
 
 // SetSegmentParser injects the host's recorded-segment reader (fMP4 or
@@ -281,19 +309,22 @@ func (s *Service) registerLoop(u *upper) {
 	if expires <= 0 {
 		expires = 3600
 	}
+	retry := backoff.New(s.retryBase, s.retryMax)
 	for {
 		if s.ctx.Err() != nil {
 			return
 		}
 		if err := s.sendRegister(u, expires); err != nil {
+			wait := retry.Next()
 			slog.Warn("gb28181-cascade: register failed, retrying",
-				"upper", u.cfg.ServerAddr, "error", err)
+				"upper", u.cfg.ServerAddr, "retry_in", wait.String(), "error", err)
 			s.setOnline(u, false)
-			if !sleepCtx(s.ctx, 15*time.Second) {
+			if !sleepCtx(s.ctx, wait) {
 				return
 			}
 			continue
 		}
+		retry.Reset()
 		s.setOnline(u, true)
 		// Keepalive cadence while registered.
 		hb := 60 * time.Second
