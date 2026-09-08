@@ -64,3 +64,44 @@ func (c *PTZController) SendDeviceControl(channelID, element, value string) erro
 	}
 	return nil
 }
+
+// SendSnapShotCmd issues the GB/T 28181-2022 image-snapshot control
+// (A.2.1.24): the device captures SnapNum JPEGs (Interval seconds apart)
+// and POSTs them to UploadURL, then reports UploadSnapShotFinished with
+// the same SessionID.
+func (c *PTZController) SendSnapShotCmd(channelID string, cmd manscdp.SnapShotCmd) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+
+	dc := manscdp.DeviceControl{
+		CmdType:  manscdp.CmdDeviceControl,
+		SN:       int(c.seq.Add(1)),
+		DeviceID: ch.ID,
+		SnapShot: &cmd,
+	}
+	body, err := manscdp.Encode(dc)
+	if err != nil {
+		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
+	}
+	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
+		return fmt.Errorf("gb28181: send DeviceControl to %s: %w", ch.DeviceID, err)
+	}
+	return nil
+}
+
+// StartManualRecord commands the channel to start manual recording
+// (DeviceControl RecordCmd=Record, GB/T 28181 §9.3.2).
+func (c *PTZController) StartManualRecord(channelID string) error {
+	return c.SendDeviceControl(channelID, "RecordCmd", "Record")
+}
+
+// StopManualRecord commands the channel to stop manual recording
+// (DeviceControl RecordCmd=StopRecord).
+func (c *PTZController) StopManualRecord(channelID string) error {
+	return c.SendDeviceControl(channelID, "RecordCmd", "StopRecord")
+}
