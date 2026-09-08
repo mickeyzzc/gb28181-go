@@ -92,6 +92,10 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 `Platform` 并发安全，会话按设备 ID 索引；设备重注册期间旧 VKEK 继续可验；对 SIP-over-UDP 重传的已完成 REGISTER 幂等返回同一 `SecurityInfo`；对过期 `random1`（重放）、方案错配、未知/不匹配设备证书以哨兵错误（`ErrChallengeMismatch`、`ErrDeviceCert` 等）拒绝，便于上层映射 4xx。进程内回环测试用真实 `device.Server`（设备侧认证器）对真实 `platform/sip.Server`（接入 `Platform`）跑通握手、VKEK 一致性与 `Note` 校验，全程真实 SM2/SM3。
 
+### GB28181-2022 抓拍与手动录像（issue #49）
+
+`DeviceControl` 携带 2022 版图像抓拍命令（`SnapShot`：`SnapNum`/`Interval`/`UploadURL`/`SessionID`，A.2.1.24）；`manscdp.Decode` 解析 `UploadSnapShotFinished` 完成通知（A.2.5.7，`SnapShotList`/`SnapShotFileID`）；`platform.PTZController` 新增 `SendSnapShotCmd` / `StartManualRecord` / `StopManualRecord`。
+
 ## 文档
 
 专题教程在 [`docs/zh/`](docs/zh/) —— 每篇在 `docs/en/` 下有英文对照版：

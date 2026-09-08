@@ -91,6 +91,10 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config; digest path unt
 
 `Platform` is safe for concurrent use, keys sessions by device ID, keeps the previous VKEK verifying while a device re-registers, answers SIP-over-UDP retransmissions of the completed REGISTER idempotently, and rejects stale `random1` (replay), scheme mismatches, and unknown/mismatched device certificates with sentinel errors (`ErrChallengeMismatch`, `ErrDeviceCert`, …) that map onto 4xx responses. An in-process loopback test drives a real `device.Server` with the device-side authenticator against a real `platform/sip.Server` with `Platform` wired in — handshake, VKEK agreement, and `Note` verification all under real SM2/SM3.
 
+### GB28181-2022 snapshot & manual recording (issue #49)
+
+`DeviceControl` carries the 2022 image-snapshot command (`SnapShot`: `SnapNum`/`Interval`/`UploadURL`/`SessionID` per A.2.1.24), `manscdp.Decode` parses the `UploadSnapShotFinished` completion notify (A.2.5.7, `SnapShotList` of `SnapShotFileID`), and `platform.PTZController` grows `SendSnapShotCmd` / `StartManualRecord` / `StopManualRecord`.
+
 ## Documentation
 
 Topic guides live under [`docs/en/`](docs/en/) — each has a Chinese counterpart under `docs/zh/`:

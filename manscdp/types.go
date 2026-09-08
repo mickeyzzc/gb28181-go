@@ -22,10 +22,14 @@ const (
 	CmdRecordInfo      CmdType = "RecordInfo"
 	CmdRecordInfoQuery CmdType = "RecordInfoQuery"
 	CmdDeviceControl   CmdType = "DeviceControl"
-	CmdAlarm           CmdType = "Alarm"
-	CmdTimeSync        CmdType = "TimeSync"
-	CmdBroadcast       CmdType = "Broadcast"
-	CmdMobilePosition  CmdType = "MobilePosition"
+	// CmdUploadSnapShotFinished is the GB/T 28181-2022 image-snapshot
+	// completion notify (A.2.5.7): the device reports the uploaded image
+	// IDs after a DeviceControl SnapShot command.
+	CmdUploadSnapShotFinished CmdType = "UploadSnapShotFinished"
+	CmdAlarm                  CmdType = "Alarm"
+	CmdTimeSync               CmdType = "TimeSync"
+	CmdBroadcast              CmdType = "Broadcast"
+	CmdMobilePosition         CmdType = "MobilePosition"
 )
 
 // Catalog is a device's response to a platform Catalog query. It lists the
@@ -188,9 +192,52 @@ type DeviceControl struct {
 	RecordCmd    string   `xml:"RecordCmd,omitempty"`
 	GuardCmd     string   `xml:"GuardCmd,omitempty"`
 	AlarmCmd     string   `xml:"AlarmCmd,omitempty"`
+	// SnapShot carries the GB/T 28181-2022 image-snapshot command
+	// (A.2.1.24): the device captures JPEGs and uploads them over HTTP,
+	// then reports UploadSnapShotFinished with the same SessionID.
+	SnapShot *SnapShotCmd `xml:"SnapShot,omitempty"`
 	// Attribute-form aliases (see Catalog).
 	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
 	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+// SnapShotCmd is the GB/T 28181-2022 image-snapshot control payload
+// (A.2.1.24 snapShotCfgType).
+type SnapShotCmd struct {
+	// SnapNum is the number of frames to capture, 1..10; a manual
+	// snapshot is 1.
+	SnapNum int `xml:"SnapNum"`
+	// Interval is the per-frame interval in seconds (>=1); omitted for
+	// single-frame manual snapshots.
+	Interval int `xml:"Interval,omitempty"`
+	// UploadURL is the HTTP endpoint the device POSTs the JPEGs to.
+	UploadURL string `xml:"UploadURL"`
+	// SessionID correlates the upload with the completion notify; the
+	// platform generates it ([A-Za-z0-9-], 32..128 bytes).
+	SessionID string `xml:"SessionID"`
+}
+
+// UploadSnapShotFinished is the GB/T 28181-2022 image-snapshot completion
+// notify (A.2.5.7). An empty or short SnapShotList means the capture or
+// upload failed wholly or partly.
+type UploadSnapShotFinished struct {
+	XMLName      xml.Name `xml:"Notify"`
+	CmdType      CmdType  `xml:"CmdType"`
+	SN           int      `xml:"SN"`
+	DeviceID     string   `xml:"DeviceID"`
+	SessionID    string   `xml:"SessionID"`
+	SnapShotList []string `xml:"SnapShotList>SnapShotFileID"`
+}
+
+// BuildUploadSnapShotFinished assembles the device-side completion report.
+func BuildUploadSnapShotFinished(sn int, deviceID, sessionID string, fileIDs []string) UploadSnapShotFinished {
+	return UploadSnapShotFinished{
+		CmdType:      CmdUploadSnapShotFinished,
+		SN:           sn,
+		DeviceID:     deviceID,
+		SessionID:    sessionID,
+		SnapShotList: fileIDs,
+	}
 }
 
 func (m *DeviceControl) normalize() {

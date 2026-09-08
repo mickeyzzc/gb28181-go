@@ -126,6 +126,8 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 	switch probe.CmdType {
 	case CmdCatalog:
 		return unmarshalAs[Catalog](body, CmdCatalog)
+	case CmdUploadSnapShotFinished:
+		return unmarshalAs[UploadSnapShotFinished](body, CmdUploadSnapShotFinished)
 	case CmdKeepalive:
 		return unmarshalAs[Keepalive](body, CmdKeepalive)
 	case CmdDeviceInfo:
