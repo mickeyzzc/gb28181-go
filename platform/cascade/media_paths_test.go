@@ -76,10 +76,6 @@ func TestLoopbackInviteTCPMediaForward(t *testing.T) {
 
 	mux := psmux.New()
 	mux.SetVideoCodec("h264")
-	idr := append([]byte{}, 0, 0, 0, 1)
-	idr = append(idr, 0x67, 0x64, 0x00, 0x1F)
-	idr = append(idr, 0, 0, 0, 1, 0x65, 0x01)
-
 	buf := make([]byte, 65535)
 	require.Eventually(t, func() bool {
 		hub.Broadcast(90000, [][]byte{{0x67, 0x64, 0x00, 0x1F}, {0x65, 0x01}}, true)

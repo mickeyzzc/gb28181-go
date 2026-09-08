@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 )
 
 // buildTLSConfig assembles the SIPS client TLS configuration from the
@@ -49,7 +50,7 @@ func (s *Server) startTLSClient(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	addr := net.JoinHostPort(s.cfg.PlatformSIPAddress, fmt.Sprintf("%d", s.cfg.PlatformSIPPort))
+	addr := net.JoinHostPort(s.cfg.PlatformSIPAddress, strconv.Itoa(s.cfg.PlatformSIPPort))
 	conn, err := tls.Dial("tcp", addr, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
 	if err != nil {
 		return fmt.Errorf("dialing SIPS %s: %w", addr, err)

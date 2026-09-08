@@ -25,10 +25,10 @@ type authFailEntry struct {
 	lockedUntil time.Time
 }
 
-func newAuthFailureTracker(max int, window, lockout time.Duration) *authFailureTracker {
+func newAuthFailureTracker(limit int, window, lockout time.Duration) *authFailureTracker {
 	return &authFailureTracker{
 		entries: make(map[string]*authFailEntry),
-		max:     max,
+		max:     limit,
 		window:  window,
 		lockout: lockout,
 		timeNow: time.Now,

@@ -371,7 +371,7 @@ func TestServer_DownloadStreamsWithoutPacing(t *testing.T) {
 	var firstPayload []byte
 	mediaSock.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < len(frames); i++ {
+	for i := range frames {
 		n, _, err := mediaSock.ReadFromUDP(buf)
 		if err != nil {
 			t.Fatalf("read RTP frame %d: %v", i, err)
@@ -429,7 +429,7 @@ func TestServer_ByeStopsPlaybackStreaming(t *testing.T) {
 	// Receive 3 frames (stream is flowing), then BYE.
 	mediaSock.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("read frame %d: %v", i, err)
 		}
@@ -676,7 +676,7 @@ func TestServer_PlaybackPauseStopsRtpAndPlayResumes(t *testing.T) {
 	// Receive 3 frames to confirm streaming is flowing.
 	mediaSock.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("read frame %d: %v", i, err)
 		}
@@ -757,7 +757,7 @@ func TestServer_PlaybackSeekToKeyframe(t *testing.T) {
 	// Receive 3 frames (stream flowing from the start).
 	mediaSock.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("read frame %d: %v", i, err)
 		}
@@ -822,7 +822,7 @@ func TestServer_PlaybackSpeed4x(t *testing.T) {
 	// Receive 3 frames at nominal 100ms pacing.
 	mediaSock.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("read frame %d: %v", i, err)
 		}
@@ -915,7 +915,7 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 	if count := hub.SubscriberCount(); count != 1 {
 		t.Fatalf("expected 1 subscriber after INVITE, got %d", count)
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hub.Write(AccessUnit{
 			NALUs:     []NALU{{Type: 5, Data: []byte{0x65, 0x11, 0x22, 0x33}, IsIDR: true}},
 			Timestamp: time.Now(),
@@ -927,7 +927,7 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 	// Receive a couple RTP packets to confirm live flow.
 	mediaSock.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 2048)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("read live RTP frame %d: %v", i, err)
 		}
@@ -941,7 +941,7 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 		playbackControlBody("PAUSE", "", "", "", "")))
 
 	// Live RTP continues: push more AUs and assert they arrive.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		hub.Write(AccessUnit{
 			NALUs:     []NALU{{Type: 5, Data: []byte{0x65, 0x11, 0x22, 0x33}, IsIDR: true}},
 			Timestamp: time.Now(),
@@ -950,7 +950,7 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	mediaSock.SetReadDeadline(time.Now().Add(2 * time.Second))
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
 			t.Fatalf("live RTP stopped after PAUSE INFO (frame %d): %v", i, err)
 		}

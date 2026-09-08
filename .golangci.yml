@@ -1,0 +1,105 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - govet
+    - gocritic
+    - bodyclose
+    - nilnil
+    - contextcheck
+    - noctx
+    - gocheckcompilerdirectives
+    - nolintlint
+    - errorlint
+    - misspell
+    - intrange
+    - predeclared
+    - nilerr
+    - nilnesserr
+    - wastedassign
+    - fatcontext
+    - perfsprint
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    staticcheck:
+      checks:
+        - all
+        - -QF*
+        - -ST*
+        - -SA1019  # Deprecated API usage (tracked for future migration)
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    perfsprint:
+      errorf: false      # suppress fmt.Errorf -> errors.New (behavior change)
+      err-error: false   # suppress fmt.Sprintf(err) -> err.Error() (panic risk)
+      integer-format: true
+      hex-format: true
+      string-format: true
+      bool-format: true
+      int-conversion: true
+  exclusions:
+    presets:
+      - common-false-positives
+    warn-unused: true
+    paths:
+      - testdata/
+      - tmp/  # throwaway scratch tools (fake platforms), never shipped
+    rules:
+      # Test files: loose checking (matches MiBeeNvr policy)
+      - path: _test\.go
+        linters: [errcheck, noctx, gocritic, contextcheck, nilnil, bodyclose]
+      # CLI entry points: context not needed at startup
+      - path: cmd/
+        linters: [noctx, contextcheck]
+      # Test-support package: non-blocking I/O by design
+      - path: testing/
+        linters: [noctx, contextcheck]
+      # errcheck: legitimate cleanup/write patterns
+      - source: 'defer .+\.Close\(\)'
+        linters: [errcheck]
+      - source: '\.Write\('
+        linters: [errcheck]
+      - source: '\.WriteString\('
+        linters: [errcheck]
+      - source: '\.Flush\('
+        linters: [errcheck]
+      - source: '\.Encode\('
+        linters: [errcheck]
+      - source: 'MkdirAll\('
+        linters: [errcheck]
+      - source: 'os\.(Remove|RemoveAll)\('
+        linters: [errcheck]
+      - source: 'filepath\.Walk(Dir)?\('
+        linters: [errcheck]
+      - source: 'fmt\.Fprintf\('
+        linters: [errcheck]
+      # SIP/UDP teardown is best-effort by design: closing a dead socket or
+      # re-arming a rolling read deadline has no recovery path worth a log.
+      - source: '\.SetReadDeadline\('
+        linters: [errcheck]
+      - source: '(?m)^\t*\w*(\.\w+)?\.Close\(\)$'
+        linters: [errcheck]
+      # Context plumbing through net.Dial/Listen is a tracked migration
+      # (follow-up issue); do not block lint adoption on it.
+      - linters: [noctx, contextcheck]
+        path: ^(device|platform)/.*\.go$
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

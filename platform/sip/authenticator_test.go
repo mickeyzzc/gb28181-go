@@ -221,7 +221,7 @@ func TestAuthScheme(t *testing.T) {
 func registerNTimes(t *testing.T, cfg Config, client *sipClient, password string, n int) []int {
 	t.Helper()
 	statuses := make([]int, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		req := buildRequest(t, sip.REGISTER, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), "")
 		res := client.roundTrip(req)
 		if res.StatusCode() == 401 {

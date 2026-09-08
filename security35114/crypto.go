@@ -150,7 +150,8 @@ func VerifyMessage(cert *smx509.Certificate, payload []byte, sigB64 string) erro
 // platform side; provided for conformance tests and UAS implementations.
 func EncryptVKEK(random interface {
 	Read(p []byte) (int, error)
-}, pub *ecdsa.PublicKey, vkek []byte) (string, error) {
+}, pub *ecdsa.PublicKey, vkek []byte,
+) (string, error) {
 	der, err := sm2.EncryptASN1(random, pub, vkek)
 	if err != nil {
 		return "", fmt.Errorf("sm2 encrypt: %w", err)

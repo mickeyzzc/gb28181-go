@@ -9,6 +9,7 @@ package device
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -140,7 +141,7 @@ func (r *SegmentReader) Next() (naluBytes [][]byte, ptsOffset time.Duration, isK
 var errEOF = fmt.Errorf("device: end of segment")
 
 // SegmentEOF reports whether err is the end-of-segment sentinel.
-func SegmentEOF(err error) bool { return err == errEOF }
+func SegmentEOF(err error) bool { return errors.Is(err, errEOF) }
 
 // ---------------------------------------------------------------------------
 // Annex-B parser (start-code scan only)

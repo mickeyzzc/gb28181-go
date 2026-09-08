@@ -56,7 +56,7 @@ func readFirstBurstPS(t *testing.T, c net.Conn) []byte {
 	t.Helper()
 	c.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var ps []byte
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		hdr := make([]byte, 2)
 		if _, err := io.ReadFull(c, hdr); err != nil {
 			t.Fatalf("read framing header: %v", err)
