@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mickeyzzc/gb28181-go/metrics"
+
 	"github.com/pion/rtp"
 )
 
@@ -22,6 +24,10 @@ type RtpPusher struct {
 	tcpConn    *net.TCPConn
 	seqNum     uint16
 	mu         sync.Mutex
+
+	// metrics receives PSBytesOut for every frame handed to the wire
+	// (issue #40); nil = no-op.
+	metrics metrics.Hooks
 }
 
 // NewRtpPusher creates a new RTP pusher with the provided UDP connection.
@@ -36,6 +42,11 @@ func NewRtpPusher(conn *net.UDPConn, remoteAddr *net.UDPAddr) *RtpPusher {
 
 // SetTCPConn sets the TCP connection for framed RTP transport.
 // When set, SendFrame will use $-framing (GB/T 28181 Annex C.2).
+// SetMetricsHooks installs observability hooks (issue #40); nil-safe.
+func (rp *RtpPusher) SetMetricsHooks(h metrics.Hooks) {
+	rp.metrics = h
+}
+
 func (rp *RtpPusher) SetTCPConn(conn *net.TCPConn) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
@@ -144,6 +155,10 @@ func (rp *RtpPusher) SendFrame(psData []byte, isKeyFrame bool, pts time.Time, ss
 		// Increment sequence number for next packet
 		rp.seqNum++
 		offset = end
+	}
+
+	if rp.metrics != nil {
+		rp.metrics.PSBytesOut(int64(len(psData)))
 	}
 
 	return nil

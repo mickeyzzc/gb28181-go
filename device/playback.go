@@ -60,6 +60,7 @@ func parseSDPTimeRange(body string) (startMs, endMs int64) {
 // exhausted (unless paused, in which case it holds for a seek or BYE).
 func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl) {
 	pusher := NewRtpPusher(mediaConn, rtpDest)
+	pusher.SetMetricsHooks(s.metrics)
 	if mediaTCPConn != nil {
 		pusher.SetTCPConn(mediaTCPConn)
 	}

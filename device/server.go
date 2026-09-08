@@ -26,6 +26,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/mickeyzzc/gb28181-go/metrics"
 )
 
 type Server struct {
@@ -66,6 +68,8 @@ type Server struct {
 	// playbackCtl routes SIP INFO PlaybackControl commands to the active
 	// playback goroutine (nil when no playback session is active). Guarded by mu.
 	playbackCtl chan<- PlaybackControl
+	// metrics receives lifecycle/media observations (issue #40).
+	metrics metrics.Hooks
 }
 
 // New creates a new GB28181 server.
@@ -76,7 +80,17 @@ func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 		hub:          hub,
 		regRespCh:    make(chan SipMessage, 4),
 		reRegisterCh: make(chan struct{}, 1),
+		metrics:      metrics.NoopHooks{},
 	}
+}
+
+// SetMetricsHooks installs observability hooks (issue #40); they are also
+// propagated to media pushers created afterwards. Nil restores no-ops.
+func (s *Server) SetMetricsHooks(h metrics.Hooks) {
+	if h == nil {
+		h = metrics.NoopHooks{}
+	}
+	s.metrics = h
 }
 
 // SetTestMode enables test mode which skips REGISTER lifecycle.
@@ -436,6 +450,7 @@ func (s *Server) startLifecycles(ctx context.Context) {
 			case <-ticker.C:
 				if err := s.sendKeepalive(ctx); err != nil {
 					failures := s.keepaliveFailures.Add(1)
+					s.metrics.KeepaliveFail()
 					slog.Warn("gb28181: keepalive send failed", "error", err, "failures", failures)
 					if failures >= int32(s.cfg.HeartbeatTimeoutCount) {
 						slog.Warn("gb28181: too many keepalive failures, re-registering")
@@ -644,6 +659,16 @@ func (s *Server) viaTransportLabel() string {
 // runRegisterLifecycleWith performs the REGISTER authentication flow
 // using the given response source.
 func (s *Server) runRegisterLifecycleWith(ctx context.Context, nextResponse regResponseSource) error {
+	s.metrics.RegisterAttempt()
+	if err := s.runRegisterLifecycleInner(ctx, nextResponse); err != nil {
+		s.metrics.RegisterFail()
+		return err
+	}
+	s.metrics.RegisterOK()
+	return nil
+}
+
+func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse regResponseSource) error {
 	requestURI := fmt.Sprintf("sip:%s@%s", s.cfg.SIPDomain, s.cfg.SIPDomain)
 	from := fmt.Sprintf("<sip:%s@%s>", s.cfg.DeviceID, s.cfg.SIPDomain)
 	to := from
@@ -956,6 +981,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	go func() {
 		defer mediaCancel()
 		pusher := NewRtpPusher(mediaConn, rtpDest)
+		pusher.SetMetricsHooks(s.metrics)
 		if mediaTCPConn != nil {
 			pusher.SetTCPConn(mediaTCPConn)
 		}
