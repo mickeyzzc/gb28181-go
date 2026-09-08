@@ -86,6 +86,43 @@ func BuildCapabilityAuthorization(keyVersion, certPEM string) string {
 	return b.String()
 }
 
+// BuildChallenge builds the WWW-Authenticate header value of a GB35114 401
+// response for the given mode and random1 (platform side).
+func BuildChallenge(mode Mode, random1 string) string {
+	return string(mode) + ` algorithm="A:SM2;H:SM3", random1="` + random1 + `"`
+}
+
+// CapabilityAnnouncement is the parsed Authorization header of the first
+// GB35114 REGISTER (platform side).
+type CapabilityAnnouncement struct {
+	Algorithm     string
+	KeyVersion    string
+	DeviceCertPEM string // from cnonce="devicecert:<base64>", empty when absent
+}
+
+// ParseCapabilityAuthorization parses the Capability announcement of the
+// first GB35114 REGISTER. The cnonce device certificate, when present, is
+// decoded back to its PEM text.
+func ParseCapabilityAuthorization(authorization string) (CapabilityAnnouncement, error) {
+	scheme, rest := splitScheme(authorization)
+	if scheme != "Capability" {
+		return CapabilityAnnouncement{}, fmt.Errorf("not a GB35114 Capability announcement: %s", authorization)
+	}
+	params := parseParams(rest)
+	if params["algorithm"] == "" {
+		return CapabilityAnnouncement{}, fmt.Errorf("Capability announcement missing algorithm")
+	}
+	ann := CapabilityAnnouncement{Algorithm: params["algorithm"], KeyVersion: params["keyversion"]}
+	if cnonce := params["cnonce"]; strings.HasPrefix(cnonce, "devicecert:") {
+		der, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(cnonce, "devicecert:"))
+		if err != nil {
+			return CapabilityAnnouncement{}, fmt.Errorf("cnonce devicecert is not base64: %w", err)
+		}
+		ann.DeviceCertPEM = string(der)
+	}
+	return ann, nil
+}
+
 // ParseChallenge parses the WWW-Authenticate header of a GB35114 401
 // response. Both Unidirection and Bidirection challenges carry random1.
 func ParseChallenge(wwwAuthenticate string) (Challenge, error) {

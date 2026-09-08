@@ -169,3 +169,41 @@ func TestBuildSecurityInfoRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip mismatch:\n got: %+v\nwant: %+v", back, in)
 	}
 }
+
+func TestBuildChallenge(t *testing.T) {
+	if got := BuildChallenge(ModeBidirection, goldenRandom1); got != `Bidirection algorithm="A:SM2;H:SM3", random1="PRAIIbutDbd5x/NKsbwwYw=="` {
+		t.Fatalf("Bidirection challenge = %q", got)
+	}
+	if got := BuildChallenge(ModeUnidirection, goldenRandom1); got != `Unidirection algorithm="A:SM2;H:SM3", random1="PRAIIbutDbd5x/NKsbwwYw=="` {
+		t.Fatalf("Unidirection challenge = %q", got)
+	}
+}
+
+func TestParseCapabilityAuthorization(t *testing.T) {
+	// Without cnonce.
+	got, err := ParseCapabilityAuthorization(`Capability algorithm="A:SM2;H:SM3;S:SM4/OFB/PKCS5;SI:SM3-SM2", keyversion="2026-01-01T00:00:00.000"`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Algorithm != CapabilityAlgorithm || got.KeyVersion != "2026-01-01T00:00:00.000" || got.DeviceCertPEM != "" {
+		t.Fatalf("announcement = %+v", got)
+	}
+
+	// With the cnonce device certificate, the announcement round-trips the
+	// exact PEM the device attached.
+	certPEM := loadDeviceIdentity(t).CertPEM
+	got, err = ParseCapabilityAuthorization(BuildCapabilityAuthorization("2026-01-01T00:00:00.000", certPEM))
+	if err != nil {
+		t.Fatalf("parse with cnonce: %v", err)
+	}
+	if got.KeyVersion != "2026-01-01T00:00:00.000" || got.DeviceCertPEM != certPEM {
+		t.Fatalf("announcement with cnonce = %+v", got)
+	}
+
+	if _, err := ParseCapabilityAuthorization(`Digest realm="x"`); err == nil {
+		t.Fatal("non-Capability Authorization accepted")
+	}
+	if _, err := ParseCapabilityAuthorization(`Capability keyversion="only"`); err == nil {
+		t.Fatal("Capability without algorithm accepted")
+	}
+}

@@ -182,3 +182,20 @@ func decodeB64(s string) []byte {
 	}
 	return b
 }
+
+// ParseCertificatePEM parses a PEM SM2 certificate (GM/T 0015-2012) from
+// bytes — e.g. a device certificate announced via the Capability cnonce.
+func ParseCertificatePEM(pemBytes []byte) (*smx509.Certificate, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("security35114: no PEM block found")
+	}
+	if !strings.Contains(block.Type, "CERTIFICATE") {
+		return nil, fmt.Errorf("security35114: PEM type %q is not a certificate", block.Type)
+	}
+	cert, err := smx509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("security35114: parsing certificate: %w", err)
+	}
+	return cert, nil
+}

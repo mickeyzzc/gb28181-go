@@ -24,6 +24,15 @@ type Config struct {
 	// Password is the SIP digest-auth secret that registered devices must use.
 	Password string `yaml:"password"`
 
+	// RegisterAuthenticator authenticates REGISTERs that carry a non-Digest
+	// Authorization scheme (GB 35114 A-level). When set, such REGISTERs are
+	// routed to it (challenge → verify → SecurityInfo on the 200 OK) and the
+	// Note header of subsequent requests is verified; Digest REGISTERs keep
+	// flowing through Password. The concrete implementation is build-tagged
+	// (security35114.Platform behind -tags gb35114); the field is
+	// assembly-level, not configurable from YAML.
+	RegisterAuthenticator RegisterAuthenticator `yaml:"-"`
+
 	// UserAgent overrides the SIP User-Agent on outbound requests.
 	// Empty = DefaultUserAgent ("gb28181-go"). Some vendor platforms
 	// fingerprint the UA — set this if yours does.
