@@ -3,6 +3,7 @@ package device
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -106,7 +107,8 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 			for {
 				line, err := reader.ReadString('\n')
 				if err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					var netErr net.Error
+					if errors.As(err, &netErr) && netErr.Timeout() {
 						if len(headers) == 0 {
 							continue // Idle timeout between messages is expected
 						}
@@ -156,7 +158,8 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 				}
 				body := make([]byte, contentLength)
 				if _, err := io.ReadFull(reader, body); err != nil {
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					var netErr net.Error
+					if errors.As(err, &netErr) && netErr.Timeout() {
 						// The rolling 1s shutdown deadline expired while
 						// waiting for the promised body bytes — keep the
 						// connection only if more bytes arrive; a peer that
@@ -181,8 +184,8 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 			// Get TCP address for dispatch. Non-TCP peers (net.Pipe in
 			// tests) fall back to an unspecified address.
 			tcpAddr := &net.TCPAddr{}
-			if real, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-				tcpAddr = real
+			if peer, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+				tcpAddr = peer
 			}
 
 			// Handle responses vs requests separately

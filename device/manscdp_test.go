@@ -221,7 +221,6 @@ func TestDispatch_CatalogQuery(t *testing.T) {
 	}
 
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage failed: %v", err)
 	}
@@ -267,7 +266,6 @@ func TestDispatch_UnknownCmdType_NoCrash(t *testing.T) {
 
 	// This should not panic and should return 200 OK gracefully
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage should not error on unknown command, got: %v", err)
 	}
@@ -345,7 +343,6 @@ func TestDispatch_DeviceInfoQuery(t *testing.T) {
 	}
 
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage failed: %v", err)
 	}
@@ -390,7 +387,6 @@ func TestDispatch_KeepaliveNotify(t *testing.T) {
 	}
 
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage failed: %v", err)
 	}
@@ -418,7 +414,6 @@ func TestDispatch_EmptyBody(t *testing.T) {
 	}
 
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage with empty body should not error, got: %v", err)
 	}
@@ -448,7 +443,6 @@ func TestDispatch_InvalidXML(t *testing.T) {
 	}
 
 	ok200, queued, err := DispatchInboundMessage(inbound, testDeviceContext(), nil)
-
 	// Invalid XML should not crash and should return 200 OK
 	if err != nil {
 		t.Fatalf("DispatchInboundMessage with invalid XML should not error, got: %v", err)

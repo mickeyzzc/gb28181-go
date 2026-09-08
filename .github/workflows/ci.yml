@@ -6,6 +6,27 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    # golangci-lint aligned with onvif-go's v2 config (issue #43); runs the
+    # gb35114 build tag in the same pass so tagged code is linted too.
+    # Pinned to 1.26 like onvif-go: staticcheck v0.7.0's IR builder panics
+    # on Go 1.27's stdlib ("poll" package).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26' 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      - name: Lint (default + gb35114)
+        run: golangci-lint run --build-tags gb35114
+      - name: Format check
+        run: |
+          golangci-lint fmt --diff ./... && \
+          test -z "$(golangci-lint fmt --diff ./... 2>/dev/null)" || \
+          { echo 'run "golangci-lint fmt ./..." and commit the result'; exit 1; }
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -16,10 +37,10 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
       - name: Vet (gb35114)
         run: go vet -tags gb35114 ./...
       - name: Test (gb35114)
         run: go test -race -tags gb35114 ./...
-      - name: Format check
-        run: test -z "$(gofmt -l .)"

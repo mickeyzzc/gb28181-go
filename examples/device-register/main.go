@@ -54,6 +54,13 @@ func main() {
 	// comes from the camera encoder as NALU access units.
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+
+	var exitErr error
+	defer func() {
+		if exitErr != nil {
+			log.Fatalf("device server: %v", exitErr)
+		}
+	}()
 	for i := 0; ; i++ {
 		select {
 		case <-ctx.Done():
@@ -76,7 +83,10 @@ func main() {
 			}
 			hub.Write(au)
 		case err := <-errCh:
-			log.Fatalf("device server: %v", err)
+			// Exit the loop first so the deferred ticker.Stop() runs —
+			// log.Fatalf would skip it.
+			exitErr = err
+			return
 		}
 	}
 }

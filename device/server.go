@@ -17,6 +17,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -164,7 +165,8 @@ func (s *Server) Start(ctx context.Context) error {
 			sipConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 			n, addr, err := sipConn.ReadFromUDP(buf)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
 					continue // Timeout is expected for shutdown check
 				}
 				slog.Warn("gb28181: SIP recv error", "error", err)
@@ -1057,7 +1059,9 @@ func (s *Server) handleInfo(ctx context.Context, msg SipMessage, fromAddr net.Ad
 	if !ok {
 		slog.Debug("gb28181: INFO without PlaybackControl body", "from", fromAddr.String())
 		ok200 := Build200OK(msg, "", "")
-		s.sendSIP(ok200.Serialize(), fromAddr)
+		if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+			slog.Warn("gb28181: failed to send 200 OK", "error", err)
+		}
 		return
 	}
 	s.mu.Lock()
@@ -1068,7 +1072,9 @@ func (s *Server) handleInfo(ctx context.Context, msg SipMessage, fromAddr net.Ad
 		// no-ops per binding #8 — acknowledge and ignore.
 		slog.Info("gb28181: PlaybackControl ignored (no active playback session)", "value", ctl.Value, "from", fromAddr.String())
 		ok200 := Build200OK(msg, "", "")
-		s.sendSIP(ok200.Serialize(), fromAddr)
+		if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+			slog.Warn("gb28181: failed to send 200 OK", "error", err)
+		}
 		return
 	}
 	select {
@@ -1077,5 +1083,7 @@ func (s *Server) handleInfo(ctx context.Context, msg SipMessage, fromAddr net.Ad
 		slog.Warn("gb28181: PlaybackControl dropped (control channel full)", "value", ctl.Value)
 	}
 	ok200 := Build200OK(msg, "", "")
-	s.sendSIP(ok200.Serialize(), fromAddr)
+	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+		slog.Warn("gb28181: failed to send 200 OK", "error", err)
+	}
 }

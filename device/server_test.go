@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -95,7 +96,7 @@ func TestServer_AttachesSubscriberOnInvite(t *testing.T) {
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -191,7 +192,7 @@ func TestServer_Sends200OKBeforeMedia(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -303,7 +304,7 @@ func TestServer_200OK_ContainsDeviceSDP(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -398,7 +399,7 @@ func TestServer_EchoesSSRC(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -480,7 +481,7 @@ func TestServer_ByeCleansUpSubscriberAndSocket(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -830,10 +831,6 @@ func newFakePlatform(t *testing.T) *fakePlatform {
 	return fp
 }
 
-func (fp *fakePlatform) addr() string {
-	return fp.conn.LocalAddr().String()
-}
-
 func (fp *fakePlatform) close() {
 	fp.conn.Close()
 }
@@ -953,7 +950,7 @@ func TestRecvLoop_Subscribe_Gets200(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()

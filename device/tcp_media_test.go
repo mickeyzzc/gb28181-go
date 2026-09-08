@@ -284,7 +284,3 @@ func TestInviteTCPSetupActiveReturns488(t *testing.T) {
 		t.Fatalf("want 488, got: %.120s", resp)
 	}
 }
-
-func itoa(n int) string {
-	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(rune(0)), "", ""), "", "")) // placeholder
-}

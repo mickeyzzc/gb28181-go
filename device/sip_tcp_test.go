@@ -3,6 +3,7 @@ package device
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,7 +38,7 @@ func TestServer_TCPTransport_HandlesFramedSIP(t *testing.T) {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := server.Start(ctx); err != nil && err != context.Canceled {
+		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
@@ -205,7 +206,8 @@ func expectStreamClosed(t *testing.T, client net.Conn) {
 	one := make([]byte, 1)
 	for {
 		if _, err := client.Read(one); err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				t.Fatal("server side did not close the connection within the deadline")
 			}
 			return // EOF or reset — server side closed
@@ -268,7 +270,7 @@ func TestReadSIPStreamHeaderFlood(t *testing.T) {
 	s := newFramingTestServer(t)
 	startFramingReader(context.Background(), s, server, client)
 
-	for i := 0; i < 20000; i++ {
+	for range 20000 {
 		if _, err := client.Write([]byte("X-Flood: aaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n")); err != nil {
 			break // server dropped us — expected
 		}

@@ -36,11 +36,6 @@ const (
 // dialog on single-stream devices) — triggers a dialog-reset BYE.
 var errDeviceBusy = errors.New("device busy (stale dialog)")
 
-// inviteResponseTimeout bounds how long InviteChannel waits for the device's
-// answer to a SIP INVITE before tearing the half-open session down.
-// Overridable per host via Config.InviteResponseTimeout (Config.InviteTimeout).
-const inviteResponseTimeout = 32 * time.Second
-
 // speculativeAckDelay is how long to wait for a transaction-matched INVITE
 // response before sending a speculative ACK anyway (devices with Via-less
 // responses deadlock without it).
@@ -1877,7 +1872,8 @@ func (s *Server) verifyIncomingNote(req sip.Request) error {
 		return nil
 	}
 	deviceID := ""
-	fromVal, toVal, callIDVal := "", "", ""
+	fromVal, toVal := "", ""
+	callIDVal := rawHeaderValue(req, "Call-ID")
 	if from, ok := req.From(); ok {
 		deviceID = from.Address.User().String()
 		fromVal = from.Value()
@@ -1885,7 +1881,6 @@ func (s *Server) verifyIncomingNote(req sip.Request) error {
 	if to, ok := req.To(); ok {
 		toVal = to.Value()
 	}
-	callIDVal = rawHeaderValue(req, "Call-ID")
 	if callIDVal == "" {
 		for _, h := range req.GetHeaders("Call-ID") {
 			callIDVal = strings.TrimSpace(strings.TrimPrefix(h.String(), "Call-ID:"))

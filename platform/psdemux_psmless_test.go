@@ -51,10 +51,12 @@ func TestPSDemuxerLatchesCodecFromParamSetsWithoutPSM(t *testing.T) {
 
 	// Hand-built PS burst WITHOUT a PSM: pack header + video PES carrying an
 	// H.265 param-set AU (VPS 0x40, SPS 0x42, PPS 0x44).
-	es := []byte{0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01,
+	es := []byte{
+		0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01,
 		0, 0, 0, 1, 0x42, 0x01, 0x01,
 		0, 0, 0, 1, 0x44, 0x01,
-		0, 0, 0, 1, 0x26, 0x01, 0xaf, 0x06}
+		0, 0, 0, 1, 0x26, 0x01, 0xaf, 0x06,
+	}
 	ps := append(packHeaderForTest(90000), videoPESForTest(es, 90000)...)
 
 	nalus, err := d.FeedAU(ps, 9000, true)
@@ -73,9 +75,11 @@ func TestPSDemuxerLatchesCodecFromParamSetsWithoutPSM(t *testing.T) {
 // The mirror case: H.264 SPS latches h264 on a PSM-less stream.
 func TestPSDemuxerLatchesH264WithoutPSM(t *testing.T) {
 	d := NewPSDemuxer()
-	es := []byte{0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e,
+	es := []byte{
+		0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e,
 		0, 0, 0, 1, 0x68, 0xce, 0x38, 0x80,
-		0, 0, 0, 1, 0x65, 0x88, 0x84}
+		0, 0, 0, 1, 0x65, 0x88, 0x84,
+	}
 	ps := append(packHeaderForTest(90000), videoPESForTest(es, 90000)...)
 	_, err := d.FeedAU(ps, 9000, true)
 	require.NoError(t, err)
