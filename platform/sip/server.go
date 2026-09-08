@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mickeyzzc/gb28181-go/metrics"
+
 	gosip "github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
@@ -166,6 +168,9 @@ type Server struct {
 	// gbLoc pins the zone for naive GB/T 28181 device-clock timestamps
 	// (RecordInfo query formatting). nil → time.Local.
 	gbLoc atomic.Pointer[time.Location]
+
+	// metrics receives registration/session observations (issue #40).
+	metrics metrics.Hooks
 }
 
 // SetGBTimezone pins the naive-clock zone for GB/T 28181 timestamps — set it
@@ -194,6 +199,7 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 		deviceMgr:     deviceMgr,
 		sessionMgr:    sessionMgr,
 		db:            db,
+		metrics:       metrics.NoopHooks{},
 		authFailures:  newAuthFailureTracker(cfg.effectiveRegisterFailureLimit(), cfg.effectiveDuration(cfg.RegisterFailureWindow, 60*time.Second), cfg.effectiveDuration(cfg.RegisterLockoutDuration, 60*time.Second)),
 		dialogs:       make(map[string]*inviteDialog),
 		playbacks:     make(map[string]*playbackState),
@@ -236,6 +242,7 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 // onFirstRTP confirms a session as playing when its first media packet
 // arrives and flips the bound camera's recorder to Recording.
 func (s *Server) onFirstRTP(channelID string) {
+	s.metrics.InviteSessionStarted()
 	slog.Info("gb28181: first RTP received — session confirmed", "channel", channelID)
 	_ = s.sessionMgr.MarkPlaying(channelID)
 	deviceID := s.deviceOfChannel(channelID)
@@ -251,6 +258,15 @@ func (s *Server) onFirstRTP(channelID string) {
 // Name returns the service name (pkg/app.Service interface).
 func (s *Server) Name() string {
 	return "gb28181"
+}
+
+// SetMetricsHooks installs observability hooks (issue #40): registration
+// outcomes and INVITE session lifecycle. Nil restores no-ops.
+func (s *Server) SetMetricsHooks(h metrics.Hooks) {
+	if h == nil {
+		h = metrics.NoopHooks{}
+	}
+	s.metrics = h
 }
 
 // Start launches the SIP stack. It is idempotent and returns promptly after
@@ -836,6 +852,7 @@ func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, i
 				return resp, nil
 			}
 			if !resp.IsProvisional() {
+				s.metrics.InviteFail()
 				if resp.StatusCode() == statusBusyHere {
 					return nil, fmt.Errorf("device rejected: status %d (%s): %w", resp.StatusCode(), resp.Reason(), errDeviceBusy)
 				}
@@ -858,6 +875,7 @@ func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, i
 // checkRTPConfirmed treats "media started" as dialog success, else a timeout.
 func (s *Server) checkRTPConfirmed(tx sip.ClientTransaction) error {
 	_ = tx.Cancel()
+	s.metrics.InviteFail()
 	return fmt.Errorf("unanswered (no matched response and no RTP media)")
 }
 
@@ -958,6 +976,7 @@ func (s *Server) sendByeForChannel(channelID string) error {
 	if srv == nil || dialog == nil {
 		return nil
 	}
+	s.metrics.InviteSessionStopped()
 
 	fromHdr, hasFrom := dialog.resp.From()
 	toHdr, hasTo := dialog.resp.To()
@@ -1147,6 +1166,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		}
 		if !s.validateDigest(auth, deviceID, req) {
 			slog.Warn("gb28181: REGISTER auth failed", "device", deviceID, "source", req.Source())
+			s.metrics.RegisterFail()
 			s.authFailures.recordFailure(authKey)
 			s.respond(req, tx, statusForbidden, "Invalid credentials", nil)
 			return
@@ -1183,6 +1203,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			}
 		}
 	} else {
+		s.metrics.RegisterOK()
 		slog.Info("gb28181: device registered", "device", deviceID, "source", req.Source(), "expires", expires)
 		// A re-REGISTER from a different IP (device reboot, DHCP change, NAT
 		// rebind) invalidates the old media sessions: their INVITE dialogs
