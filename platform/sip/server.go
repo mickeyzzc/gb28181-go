@@ -1487,6 +1487,19 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		// Some firmwares deliver alarms as MESSAGE instead of NOTIFY —
 		// route both into the same pipeline.
 		s.handleAlarm(payload.(manscdp.Alarm))
+	case manscdp.CmdUploadSnapShotFinished:
+		p := payload.(manscdp.UploadSnapShotFinished)
+		slog.Info("gb28181: snapshot finished notify", "device", p.DeviceID,
+			"session", p.SessionID, "files", len(p.SnapShotList))
+		if s.eventBus != nil {
+			s.eventBus.Publish(context.Background(), TopicGB28181SnapshotFinished, GB28181SnapshotFinishedEvent{
+				DeviceID:     p.DeviceID,
+				SessionID:    p.SessionID,
+				FileIDs:      p.SnapShotList,
+				SuccessCount: len(p.SnapShotList),
+				ReceivedAt:   time.Now(),
+			})
+		}
 	case manscdp.CmdTimeSync:
 		// Device clock query (GB/T 28181-2016 § 9.6): answer with the
 		// platform wall clock so device-side timestamps (and RecordInfo
