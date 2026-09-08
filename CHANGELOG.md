@@ -11,6 +11,13 @@ are released out of band.
 
 ## [Unreleased]
 
+- `ci(release)` the tag workflow now publishes a GitHub Release (#46):
+  per-platform tool bundles (device-register / platform-uas /
+  psmux-rtp, tar.gz + zip for Windows) across a 7-platform matrix
+  (darwin/amd64 and windows/arm64 added), SHA256SUMS, and
+  `gh release create --verify-tag --generate-notes`. Whole-library
+  cross-compilation stays in the loop; merging to `main` still
+  releases nothing — only a `v*.*.*` tag does.
 - `feat(cascade)` REGISTER retry switched from a flat 15s to exponential
   backoff — base doubles per consecutive failure (default 1s, capped at
   5m) and resets on a successful registration; configurable via

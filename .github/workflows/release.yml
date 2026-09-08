@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: write
+
 jobs:
   test:
     name: Test (tag)
@@ -25,8 +28,8 @@ jobs:
       - name: Format check
         run: test -z "$(gofmt -l .)"
 
-  cross-compile:
-    name: Build library (${{ matrix.goos }}/${{ matrix.goarch }})
+  tools:
+    name: Build tools (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -38,17 +41,69 @@ jobs:
           - goos: linux
             goarch: arm
           - goos: darwin
+            goarch: amd64
+          - goos: darwin
             goarch: arm64
           - goos: windows
             goarch: amd64
+          - goos: windows
+            goarch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Build
+      - name: Build example bundle
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build ./...
+        run: |
+          # Whole-library compile first: the examples only cover their own
+          # dependency closure, this catches platform-specific code
+          # anywhere in the module.
+          go build ./...
+          mkdir -p dist
+          ext=""
+          archive="gb28181-go-tools_${GOOS}_${GOARCH}.tar.gz"
+          if [ "${GOOS}" = "windows" ]; then
+            ext=".exe"
+            archive="gb28181-go-tools_${GOOS}_${GOARCH}.zip"
+          fi
+          # The examples double as interop tools: a GB28181 device
+          # emulator, a platform-side UAS, and an RTP/PS mux tester.
+          for cmd in device-register platform-uas psmux-rtp; do
+            go build -trimpath -o "dist/${cmd}${ext}" "./examples/${cmd}"
+          done
+          if [ "${GOOS}" = "windows" ]; then
+            (cd dist && zip -q "../${archive}" ./*)
+          else
+            (cd dist && tar -czf "../${archive}" ./*)
+          fi
+          rm -rf dist && mkdir dist && mv "${archive}" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tools-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+
+  release:
+    name: GitHub Release
+    needs: [test, tools]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*
