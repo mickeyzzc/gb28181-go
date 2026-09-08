@@ -42,6 +42,7 @@ func testConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
 		SIPListen: fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t)),
+		ServerID:  "34020000002000000001",
 		Realm:     "test-realm",
 		Password:  "test-password",
 	}

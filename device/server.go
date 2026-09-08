@@ -90,6 +90,11 @@ func (s *Server) SetRecordingIndex(idx RecordingIndex) {
 
 // Start starts the GB28181 server SIP listener and lifecycle.
 func (s *Server) Start(ctx context.Context) error {
+	// Fail fast on a misconfigured device (issue #41).
+	if err := s.cfg.Validate(); err != nil {
+		return fmt.Errorf("gb28181 device config: %w", err)
+	}
+
 	// Initialize device context for MANSCDP responses
 	s.devCtx = DeviceContext{
 		DeviceID:     s.cfg.DeviceID,

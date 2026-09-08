@@ -261,6 +261,11 @@ func (s *Server) Name() string {
 // Start launches the SIP stack. It is idempotent and returns promptly after
 // the listeners are up.
 func (s *Server) Start(ctx context.Context) error {
+	// Fail fast on a misconfigured platform (issue #41).
+	if err := s.cfg.Validate(); err != nil {
+		return fmt.Errorf("gb28181 sip config: %w", err)
+	}
+
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
