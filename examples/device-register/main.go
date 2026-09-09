@@ -21,7 +21,7 @@ func main() {
 		DeviceID:              "34020000001320000001",
 		ChannelID:             "34020000001310000001",
 		SIPDomain:             "3402000000",
-		Password:              "12345678",
+		Password:              "your-platform-password", // digest-auth secret agreed with the platform — set your own
 		LocalSIPPort:          5060,
 		RegisterIntervalSecs:  3600,
 		HeartbeatIntervalSecs: 60,

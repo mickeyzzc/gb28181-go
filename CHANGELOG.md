@@ -11,6 +11,11 @@ are released out of band.
 
 ## [Unreleased]
 
+- `docs` no spec-example password in quickstart (#34): the READMEs and the
+  device-register / platform-uas examples pass a placeholder instead of
+  the well-known `12345678` — docs and examples must never ship a value
+  someone might run in production as-is.
+
 ## [v0.7.0] — 2026-09-09
 
 - `test` soak harness (#45): `GB28181_SOAK=1 go test -run TestSoak

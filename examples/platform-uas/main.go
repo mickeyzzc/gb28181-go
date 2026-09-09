@@ -115,7 +115,7 @@ func main() {
 		SIPListen:      ":5060",
 		ServerID:       "34020000002000000001",
 		Realm:          "3402000000",
-		Password:       "12345678",
+		Password:       "your-platform-password", // digest-auth secret — set your own
 		PortRange:      "30000-30050",
 		MediaTransport: "udp",
 	}
