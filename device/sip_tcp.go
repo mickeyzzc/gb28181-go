@@ -15,7 +15,7 @@ import (
 
 // startTCPListener starts the TCP SIP listener and accepts connections.
 func (s *Server) startTCPListener(ctx context.Context) error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.LocalSIPPort))
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", fmt.Sprintf(":%d", s.cfg.LocalSIPPort))
 	if err != nil {
 		return fmt.Errorf("binding SIP TCP on port %d: %w", s.cfg.LocalSIPPort, err)
 	}

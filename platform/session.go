@@ -257,7 +257,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 
 	switch transport {
 	case MediaTCPPassive:
-		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", serverIP, port))
+		// Request-scoped listen: the SessionManager API predates ctx
+		// plumbing; the bound is the INVITE request lifetime (issue #58).
+		ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", fmt.Sprintf("%s:%d", serverIP, port))
 		if err != nil {
 			sm.portManager.Recycle(port)
 			return nil, fmt.Errorf("gb28181: failed to listen TCP %s:%d: %w", serverIP, port, err)
@@ -409,7 +411,7 @@ func (sm *SessionManager) ConnectActiveTCP(channelID string, answerSDP []byte) e
 		return fmt.Errorf("gb28181: answer SDP carries no usable media address")
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("gb28181: dial device media %s: %w", addr, err)
 	}

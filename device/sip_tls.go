@@ -51,9 +51,14 @@ func (s *Server) startTLSClient(ctx context.Context) error {
 		return err
 	}
 	addr := net.JoinHostPort(s.cfg.PlatformSIPAddress, strconv.Itoa(s.cfg.PlatformSIPPort))
-	conn, err := tls.Dial("tcp", addr, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("dialing SIPS %s: %w", addr, err)
+	}
+	conn := tls.Client(raw, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return fmt.Errorf("SIPS handshake with %s: %w", addr, err)
 	}
 	remote := conn.RemoteAddr().String()
 	s.tcpConns.Store(remote, conn)

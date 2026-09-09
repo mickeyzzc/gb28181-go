@@ -560,8 +560,10 @@ func localIP() string {
 
 // getLocalIP determines the local source IP that would be used to reach
 // remoteAddr, by dialing a temporary UDP connection (no packets are sent).
-func getLocalIP(remoteAddr string) (string, error) {
-	conn, err := net.Dial("udp", remoteAddr)
+// The dial honors ctx (DNS-bound hostnames resolve under it; IP addresses
+// never block — issue #58).
+func getLocalIP(ctx context.Context, remoteAddr string) (string, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", remoteAddr)
 	if err != nil {
 		return "", err
 	}
@@ -720,7 +722,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	}
 
 	// Determine the real local IP toward the platform for Via/Contact headers
-	localIPAddr, err := getLocalIP(platformAddr.String())
+	localIPAddr, err := getLocalIP(ctx, platformAddr.String())
 	if err != nil {
 		slog.Warn("gb28181: failed to determine local IP, falling back to interface scan", "error", err)
 		localIPAddr = localIP()
@@ -813,7 +815,7 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 	to := from
 
 	// Determine the real local IP toward the platform for Via/Contact headers
-	localIPAddr, err := getLocalIP(platformAddr.String())
+	localIPAddr, err := getLocalIP(ctx, platformAddr.String())
 	if err != nil {
 		slog.Warn("gb28181: failed to determine local IP, falling back to interface scan", "error", err)
 		localIPAddr = localIP()
@@ -950,7 +952,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 
 	// Build device SDP answer — use the real source IP toward the platform,
 	// not an interface scan (wrong on multihomed hosts).
-	localIPAddr, err := getLocalIP(fromAddr.String())
+	localIPAddr, err := getLocalIP(ctx, fromAddr.String())
 	if err != nil {
 		slog.Warn("gb28181: failed to determine local IP, falling back to interface scan", "error", err)
 		localIPAddr = localIP()
@@ -976,7 +978,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// active side per GB/T 28181 Annex C / RFC 4145 (issue #14).
 	var mediaTCPConn *net.TCPConn
 	if mediaTransport == mediaTCPConnect {
-		conn, err := net.Dial("tcp", mediaAddr)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", mediaAddr)
 		if err != nil {
 			slog.Warn("gb28181: failed to connect to TCP media port", "addr", mediaAddr, "error", err)
 			return
