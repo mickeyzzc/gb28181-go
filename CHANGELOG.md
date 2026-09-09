@@ -15,7 +15,10 @@ are released out of band.
   notify (MESSAGE, A.2.5.7) now publishes `gb28181.snapshot.finished` with
   DeviceID, SessionID, and the SnapShotList — hosts close their pending
   snapshot sessions on it; an empty list means the capture or upload
-  failed wholly or partly.
+  failed wholly or partly. Event-bus reads now go through
+  `eventBusSnapshot()` (subMu) — `SetEventBus` after Start no longer
+  races gosip handler goroutines; the alarm publish path got the same
+  fix.
 
 - `docs` no spec-example password in quickstart (#34): the READMEs and the
   device-register / platform-uas examples pass a placeholder instead of
