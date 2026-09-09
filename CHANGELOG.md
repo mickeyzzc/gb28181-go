@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+- `test` soak harness (#45): `GB28181_SOAK=1 go test -run TestSoak
+  ./conformance/` drives N (default 100) INVITE→frames→BYE cycles over
+  one registered loopback pair with keepalives flowing, asserting no
+  descriptor growth across session/media-port teardown.
+- `bench` new benchmarks (#45): PS muxing keyframe/P-frame throughput,
+  SIP wire parse (REGISTER/catalog MESSAGE), PortManager Get/Recycle
+  serial + parallel.
+
 - `refactor` net.Dial/Listen → DialContext/ListenContext across the
   device and platform dials/listens (#58): the lifecycle context now
   interrupts route probes, media dials, the SIPS handshake, and SIP TCP
