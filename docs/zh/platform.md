@@ -53,6 +53,15 @@ bus := sip.NewEventBus(64) // 有损:慢消费者丢事件,绝不阻塞
 
 总线刻意有损——事件是通知，不是队列。
 
+发布主题：
+
+| 主题 | 载荷 | 触发 |
+|---|---|---|
+| `gb28181.alarm` | `GB28181AlarmEvent` | 设备告警（SUBSCRIBE Alarm / NOTIFY，或经 MESSAGE 上报） |
+| `gb28181.snapshot.finished` | `GB28181SnapshotFinishedEvent` | GB/T 28181-2022 抓拍完成通知（MESSAGE，A.2.5.7）——按 `SessionID` 关联；`FileIDs` 为空表示抓拍/上传全部或部分失败 |
+
+用 `server.SetEventBus(bus)` 注入总线；不注入时告警环与日志照常工作。
+
 ## 会话与活性
 
 - 注册经 digest 挑战（`qop=auth`）；保活 MESSAGE 驱动活性——静默

@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.8.0] — 2026-09-09
+
+The snapshot-event capability package (requested by downstream MiBeeNvr
+pin hygiene, issue #66): one complete user-valuable feature with tests
+and bilingual docs.
+
 - `feat(sip)` snapshot-finished event (#54): the 2022 UploadSnapShotFinished
   notify (MESSAGE, A.2.5.7) now publishes `gb28181.snapshot.finished` with
   DeviceID, SessionID, and the SnapShotList — hosts close their pending
@@ -18,7 +24,7 @@ are released out of band.
   failed wholly or partly. Event-bus reads now go through
   `eventBusSnapshot()` (subMu) — `SetEventBus` after Start no longer
   races gosip handler goroutines; the alarm publish path got the same
-  fix.
+  fix. Bilingual topic table in docs/en/platform.md + docs/zh/platform.md.
 
 - `docs` no spec-example password in quickstart (#34): the READMEs and the
   device-register / platform-uas examples pass a placeholder instead of
