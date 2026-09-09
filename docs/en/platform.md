@@ -55,6 +55,16 @@ bus := sip.NewEventBus(64) // lossy: slow consumers drop, never block
 
 The bus is deliberately lossy — events are notifications, not a queue.
 
+Published topics:
+
+| Topic | Payload | When |
+|---|---|---|
+| `gb28181.alarm` | `GB28181AlarmEvent` | device alarm (SUBSCRIBE Alarm / NOTIFY, or MESSAGE-routed) |
+| `gb28181.snapshot.finished` | `GB28181SnapshotFinishedEvent` | GB/T 28181-2022 snapshot completion notify (MESSAGE, A.2.5.7) — correlate by `SessionID`; an empty `FileIDs` means the capture or upload failed wholly or partly |
+
+Wire the bus with `server.SetEventBus(bus)`; without one the alarm ring
+and logs still work.
+
 ## Sessions and liveness
 
 - Registration is challenged with digest auth (`qop=auth`); keepalive
