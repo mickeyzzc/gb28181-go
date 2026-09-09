@@ -65,6 +65,9 @@ type Server struct {
 	devCtx DeviceContext
 	// recordingIndex supplies recorded segments for RecordInfo queries (nil = none)
 	recordingIndex RecordingIndex
+	// snapshotExecutor runs DeviceControl(SnapShot) exchanges (nil = the
+	// control is rejected as before). Guarded by mu.
+	snapshotExecutor SnapshotExecutor
 	// playbackCtl routes SIP INFO PlaybackControl commands to the active
 	// playback goroutine (nil when no playback session is active). Guarded by mu.
 	playbackCtl chan<- PlaybackControl
@@ -1103,20 +1106,43 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		slog.Warn("gb28181: failed to send 200 OK to MESSAGE", "error", err)
 	}
 
+	// DeviceControl(SnapShot) (GB/T 28181-2022 A.2.1.24): with an
+	// executor installed the 200 above is the whole synchronous answer;
+	// the exchange runs in a goroutine and completes asynchronously via
+	// the A.2.5.7 notify. Without an executor the control is rejected
+	// explicitly — parity with the Rust twin and a fast failure signal
+	// for the platform, where previously the body fell through
+	// parseQueryDual's parse-warn + silence. Non-UDP transports reject
+	// the same way (the notify leaves through the UDP socket).
+	if dc, ok := parseSnapshotControl(msg.Body); ok {
+		if exec := s.snapshotExec(); exec != nil && (s.cfg.Transport == "" || s.cfg.Transport == "udp") {
+			go s.runSnapshotExchange(ctx, dc, exec)
+			return
+		}
+		slog.Warn("gb28181: snapshot command not executable (no executor or non-UDP transport) — rejecting")
+		s.sendResponseMessage(BuildControlRejectResponseMessage(
+			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
+		return
+	}
+
 	// Send queued response if any
 	if queuedResp != nil {
-		// Fresh routing headers for this new MESSAGE request (the queued body
-		// only carries MANSCDP XML — Via/CSeq/Max-Forwards are mandatory).
-		queuedResp.RequestURI = fmt.Sprintf("sip:%s@%s", s.cfg.SIPDomain, s.cfg.SIPDomain)
-		queuedResp.From = fmt.Sprintf("<sip:%s@%s>", s.cfg.DeviceID, s.cfg.SIPDomain)
-		queuedResp.To = fmt.Sprintf("<sip:%s@%s>", s.cfg.SIPDomain, s.cfg.SIPDomain)
-		queuedResp.CallID = fmt.Sprintf("%d-resp@%s", time.Now().Unix(), s.cfg.DeviceID)
-		queuedResp.Via = fmt.Sprintf("SIP/2.0/UDP %s:%d;rport;branch=z9hG4bK%016x", localIP(), s.cfg.LocalSIPPort, time.Now().UnixNano())
-		queuedResp.MaxForwards = "70"
-		queuedResp.CSeq = "2 MESSAGE"
-		if err := s.sendSIP(queuedResp.Serialize(), fromAddr); err != nil {
-			slog.Warn("gb28181: failed to send queued MESSAGE response", "error", err)
-		}
+		s.sendResponseMessage(*queuedResp, fromAddr)
+	}
+}
+
+// sendResponseMessage sends a device-originated MANSCDP response MESSAGE
+// with fresh routing headers (the builders only carry the body).
+func (s *Server) sendResponseMessage(resp SipMessage, fromAddr net.Addr) {
+	resp.RequestURI = fmt.Sprintf("sip:%s@%s", s.cfg.SIPDomain, s.cfg.SIPDomain)
+	resp.From = fmt.Sprintf("<sip:%s@%s>", s.cfg.DeviceID, s.cfg.SIPDomain)
+	resp.To = fmt.Sprintf("<sip:%s@%s>", s.cfg.SIPDomain, s.cfg.SIPDomain)
+	resp.CallID = fmt.Sprintf("%d-resp@%s", time.Now().Unix(), s.cfg.DeviceID)
+	resp.Via = fmt.Sprintf("SIP/2.0/UDP %s:%d;rport;branch=z9hG4bK%016x", localIP(), s.cfg.LocalSIPPort, time.Now().UnixNano())
+	resp.MaxForwards = "70"
+	resp.CSeq = "2 MESSAGE"
+	if err := s.sendSIP(resp.Serialize(), fromAddr); err != nil {
+		slog.Warn("gb28181: failed to send queued MESSAGE response", "error", err)
 	}
 }
 

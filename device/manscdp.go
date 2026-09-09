@@ -323,6 +323,25 @@ func BuildKeepaliveMessage(sn, deviceID, status string) SipMessage {
 	}
 }
 
+// BuildUploadSnapShotFinishedMessage creates the SIP MESSAGE carrying
+// the GB/T 28181-2022 A.2.5.7 completion notify (routing headers are
+// filled by the caller, mirroring the keepalive path).
+func BuildUploadSnapShotFinishedMessage(sn int, deviceID, sessionID string, fileIDs []string) SipMessage {
+	finished := manscdp.BuildUploadSnapShotFinished(sn, deviceID, sessionID, fileIDs)
+	xmlData, err := xml.Marshal(finished)
+	if err != nil {
+		slog.Error("Failed to marshal UploadSnapShotFinished", "error", err)
+		return SipMessage{}
+	}
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        string(xmlData),
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
+}
+
 // RecordItem represents one recorded segment in a RecordInfo response.
 type RecordItem struct {
 	DeviceID  string `xml:"DeviceID"`
