@@ -104,3 +104,30 @@ parts, err := device.ParseDeviceID(id) // center/industry/type/serial
 20-digit codes: `[8 region][2 industry][3 type][7 serial]`. Type
 constants include `DeviceTypeIPC` (111), `DeviceTypeNVR` (118),
 `DeviceTypeAlarm` (122).
+
+## Snapshot commands (GB/T 28181-2022 A.2.1.24 + A.2.5.7)
+
+A platform can order on-demand captures with a
+`DeviceControl(SnapShot)` MESSAGE. Install a `SnapshotExecutor`
+(`SetSnapshotExecutor`, before `Start`) to execute them:
+
+```go
+type myExecutor struct{}
+
+func (myExecutor) Execute(ctx context.Context, cmd manscdp.SnapShotCmd) ([]string, error) {
+    // cmd.SnapNum (1..=10), cmd.Interval, cmd.UploadURL, cmd.SessionID —
+    // capture JPEGs and POST each body to cmd.UploadURL VERBATIM (it
+    // already carries the session parameter); return one ID per
+    // uploaded file.
+    return nil, errors.New("not implemented")
+}
+
+srv.SetSnapshotExecutor(myExecutor{})
+```
+
+The server answers the MESSAGE with 200 synchronously, runs the exchange
+in a goroutine, and completes with an `UploadSnapShotFinished` notify
+echoing the SessionID plus one `SnapShotFileID` per uploaded file — an
+empty list reports the exchange as wholly/partially failed. UDP
+transport only; without an executor — or over another transport — the
+control is explicitly rejected.

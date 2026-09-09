@@ -102,7 +102,7 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 | 教程 | 内容 |
 |---|---|
-| [设备端（UAC）](docs/zh/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID |
+| [设备端（UAC）](docs/zh/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID、快照指令（A.2.1.24 执行器接缝） |
 | [MANSCDP 编解码](docs/zh/manscdp.md) | 消息类型、元素/属性双形态、GB2312/GBK/GB18030/UTF-8 字符集 |
 | [PS 封装与 RTP](docs/zh/psmux.md) | `psmux.Muxer`、RTP 打包器（UDP/TCP）、封装器选型、`nalutil` |
 | [平台端（UAS）](docs/zh/platform.md) | `platform/sip` 服务器：配置、`DeviceStore`、`EventBus`、会话管理、活性 |
