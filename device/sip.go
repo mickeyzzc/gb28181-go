@@ -361,6 +361,8 @@ func statusReason(code int) string {
 		return "OK"
 	case 401:
 		return "Unauthorized"
+	case 403:
+		return "Forbidden"
 	case 404:
 		return "Not Found"
 	case 488:
@@ -371,6 +373,26 @@ func statusReason(code int) string {
 		return "Service Unavailable"
 	default:
 		return "Unknown"
+	}
+}
+
+// BuildStatusResponse builds a bodiless response echoing the request's
+// dialog headers (used by pre-dispatch refusals such as incoming Note
+// verification failures).
+func BuildStatusResponse(req SipMessage, code int) SipMessage {
+	to := req.To
+	if !strings.Contains(to, "tag=") {
+		to = to + ";tag=" + dialogTag
+	}
+	return SipMessage{
+		StatusCode: code,
+		Via:        req.Via,
+		From:       req.From,
+		To:         to,
+		CallID:     req.CallID,
+		CSeq:       req.CSeq,
+		UserAgent:  UserAgent,
+		Headers:    make(map[string]string),
 	}
 }
 

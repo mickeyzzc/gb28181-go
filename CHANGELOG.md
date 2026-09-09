@@ -11,6 +11,16 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(gb35114)` device-side downstream `Note` verification (#52): after
+  the A-level handshake, platform→device requests carrying a Note are
+  verified against the negotiated VKEK with a ±5-minute Date freshness
+  window (the replay guard — the digest alone is self-consistent).
+  Failure behavior is `device.Config.IncomingNotePolicy`: 403 under the
+  default Reject, log-only Warn for rollout observation, Off. Note-less
+  requests keep passing (mixed-mode Digest platforms), mirroring the
+  platform-side VerifyNote. New `device.IncomingNoteVerifier` seam;
+  `security35114.Authenticator` implements it. Verified end-to-end
+  against a fake platform signing with the real crypto.
 - `ci(release)` the tag workflow now publishes a GitHub Release (#46):
   per-platform tool bundles (device-register / platform-uas /
   psmux-rtp, tar.gz + zip for Windows) across a 7-platform matrix

@@ -196,6 +196,43 @@ func (a *Authenticator) DecorateOutgoing(method, from, to, callID, body string) 
 	return date, note
 }
 
+// NoteFreshnessWindow bounds how old a signed request's Date header may
+// be (and how far in the future): beyond it the Note is a replay. The
+// digest alone is self-consistent, so the window is the replay guard.
+const NoteFreshnessWindow = 5 * time.Minute
+
+// noteDateLayout is the wire Date format (see FormatDate).
+const noteDateLayout = "2006-01-02T15:04:05.000"
+
+// VerifyIncomingNote implements device.IncomingNoteVerifier (issue #52):
+// the device-side mirror of DecorateOutgoing — a platform→device request
+// carrying a Note is verified against the negotiated VKEK. A request
+// without a Note passes (mixed-mode Digest platforms). Malformed or
+// stale Dates fail closed: the freshness window is the only replay
+// guard, so a Date it cannot parse disables that guard.
+func (a *Authenticator) VerifyIncomingNote(method, from, to, callID, date, note, body string) error {
+	if note == "" {
+		return nil
+	}
+	a.mu.Lock()
+	vkek := a.vkek
+	a.mu.Unlock()
+	if vkek == nil {
+		return errors.New("security35114: incoming Note before the handshake completed")
+	}
+	stamp, err := time.Parse(noteDateLayout, date)
+	if err != nil {
+		return fmt.Errorf("security35114: incoming Note Date malformed: %w", err)
+	}
+	if skew := time.Since(stamp); skew > NoteFreshnessWindow || skew < -NoteFreshnessWindow {
+		return fmt.Errorf("security35114: incoming Note Date %s outside the ±%s freshness window", date, NoteFreshnessWindow)
+	}
+	if err := VerifyNoteHeader(note, method, from, to, callID, date, vkek, body, VKEKRaw); err != nil {
+		return fmt.Errorf("security35114: incoming Note rejected: %w", err)
+	}
+	return nil
+}
+
 // newRandom draws the 128-bit random2.
 func (a *Authenticator) newRandom() (string, error) {
 	buf := make([]byte, 16)

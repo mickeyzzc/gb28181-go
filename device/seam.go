@@ -25,6 +25,24 @@ import (
 	"time"
 )
 
+// GB35114NotePolicy selects the device-side behavior when a
+// platform→device request fails incoming Note verification (issue #52).
+type GB35114NotePolicy int
+
+const (
+	// GB35114NoteReject answers 403 Forbidden. The zero value: inside an
+	// authenticated A-level session a Note that does not verify is
+	// tampering and must fail closed. Note-less requests still pass
+	// (mixed-mode Digest platforms).
+	GB35114NoteReject GB35114NotePolicy = iota
+	// GB35114NoteWarn only logs the failure and serves the request — for
+	// rollout observation on deployments with clock skew or signature
+	// quirks.
+	GB35114NoteWarn
+	// GB35114NoteOff disables incoming Note verification entirely.
+	GB35114NoteOff
+)
+
 // Config holds GB28181 device (UAC) connection settings. YAML shapes are
 // identical to the source project's `gb28181:` section.
 type Config struct {
@@ -40,6 +58,12 @@ type Config struct {
 	HeartbeatIntervalSecs int    `yaml:"heartbeat_interval_secs"` // SIP keepalive heartbeat interval (seconds)
 	HeartbeatTimeoutCount int    `yaml:"heartbeat_timeout_count"` // Missed heartbeats before declaring timeout
 	Transport             string `yaml:"transport"`               // SIP transport: udp (default), tcp, or tls (SIPS, GB/T 28181-2022 A-level)
+
+	// IncomingNotePolicy sets the failure behavior of device-side Note
+	// verification for platform→device requests (issue #52). Only active
+	// when RegisterAuthenticator implements IncomingNoteVerifier (the
+	// GB35114 A-level reference implementation does). Default: reject.
+	IncomingNotePolicy GB35114NotePolicy `yaml:"incoming_note_policy"`
 
 	// MaxSIPMessageSize bounds one Content-Length framed message (headers +
 	// body) on the TCP/TLS read path — a forged Content-Length header must

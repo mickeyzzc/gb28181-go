@@ -200,6 +200,16 @@ func (s *Server) Start(ctx context.Context) error {
 				continue
 			}
 
+			// GB35114 A-level: platform→device requests are Note-verified
+			// before any method dispatch (issue #52).
+			if !s.allowIncomingNote(msg) {
+				forbidden := BuildStatusResponse(msg, 403)
+				if _, err := s.sipConn.WriteToUDP(forbidden.Serialize(), addr); err != nil {
+					slog.Warn("gb28181: failed to send 403", "method", msg.Method, "error", err)
+				}
+				continue
+			}
+
 			// Handle based on method
 			switch msg.Method {
 			case "INVITE":
@@ -223,6 +233,38 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// allowIncomingNote runs device-side Note verification on a
+// platform→device request (issue #52). Requests without a Note pass
+// (mixed-mode Digest platforms); a Note that fails verification follows
+// Config.IncomingNotePolicy (log-only under Warn, 403 under the default
+// Reject).
+func (s *Server) allowIncomingNote(msg SipMessage) bool {
+	if s.cfg.IncomingNotePolicy == GB35114NoteOff {
+		return true
+	}
+	verifier, ok := s.cfg.RegisterAuthenticator.(IncomingNoteVerifier)
+	if !ok || verifier == nil {
+		return true
+	}
+	note := msg.ExtensionHeader("Note")
+	if note == "" {
+		return true
+	}
+	err := verifier.VerifyIncomingNote(msg.Method, msg.From, msg.To, msg.CallID,
+		msg.ExtensionHeader("Date"), note, msg.Body)
+	if err == nil {
+		return true
+	}
+	if s.cfg.IncomingNotePolicy == GB35114NoteWarn {
+		slog.Warn("gb28181: incoming Note verification failed (warn policy, serving anyway)",
+			"method", msg.Method, "error", err)
+		return true
+	}
+	slog.Warn("gb28181: incoming Note verification failed, rejecting",
+		"method", msg.Method, "error", err)
+	return false
 }
 
 // Stop stops the server.

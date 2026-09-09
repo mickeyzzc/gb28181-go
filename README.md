@@ -73,7 +73,7 @@ The handshake follows the published standard text cross-checked against real cap
 
 Two points are ambiguous across implementations and therefore configurable (`RandomEncoding`, `Sign2Order`): the random representation inside the signed payload, and the R1/R2 operand order of `sign2`. Defaults match the standard text (wire-strings concatenation observed in captures; R1-first). SM3/SM2 come from [emmansun/gmsm](https://github.com/emmansun/gmsm) (pure Go, GM/T 0015-2012 SM2 X.509 certificates).
 
-Wire-format caveats: certificate provisioning is out of band (or `Options.IncludeDeviceCert` for platforms that accept the `cnonce` announcement), and incoming platform requests are not `Note`-verified on the device side yet.
+Wire-format caveats: certificate provisioning is out of band (or `Options.IncludeDeviceCert` for platforms that accept the `cnonce` announcement). Downstream `Note` verification (v0.7.0): after the handshake, platform→device requests carrying a `Note` are verified on the device side against the VKEK with a ±5-minute `Date` freshness window — a bad signature draws 403 by default (`device.Config.IncomingNotePolicy`, with `Warn`/`Off` for rollout), and `Note`-less requests keep passing (mixed-mode Digest platforms).
 
 ### Platform side (UAS, v0.5.0)
 
