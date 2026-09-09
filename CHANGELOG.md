@@ -11,6 +11,19 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` snapshot command execution (mibee-eye-raspi#28 / GB/T
+  28181-2022 A.2.1.24 + A.2.5.7): a DeviceControl(SnapShot) MESSAGE is
+  answered 200, handed to the new `device.SnapshotExecutor` seam
+  (`SetSnapshotExecutor`), and completes asynchronously with an
+  UploadSnapShotFinished notify echoing the SessionID plus one
+  SnapShotFileID per uploaded file — an empty list reports the exchange
+  as wholly/partially failed. The executor owns the product side
+  (capture + POST each JPEG body to the command's `UploadURL`
+  verbatim). Without an executor — or over a non-UDP transport — the
+  control is now explicitly rejected (parity with the Rust twin; a
+  fast failure for the platform, where previously the body fell
+  through parseQueryDual's parse-warn + silence).
+
 ## [v0.8.0] — 2026-09-09
 
 The snapshot-event capability package (requested by downstream MiBeeNvr
