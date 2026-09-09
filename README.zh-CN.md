@@ -74,7 +74,7 @@ cfg.RegisterAuthenticator = auth   // 取代 REGISTER 生命周期中的摘要�
 
 两处跨实现歧义点做成可配置项（`RandomEncoding`、`Sign2Order`）：签名负载中随机数的表示形式、`sign2` 的 R1/R2 操作数顺序。默认值遵循标准文本（拼接采用抓包观测的线格式字符串；R1 在前）。SM3/SM2 来自 [emmansun/gmsm](https://github.com/emmansun/gmsm)（纯 Go，GM/T 0015-2012 SM2 X.509 证书）。
 
-线格式注意事项：证书预置在带外完成（或对接受 `cnonce` 宣告的平台开启 `Options.IncludeDeviceCert`）；设备侧尚未对平台发来的请求做 `Note` 校验。
+线格式注意事项：证书预置在带外完成（或对接受 `cnonce` 宣告的平台开启 `Options.IncludeDeviceCert`）。下行 `Note` 校验（v0.7.0）：握手完成后，平台发往设备的带 `Note` 请求会在设备侧用 VKEK 验签并检查 `Date` ±5 分钟新鲜度窗口——签名不符默认回 403（`device.Config.IncomingNotePolicy` 可选 `Warn`/`Off` 便于灰度），无 `Note` 的请求照旧放行（兼容混跑的 Digest 平台）。
 
 ### 平台侧（UAS，v0.5.0）
 

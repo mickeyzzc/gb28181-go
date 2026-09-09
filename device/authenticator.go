@@ -33,3 +33,16 @@ type RegisterAuthenticator interface {
 type OutgoingSigner interface {
 	DecorateOutgoing(method, from, to, callID, body string) (date string, note string)
 }
+
+// IncomingNoteVerifier is optionally implemented by a
+// RegisterAuthenticator to authenticate every platform→device request
+// carrying a Note header — the device-side mirror of OutgoingSigner
+// (GB 35114 §9.4, issue #52). note is "" when the request carries no
+// Note; implementations decide whether that is acceptable (GB 35114
+// tolerates mixed-mode Digest platforms, mirroring the platform-side
+// VerifyNote). The date argument is the request's Date header — part of
+// the digest and the freshness anchor. Verification runs before method
+// dispatch; the failure behavior is Config.IncomingNotePolicy.
+type IncomingNoteVerifier interface {
+	VerifyIncomingNote(method, from, to, callID, date, note, body string) error
+}

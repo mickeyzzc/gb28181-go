@@ -194,6 +194,17 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 				continue
 			}
 
+			// GB35114 A-level: platform→device requests are Note-verified
+			// before any method dispatch (issue #52), mirroring the UDP
+			// read loop.
+			if !s.allowIncomingNote(msg) {
+				forbidden := BuildStatusResponse(msg, 403)
+				if err := s.sendSIP(forbidden.Serialize(), tcpAddr); err != nil {
+					slog.Warn("gb28181: failed to send 403", "method", msg.Method, "error", err)
+				}
+				continue
+			}
+
 			// Handle based on method
 			switch msg.Method {
 			case "INVITE":
