@@ -10,6 +10,12 @@ import (
 // notification (SUBSCRIBE Alarm / NOTIFY).
 const TopicGB28181Alarm = "gb28181.alarm"
 
+// TopicGB28181SnapshotFinished is published when a device reports the
+// GB/T 28181-2022 snapshot completion notify (MESSAGE, A.2.5.7). Hosts
+// correlate by SessionID; an empty FileIDs list means the capture/upload
+// failed wholly or partly.
+const TopicGB28181SnapshotFinished = "gb28181.snapshot.finished"
+
 // Event is one published occurrence on a topic.
 type Event struct {
 	Topic string
@@ -27,6 +33,16 @@ type GB28181AlarmEvent struct {
 	AlarmTime        string    `json:"alarm_time,omitempty"`
 	AlarmDescription string    `json:"alarm_description,omitempty"`
 	ReceivedAt       time.Time `json:"received_at"`
+}
+
+// GB28181SnapshotFinishedEvent is the payload published on
+// TopicGB28181SnapshotFinished.
+type GB28181SnapshotFinishedEvent struct {
+	DeviceID     string    `json:"device_id"`
+	SessionID    string    `json:"session_id"`
+	FileIDs      []string  `json:"file_ids,omitempty"` // SnapShotList entries; empty = failure
+	SuccessCount int       `json:"success_count"`
+	ReceivedAt   time.Time `json:"received_at"`
 }
 
 type eventSubscriber struct {

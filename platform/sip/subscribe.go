@@ -233,8 +233,8 @@ func (s *Server) handleAlarm(a manscdp.Alarm) {
 	}
 	s.subMu.Unlock()
 
-	if s.eventBus != nil {
-		s.eventBus.Publish(context.Background(), TopicGB28181Alarm, evt)
+	if bus := s.eventBusSnapshot(); bus != nil {
+		bus.Publish(context.Background(), TopicGB28181Alarm, evt)
 	}
 
 	// Alarm-triggered streaming (#355): INVITE the alarming channel when it

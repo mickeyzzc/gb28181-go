@@ -949,3 +949,44 @@ func (f *fakeDeviceStore) DeleteGB28181Channel(_ context.Context, channelID stri
 	delete(f.channels, channelID)
 	return nil
 }
+
+// TestServer_Message_UploadSnapShotFinished: the 2022 snapshot completion
+// notify (MESSAGE) must publish TopicGB28181SnapshotFinished with the
+// SessionID + SnapShotList and answer 200 — hosts close their pending
+// snapshot sessions on it.
+func TestServer_Message_UploadSnapShotFinished(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	client := newSIPClient(t, cfg.SIPListen)
+
+	bus := NewEventBus(8)
+	srv.SetEventBus(bus)
+	events := make(chan Event, 8)
+	if err := bus.Subscribe(TopicGB28181SnapshotFinished, events, 8); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:9999"})
+
+	body, err := manscdp.Encode(manscdp.BuildUploadSnapShotFinished(7, testDeviceID, "sess-1234", []string{"f1", "f2", "f3"}))
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	req := buildRequest(t, sip.MESSAGE, testDeviceID, testServerID, cfg.SIPListen, client.localPort(), string(body))
+	if res := client.roundTrip(req); res.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200", res.StatusCode())
+	}
+
+	select {
+	case ev := <-events:
+		fin, ok := ev.Data.(GB28181SnapshotFinishedEvent)
+		if !ok {
+			t.Fatalf("payload type %T", ev.Data)
+		}
+		if fin.DeviceID != testDeviceID || fin.SessionID != "sess-1234" || fin.SuccessCount != 3 {
+			t.Fatalf("event = %+v", fin)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no snapshot-finished event published")
+	}
+}

@@ -461,6 +461,15 @@ func (s *Server) SetEventBus(bus *EventBus) {
 	s.eventBus = bus
 }
 
+// eventBusSnapshot returns the publish bus under subMu — handlers run on
+// gosip goroutines while hosts (and tests) may call SetEventBus after
+// Start, so reads must not race the write.
+func (s *Server) eventBusSnapshot() *EventBus {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	return s.eventBus
+}
+
 // enroller snapshots the camera enroller under lock.
 func (s *Server) enroller() CameraEnroller {
 	s.mu.Lock()
@@ -1487,6 +1496,19 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		// Some firmwares deliver alarms as MESSAGE instead of NOTIFY —
 		// route both into the same pipeline.
 		s.handleAlarm(payload.(manscdp.Alarm))
+	case manscdp.CmdUploadSnapShotFinished:
+		p := payload.(manscdp.UploadSnapShotFinished)
+		slog.Info("gb28181: snapshot finished notify", "device", p.DeviceID,
+			"session", p.SessionID, "files", len(p.SnapShotList))
+		if bus := s.eventBusSnapshot(); bus != nil {
+			bus.Publish(context.Background(), TopicGB28181SnapshotFinished, GB28181SnapshotFinishedEvent{
+				DeviceID:     p.DeviceID,
+				SessionID:    p.SessionID,
+				FileIDs:      p.SnapShotList,
+				SuccessCount: len(p.SnapShotList),
+				ReceivedAt:   time.Now(),
+			})
+		}
 	case manscdp.CmdTimeSync:
 		// Device clock query (GB/T 28181-2016 § 9.6): answer with the
 		// platform wall clock so device-side timestamps (and RecordInfo
