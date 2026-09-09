@@ -55,6 +55,16 @@ func (s *Server) startTLSClient(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dialing SIPS %s: %w", addr, err)
 	}
+	// tls.Dial used to infer ServerName from the address; tls.Client does
+	// not — keep that behavior so configs without an explicit ServerName
+	// (or with InsecureSkipVerify) keep handshaking exactly as before.
+	if tlsCfg.ServerName == "" {
+		inferred := tlsCfg.Clone()
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			inferred.ServerName = host
+		}
+		tlsCfg = inferred
+	}
 	conn := tls.Client(raw, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
 	if err := conn.HandshakeContext(ctx); err != nil {
 		_ = raw.Close()
