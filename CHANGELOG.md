@@ -11,6 +11,8 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.7.0] — 2026-09-09
+
 - `test` soak harness (#45): `GB28181_SOAK=1 go test -run TestSoak
   ./conformance/` drives N (default 100) INVITE→frames→BYE cycles over
   one registered loopback pair with keepalives flowing, asserting no
