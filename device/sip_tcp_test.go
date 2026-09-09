@@ -296,3 +296,15 @@ func TestReadSIPStreamShortBody(t *testing.T) {
 	// truncated message.
 	expectStreamClosed(t, client)
 }
+
+// TestGetLocalIPHonorsCancelledContext pins issue #58: the route probe
+// dials through the lifecycle context, so a cancelled context aborts the
+// probe immediately instead of completing the dial.
+func TestGetLocalIPHonorsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := getLocalIP(ctx, "127.0.0.1:5060"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("getLocalIP with a cancelled context = %v, want context.Canceled", err)
+	}
+}

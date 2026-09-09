@@ -257,7 +257,7 @@ func (s *Service) Start(ctx context.Context) error {
 		go s.registerLoop(u)
 	}
 	s.wg.Add(1)
-	go s.catalogNotifyLoop()
+	go s.catalogNotifyLoop() //nolint:contextcheck // the loop reads Service.ctx directly (struct field)
 	slog.Info("gb28181-cascade: started",
 		"listen", listen, "uppers", len(s.uppers), "device", s.cfg.LocalDeviceID)
 	return nil
@@ -482,7 +482,7 @@ func (s *Service) localHostPort(u *upper) (string, int) {
 	}
 	if dst, err := upperAddr(u); err == nil {
 		// Route via the interface that reaches the upper platform.
-		if conn, err := net.DialUDP("udp", nil, dst); err == nil {
+		if conn, err := (&net.Dialer{}).DialContext(s.ctx, "udp", dst.String()); err == nil {
 			defer func() { _ = conn.Close() }()
 			if local, ok := conn.LocalAddr().(*net.UDPAddr); ok {
 				host := local.IP.String()

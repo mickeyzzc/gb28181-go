@@ -385,7 +385,7 @@ func (s *Server) catalogLoop(ctx context.Context) {
 				if dev.Status.Load() != platform.DeviceOnline {
 					continue
 				}
-				if err := s.requestCatalog(dev.ID); err != nil {
+				if err := s.requestCatalog(dev.ID); err != nil { //nolint:contextcheck // gosip request path carries no ctx; localIPFor's probe dial is packetless
 					slog.Debug("gb28181: periodic catalog refresh", "device", dev.ID, "error", err)
 				}
 			}
@@ -2021,7 +2021,9 @@ func parseSIPListen(listen string) (host string, port int, err error) {
 // correct local address for the route, which handles multi-homed hosts
 // and cross-subnet devices correctly. Falls back to localIP() on error.
 func (s *Server) localIPFor(remoteAddr string) string {
-	if conn, err := net.Dial("udp", remoteAddr); err == nil {
+	// Probe-only dial (no packets sent; remoteAddr is an IP literal in
+	// practice) — Background keeps the request-scoped helpers unchanged.
+	if conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", remoteAddr); err == nil {
 		defer conn.Close()
 		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP.To4() != nil {
 			return addr.IP.String()

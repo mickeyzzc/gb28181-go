@@ -94,10 +94,6 @@ linters:
         linters: [errcheck]
       - source: '(?m)^\t*\w*(\.\w+)?\.Close\(\)$'
         linters: [errcheck]
-      # Context plumbing through net.Dial/Listen is a tracked migration
-      # (follow-up issue); do not block lint adoption on it.
-      - linters: [noctx, contextcheck]
-        path: ^(device|platform)/.*\.go$
 
 formatters:
   enable:

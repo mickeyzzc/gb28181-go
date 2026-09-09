@@ -145,7 +145,7 @@ func (s *Server) subscribeLoop(ctx context.Context) {
 				if !ok || dev.Status.Load() != platform.DeviceOnline { // offline: re-REGISTER resubscribes
 					continue
 				}
-				if err := s.sendSubscribe(sub.deviceID, sub.subject); err != nil {
+				if err := s.sendSubscribe(sub.deviceID, sub.subject); err != nil { //nolint:contextcheck // gosip request path carries no ctx; localIPFor's probe dial is packetless
 					slog.Debug("gb28181: subscription refresh failed", "device", sub.deviceID, "subject", sub.subject, "error", err)
 				}
 			}

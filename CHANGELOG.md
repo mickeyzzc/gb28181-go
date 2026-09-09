@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+- `refactor` net.Dial/Listen → DialContext/ListenContext across the
+  device and platform dials/listens (#58): the lifecycle context now
+  interrupts route probes, media dials, the SIPS handshake, and SIP TCP
+  binds at graceful shutdown. Wire behavior is unchanged (the 5s media
+  dial timeouts are preserved); the blanket noctx/contextcheck exemption
+  for `device/`+`platform/` is gone, replaced by three targeted
+  structural exemptions (gosip request handlers carry no ctx).
+
 - `feat(gb35114)` device-side downstream `Note` verification (#52): after
   the A-level handshake, platform→device requests carrying a Note are
   verified against the negotiated VKEK with a ±5-minute Date freshness

@@ -242,7 +242,7 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 	var conn net.Conn
 	var dst *net.UDPAddr
 	if sd.tcp {
-		conn, err = net.DialTimeout("tcp", net.JoinHostPort(sd.host, strconv.Itoa(sd.port)), 5*time.Second)
+		conn, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(s.ctx, "tcp", net.JoinHostPort(sd.host, strconv.Itoa(sd.port)))
 		if err != nil {
 			slog.Warn("gb28181-cascade: TCP media dial failed", "channel", channelID, "upper", sd.host, "error", err)
 			_, _ = s.srv.RespondOnRequest(req, 500, "Internal Error", "", nil)
