@@ -99,3 +99,26 @@ parts, err := device.ParseDeviceID(id) // 中心/行业/类型/序号
 20 位编码：`[8 位行政区划][2 位行业][3 位类型][7 位序号]`。类型常量
 含 `DeviceTypeIPC`（111）、`DeviceTypeNVR`（118）、
 `DeviceTypeAlarm`（122）。
+
+## 快照指令（GB/T 28181-2022 A.2.1.24 + A.2.5.7）
+
+平台可用 `DeviceControl(SnapShot)` MESSAGE 下发按需抓拍。安装
+`SnapshotExecutor`（`SetSnapshotExecutor`，需在 `Start` 前）即可执行：
+
+```go
+type myExecutor struct{}
+
+func (myExecutor) Execute(ctx context.Context, cmd manscdp.SnapShotCmd) ([]string, error) {
+    // cmd.SnapNum（1..=10）、cmd.Interval、cmd.UploadURL、cmd.SessionID ——
+    // 抓 JPEG 并把每帧 body **原样** POST 到 cmd.UploadURL（URL 已带
+    // session 参数）；每帧返回一个上传文件 ID。
+    return nil, errors.New("not implemented")
+}
+
+srv.SetSnapshotExecutor(myExecutor{})
+```
+
+服务端先同步应答 200，在独立 goroutine 中执行交换，最后回
+`UploadSnapShotFinished` 通知——回带 SessionID，每个成功上传的文件
+对应一个 `SnapShotFileID`；空列表表示抓拍/上传全部或部分失败。
+仅支持 UDP 传输；未安装执行器、或其他传输下，控制指令被显式拒绝。

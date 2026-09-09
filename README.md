@@ -101,7 +101,7 @@ Topic guides live under [`docs/en/`](docs/en/) — each has a Chinese counterpar
 
 | Guide | Covers |
 |---|---|
-| [Device (UAC)](docs/en/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs |
+| [Device (UAC)](docs/en/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs, snapshot commands (A.2.1.24 executor seam) |
 | [MANSCDP codec](docs/en/manscdp.md) | message types, element/attribute dual form, GB2312/GBK/GB18030/UTF-8 charsets |
 | [PS muxer & RTP](docs/en/psmux.md) | `psmux.Muxer`, RTP packetizers (UDP/TCP), which muxer to pick, `nalutil` |
 | [Platform (UAS)](docs/en/platform.md) | `platform/sip` server: config, `DeviceStore`, `EventBus`, session manager, liveness |
