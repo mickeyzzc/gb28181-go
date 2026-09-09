@@ -461,6 +461,15 @@ func (s *Server) SetEventBus(bus *EventBus) {
 	s.eventBus = bus
 }
 
+// eventBusSnapshot returns the publish bus under subMu — handlers run on
+// gosip goroutines while hosts (and tests) may call SetEventBus after
+// Start, so reads must not race the write.
+func (s *Server) eventBusSnapshot() *EventBus {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	return s.eventBus
+}
+
 // enroller snapshots the camera enroller under lock.
 func (s *Server) enroller() CameraEnroller {
 	s.mu.Lock()
@@ -1491,8 +1500,8 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 		p := payload.(manscdp.UploadSnapShotFinished)
 		slog.Info("gb28181: snapshot finished notify", "device", p.DeviceID,
 			"session", p.SessionID, "files", len(p.SnapShotList))
-		if s.eventBus != nil {
-			s.eventBus.Publish(context.Background(), TopicGB28181SnapshotFinished, GB28181SnapshotFinishedEvent{
+		if bus := s.eventBusSnapshot(); bus != nil {
+			bus.Publish(context.Background(), TopicGB28181SnapshotFinished, GB28181SnapshotFinishedEvent{
 				DeviceID:     p.DeviceID,
 				SessionID:    p.SessionID,
 				FileIDs:      p.SnapShotList,
