@@ -6,6 +6,13 @@ on:
   pull_request:
 
 jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repo hygiene gate (junk/secret files must not be tracked)
+        run: tools/check-repo-hygiene.sh
+
   lint:
     # golangci-lint aligned with onvif-go's v2 config (issue #43); runs the
     # gb35114 build tag in the same pass so tagged code is linted too.
