@@ -98,16 +98,11 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 ## 文档
 
-专题教程在 [`docs/zh/`](docs/zh/) —— 每篇在 `docs/en/` 下有英文对照版：
+专题手册已迁移至 MiBee 文档中心——库手册唯一真源（双语）：
 
-| 教程 | 内容 |
-|---|---|
-| [设备端（UAC）](docs/zh/device.md) | `device.Config` 全字段、`FrameSource`/`FrameHub`、录像与回放、UDP/TCP/TLS、设备 ID、快照指令（A.2.1.24 执行器接缝） |
-| [MANSCDP 编解码](docs/zh/manscdp.md) | 消息类型、元素/属性双形态、GB2312/GBK/GB18030/UTF-8 字符集 |
-| [PS 封装与 RTP](docs/zh/psmux.md) | `psmux.Muxer`、RTP 打包器（UDP/TCP）、封装器选型、`nalutil` |
-| [平台端（UAS）](docs/zh/platform.md) | `platform/sip` 服务器：配置、`DeviceStore`、`EventBus`、会话管理、活性 |
-| [级联客户端](docs/zh/cascade.md) | 注册上级平台：`CameraSource`/`Store`/`SegmentParser` 接缝 |
+> **https://www.mlsbs.top/docs/mibeelibs**
 
+手册修改向文档中心提 PR（流程见该仓 GOVERNANCE）。本仓 [`docs/README.md`](docs/README.md) 保留引导页。
 ## 示例
 
 [`examples/`](examples/) 下可直接 `go run` 的完整示例：

@@ -97,16 +97,13 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config; digest path unt
 
 ## Documentation
 
-Topic guides live under [`docs/en/`](docs/en/) — each has a Chinese counterpart under `docs/zh/`:
+Topic guides now live in the MiBee documentation hub — the single
+source of truth for library manuals, bilingual:
 
-| Guide | Covers |
-|---|---|
-| [Device (UAC)](docs/en/device.md) | full `device.Config` reference, `FrameSource`/`FrameHub`, recordings & playback, UDP/TCP/TLS, device IDs, snapshot commands (A.2.1.24 executor seam) |
-| [MANSCDP codec](docs/en/manscdp.md) | message types, element/attribute dual form, GB2312/GBK/GB18030/UTF-8 charsets |
-| [PS muxer & RTP](docs/en/psmux.md) | `psmux.Muxer`, RTP packetizers (UDP/TCP), which muxer to pick, `nalutil` |
-| [Platform (UAS)](docs/en/platform.md) | `platform/sip` server: config, `DeviceStore`, `EventBus`, session manager, liveness |
-| [Cascade client](docs/en/cascade.md) | registering to an upper platform: `CameraSource`/`Store`/`SegmentParser` seams |
+> **https://www.mlsbs.top/docs/mibeelibs**
 
+Manual changes go there by PR (review flow in the hub repo's GOVERNANCE).
+[`docs/README.md`](docs/README.md) keeps the redirect.
 ## Examples
 
 Runnable examples under [`examples/`](examples/) — each is a `main` package you can `go run`:
