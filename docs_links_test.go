@@ -7,11 +7,14 @@ import (
 	"testing"
 )
 
-// TestDocsLinksResolve guards the README documentation indexes: every
-// relative markdown link in the READMEs and docs/ guides must point at a
-// file that exists. A moved or renamed topic file otherwise 404s silently
-// on GitHub (the index once linked docs/foo.md while the files live under
-// docs/en/ and docs/zh/).
+// TestDocsLinksResolve guards the READMEs and the docs/ redirect page:
+// every relative markdown link must point at a file that exists. A moved
+// or renamed file otherwise 404s silently on GitHub.
+//
+// The topic manuals moved to the MiBee documentation hub (mibee-docs#6,
+// single source of truth); docs/ is intentionally a one-page redirect now.
+// The old floors (>=10 markdown files, >=20 links) guarded the removed
+// in-repo corpus and no longer apply.
 func TestDocsLinksResolve(t *testing.T) {
 	files := []string{"README.md", "README.zh-CN.md"}
 	err := filepath.WalkDir("docs", func(path string, d os.DirEntry, err error) error {
@@ -26,8 +29,8 @@ func TestDocsLinksResolve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk docs/: %v", err)
 	}
-	if len(files) < 10 {
-		t.Fatalf("expected markdown files to check, found %d", len(files))
+	if len(files) < 3 {
+		t.Fatalf("expected READMEs + docs redirect page, found %d", len(files))
 	}
 
 	checked := 0
@@ -45,7 +48,7 @@ func TestDocsLinksResolve(t *testing.T) {
 			}
 		}
 	}
-	if checked < 20 {
+	if checked < 3 {
 		t.Fatalf("expected a meaningful number of links, checked %d", checked)
 	}
 	if len(broken) > 0 {
@@ -108,4 +111,24 @@ func relativeLinkTargets(text string) []string {
 		text = rest[end:]
 	}
 	return out
+}
+
+// TestDocsIsSingleRedirectPage pins the post-migration contract
+// (mibee-docs#6): docs/ holds exactly one redirect page pointing at the
+// documentation hub, so manuals cannot drift back into this repository.
+func TestDocsIsSingleRedirectPage(t *testing.T) {
+	entries, err := os.ReadDir("docs")
+	if err != nil {
+		t.Fatalf("read docs/: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "README.md" {
+		t.Fatalf("docs/ must contain only the redirect README.md, found %d entries", len(entries))
+	}
+	raw, err := os.ReadFile(filepath.Join("docs", "README.md"))
+	if err != nil {
+		t.Fatalf("read docs/README.md: %v", err)
+	}
+	if !strings.Contains(string(raw), "https://www.mlsbs.top/docs/mibeelibs") {
+		t.Fatal("docs/README.md must link the documentation hub")
+	}
 }
