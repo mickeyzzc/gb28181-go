@@ -1123,6 +1123,12 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// GB/T 28181-2022 Annex I: identify the device's protocol version when
+	// it announces one (informational — 2016-era devices omit the header).
+	if ver := rawHeaderValue(req, XGBVerHeaderName); ver != "" {
+		slog.Info("gb28181: device announced protocol version", "device", deviceID, "x_gb_ver", ver)
+	}
+
 	// GB35114 A-level REGISTERs announce themselves through their
 	// Authorization scheme (Capability/Unidirection/Bidirection) instead of
 	// Digest; route them to the configured authenticator when present.
@@ -1140,7 +1146,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			}
 			slog.Info("gb28181: GB35114 challenge sent", "device", deviceID, "source", req.Source())
 			s.respond(req, tx, statusUnauthorized, "Unauthorized",
-				[]sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: wwwAuth}})
+				appendXGBVer([]sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: wwwAuth}}, s.cfg.ProtocolVersion))
 			return
 		case "Unidirection", "Bidirection":
 			si, err := s.cfg.RegisterAuthenticator.VerifyRegister(deviceID, authVal)
@@ -1298,6 +1304,7 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 	if securityInfo != "" {
 		okHeaders = append(okHeaders, &sip.GenericHeader{HeaderName: "SecurityInfo", Contents: securityInfo})
 	}
+	okHeaders = appendXGBVer(okHeaders, s.cfg.ProtocolVersion)
 	s.respond(req, tx, statusOK, "OK", okHeaders)
 
 	if expires != 0 {
@@ -1880,6 +1887,7 @@ func (s *Server) send401Challenge(req sip.Request, tx sip.ServerTransaction) {
 	}
 	value := fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5`, realm, generateNonce())
 	headers := []sip.Header{&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: value}}
+	headers = appendXGBVer(headers, s.cfg.ProtocolVersion)
 	s.respond(req, tx, statusUnauthorized, "Unauthorized", headers)
 }
 

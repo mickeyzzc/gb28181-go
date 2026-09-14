@@ -96,6 +96,16 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 `DeviceControl` 携带 2022 版图像抓拍命令（`SnapShot`：`SnapNum`/`Interval`/`UploadURL`/`SessionID`，A.2.1.24）；`manscdp.Decode` 解析 `UploadSnapShotFinished` 完成通知（A.2.5.7，`SnapShotList`/`SnapShotFileID`）；`platform.PTZController` 新增 `SendSnapShotCmd` / `StartManualRecord` / `StopManualRecord`。
 
+### 多级级联激活接缝（v0.10.0）与 GB28181-2022 对齐
+
+**HubActivator（issue #73，MiBeeNvr #451）**——上级平台点播 hub 空闲的通道（未在录的 GB 子设备相机）时，级联先经 `platform/cascade.Service.SetHubActivator` 注入的激活器拉起主码流，由 `Config.HubActivationTimeout`（默认 10s）限时；拿到真实 hub 才回 200，失败保持原 500、绝不建立无媒体对话。一次激活转发持有一个引用，会话拆除（BYE / supersede / Stop）时释放。未注入激活器时行为与原实现逐字节一致。`Config.RoutePathAnnounce`（可选，20 位平台编码）按附录 H.3 在 INVITE 200 应答上携带 `X-RoutePath` 供多级路径发现；入向 `X-PreferredPath` 会被解析并记录。
+
+**2022 信令增量**（全部可选或仅解析——默认线格式不变）：
+
+- 五组 2022 信息查询进入 `manscdp` 编解码（golden 钉标准原文 A.2.4.10-14 / A.2.6.12-16）：`HomePositionQuery`、`CruiseTrackListQuery`、`CruiseTrackQuery`、`PTZPosition`、`SDCardStatus`。设备角色对它们给出"空能力"的最小合法应答，不再落入旧的未知 CmdType 静默。
+- `X-GB-Ver` 协议版本标识（附录 I）：`device.Config.ProtocolVersion` / `platform/sip.Config.ProtocolVersion`（可选，2022 填 "3.0"）在 REGISTER 及其应答上携带；设备侧经 `Server.PlatformProtocolVersion()` 感知平台版本。
+- **SVAC 音频 stream_type 修正为 `0x9B`**（附录 C 表；原实现误为 `0x81`，对照标准原文核查时发现的线格式 bug），PS 复用器新增 AAC 音频（`0x0F`）声明。
+
 ## 文档
 
 专题手册已迁移至 MiBee 文档中心——库手册唯一真源（双语）：

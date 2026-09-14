@@ -11,6 +11,38 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(manscdp)` GB/T 28181-2022 information queries (standard foreword
+  additions): the five query/response pairs — `HomePositionQuery`,
+  `CruiseTrackListQuery`, `CruiseTrackQuery`, `PTZPosition`,
+  `SDCardStatus` — join the codec with golden strings pinned to the
+  standard text (A.2.4.10-14 / A.2.6.12-16); responses reuse the query
+  CmdType under a Response root, as RecordInfo does. The device role
+  answers all five with the minimal valid empty-capability responses
+  (optional blocks omitted, required SumNum zero) instead of the legacy
+  unknown-CmdType warn + silence.
+- `feat(sip)` X-GB-Ver protocol-version identification (2022 Annex I):
+  `device.Config.ProtocolVersion` / `platform/sip.Config.ProtocolVersion`
+  (opt-in, e.g. "3.0") stamp the header on REGISTER and its 401/200
+  responses; the peer's version is logged on the platform side and
+  exposed via `device.Server.PlatformProtocolVersion()`. Unconfigured,
+  the wire form is unchanged.
+- `feat(cascade)` X-RoutePath path announcement (2022 Annex H.3):
+  `Config.RoutePathAnnounce` (optional 20-digit platform ID) stamps
+  `X-RoutePath` on INVITE 200 responses — a middle platform tells the
+  upper where the session anchored; incoming `X-PreferredPath` is parsed
+  and logged. `platform/sip` exports `ParsePlatformIDList` /
+  `FormatPlatformIDList` / `RoutePathHeader`.
+- `fix(psmux)` SVAC-audio stream_type corrected to `0x9B` per the 2022
+  Annex C table (was `0x81` — a wire bug found by diffing against the
+  standard text; golden updated with the correction note). AAC audio
+  (`0x0F`) is now settable via `SetAudioCodec("aac")`.
+- `test(sip)` seek-phase INFO assertions skip stale resume
+  retransmissions (#75) — the second sighting of the
+  TestPlaybackControlResumeSeek CI flake is closed by answering
+  non-matching bodies with a bare 200 (gosip matches responses by CSeq,
+  so the seek transaction still waits for its own answer); the wire
+  contract verification is not weakened.
+
 - `feat(cascade)` on-demand main-stream activation (multi-level cascade,
   MiBeeNvr #451): the upper platform's INVITE for a channel whose hub is
   idle — a GB28181 child camera that is not currently recording — now

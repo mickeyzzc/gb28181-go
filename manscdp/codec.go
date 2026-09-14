@@ -122,6 +122,29 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		// device side rejects the query with 400 and the upper platform
 		// sees an empty recording list.
 		return unmarshalAs[RecordInfoQuery](body, CmdRecordInfo)
+	// GB/T 28181-2022 information queries: the Query root is the
+	// platform's ask, the Response root (same CmdType) is the device's
+	// answer (A.2.4.10-14 / A.2.6.12-16).
+	case probe.CmdType == CmdHomePositionQuery && probe.XMLName.Local == "Query":
+		return unmarshalAs[HomePositionQuery](body, CmdHomePositionQuery)
+	case probe.CmdType == CmdHomePositionQuery:
+		return unmarshalAs[HomePositionResponse](body, CmdHomePositionQuery)
+	case probe.CmdType == CmdCruiseTrackListQuery && probe.XMLName.Local == "Query":
+		return unmarshalAs[CruiseTrackListQuery](body, CmdCruiseTrackListQuery)
+	case probe.CmdType == CmdCruiseTrackListQuery:
+		return unmarshalAs[CruiseTrackListResponse](body, CmdCruiseTrackListQuery)
+	case probe.CmdType == CmdCruiseTrackQuery && probe.XMLName.Local == "Query":
+		return unmarshalAs[CruiseTrackQuery](body, CmdCruiseTrackQuery)
+	case probe.CmdType == CmdCruiseTrackQuery:
+		return unmarshalAs[CruiseTrackResponse](body, CmdCruiseTrackQuery)
+	case probe.CmdType == CmdPTZPosition && probe.XMLName.Local == "Query":
+		return unmarshalAs[PTZPositionQuery](body, CmdPTZPosition)
+	case probe.CmdType == CmdPTZPosition:
+		return unmarshalAs[PTZPositionResponse](body, CmdPTZPosition)
+	case probe.CmdType == CmdSDCardStatus && probe.XMLName.Local == "Query":
+		return unmarshalAs[SDCardStatusQuery](body, CmdSDCardStatus)
+	case probe.CmdType == CmdSDCardStatus:
+		return unmarshalAs[SDCardStatusResponse](body, CmdSDCardStatus)
 	}
 	switch probe.CmdType {
 	case CmdCatalog:

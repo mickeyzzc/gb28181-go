@@ -31,6 +31,8 @@ type Query struct {
 	EndTime    string   `xml:"EndTime"`
 	Type       string   `xml:"Type"`
 	StreamType string   `xml:"StreamType"`
+	// Number is the GB/T 28181-2022 CruiseTrackQuery track index (A.2.4.12).
+	Number string `xml:"Number"`
 }
 
 // QueryElem represents a MANSCDP Query request with child-element format (for NVR compatibility).
@@ -43,6 +45,7 @@ type QueryElem struct {
 	EndTime    string   `xml:"EndTime"`
 	Type       string   `xml:"Type"`
 	StreamType string   `xml:"StreamType"`
+	Number     string   `xml:"Number"`
 }
 
 // Response represents a MANSCDP Response message.
@@ -131,6 +134,7 @@ func parseQueryDual(body string) (Query, bool) {
 			EndTime:    queryElem.EndTime,
 			Type:       queryElem.Type,
 			StreamType: queryElem.StreamType,
+			Number:     queryElem.Number,
 		}, true
 	}
 	return Query{}, false
@@ -156,6 +160,53 @@ func parseNotifyDual(body string) (Notify, bool) {
 		}, true
 	}
 	return Notify{}, false
+}
+
+// gb2022QueryResponse is the minimal GB/T 28181-2022 information-query
+// answer (A.2.6.12-16): identity fields plus the required SumNum/Number
+// echoes; every optional capability block is omitted.
+type gb2022QueryResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  string   `xml:"CmdType,attr"`
+	SN       string   `xml:"SN,attr"`
+	DeviceID string   `xml:"DeviceID"`
+	SumNum   *int     `xml:"SumNum,omitempty"`
+	Number   *int     `xml:"Number,omitempty"`
+}
+
+// BuildGB2022QueryResponseMessage answers the 2022 information queries
+// (HomePositionQuery / CruiseTrackListQuery / CruiseTrackQuery / PTZPosition
+// / SDCardStatus) with the empty-capability form: no home position, no
+// cruise tracks, no PTZ telemetry, no storage card. number echoes the
+// CruiseTrackQuery track index (ignored for the others).
+func BuildGB2022QueryResponseMessage(cmdType, sn, deviceID, number string) SipMessage {
+	resp := gb2022QueryResponse{
+		CmdType:  cmdType,
+		SN:       sn,
+		DeviceID: deviceID,
+	}
+	switch cmdType {
+	case "CruiseTrackListQuery", "CruiseTrackQuery", "SDCardStatus":
+		zero := 0
+		resp.SumNum = &zero
+	}
+	if cmdType == "CruiseTrackQuery" && number != "" {
+		if n, err := strconv.Atoi(number); err == nil {
+			resp.Number = &n
+		}
+	}
+	xmlData, err := xml.Marshal(resp)
+	if err != nil {
+		slog.Error("Failed to marshal GB28181-2022 query response", "error", err)
+		return SipMessage{}
+	}
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        string(xmlData),
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
 }
 
 // PlaybackControl is a parsed SIP INFO PlaybackControl command body.
@@ -531,6 +582,16 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 			ok200 := Build200OK(msg, "", "")
 			controlReject := BuildControlRejectResponseMessage(query.CmdType, query.SN, query.DeviceID)
 			return ok200, &controlReject, nil
+		case "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus":
+			// GB/T 28181-2022 information queries (A.2.4.10-14): answer with
+			// the minimal valid Response (A.2.6.12-16). This device has no
+			// PTZ hardware, cruise tracks, or storage card, so every
+			// optional block is omitted and required SumNum fields are
+			// zero — previously these fell through the unknown-CmdType
+			// warn + silence below.
+			ok200 := Build200OK(msg, "", "")
+			resp := BuildGB2022QueryResponseMessage(query.CmdType, query.SN, query.DeviceID, query.Number)
+			return ok200, &resp, nil
 		default:
 			slog.Warn("Unknown Query CmdType", "cmdtype", query.CmdType)
 			ok200 := Build200OK(msg, "", "")

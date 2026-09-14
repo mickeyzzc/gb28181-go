@@ -14,6 +14,7 @@ import (
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/platform"
+	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 	"github.com/mickeyzzc/gb28181-go/psmux"
 )
 
@@ -327,10 +328,31 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 	s.sessions[callID] = ms
 	s.mu.Unlock()
 
-	_, _ = s.srv.RespondOnRequest(req, 200, "OK", ms.sdpBody, nil)
+	// GB/T 28181-2022 Annex H.3: announce the anchoring platform on the
+	// 200 via X-RoutePath (multi-level cascade path discovery), and log
+	// the upper's X-PreferredPath when it expressed a routing preference.
+	var okHeaders []sip.Header
+	if h := gbsip.RoutePathHeader(s.cfg.RoutePathAnnounce); h != nil {
+		okHeaders = append(okHeaders, h)
+	}
+	if pref := requestHeaderValue(req, "X-PreferredPath"); pref != "" {
+		slog.Info("gb28181-cascade: INVITE expressed routing preference", "channel", channelID, "x_preferred_path", pref)
+	}
+	_, _ = s.srv.RespondOnRequest(req, 200, "OK", ms.sdpBody, okHeaders)
 	go ms.run(hub)
 	slog.Info("gb28181-cascade: INVITE accepted — forwarding",
 		"channel", channelID, "camera", cameraID, "to", dst.String(), "ssrc", sd.ssrc)
+}
+
+// requestHeaderValue returns the raw text of a request header (""
+// when absent) — path headers must reach logging byte-for-byte.
+func requestHeaderValue(req sip.Request, name string) string {
+	for _, h := range req.GetHeaders(name) {
+		if gh, ok := h.(*sip.GenericHeader); ok {
+			return strings.TrimSpace(gh.Contents)
+		}
+	}
+	return ""
 }
 
 func abs64(v int64) int64 {

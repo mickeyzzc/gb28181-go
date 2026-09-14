@@ -42,11 +42,14 @@ type Server struct {
 	// tcpConns tracks active TCP/TLS SIP connections keyed by remote address
 	tcpConns sync.Map
 	// tlsRemote is the SIPS connection's remote-address key (transport="tls")
-	tlsRemote   string
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	mediaCancel context.CancelFunc
-	sub         *FrameSubscription
+	tlsRemote string
+	mu        sync.Mutex
+	// protoVerMu guards platformProtoVer (REGISTER X-GB-Ver, Annex I).
+	protoVerMu       sync.Mutex
+	platformProtoVer string
+	cancel           context.CancelFunc
+	mediaCancel      context.CancelFunc
+	sub              *FrameSubscription
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
 	// regRespCh routes REGISTER responses from the recv loop to an active
@@ -745,6 +748,9 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	slog.Info("gb28181: sending initial REGISTER")
 	regMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, initialAuth)
 	regMsg.Via = via
+	if s.cfg.ProtocolVersion != "" {
+		regMsg.Headers[XGBVerHeaderName] = s.cfg.ProtocolVersion
+	}
 	if err := s.sendToPlatform(regMsg, platformAddr); err != nil {
 		return fmt.Errorf("sending REGISTER: %w", err)
 	}
@@ -754,6 +760,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	if err != nil {
 		return fmt.Errorf("reading REGISTER response: %w", err)
 	}
+	s.notePlatformProtocolVersion(*resp)
 
 	// Handle 401 Unauthorized
 	if resp.StatusCode == 401 {
@@ -775,6 +782,9 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 		authMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, authHeader)
 		via2 := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", viaTransport, localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
 		authMsg.Via = via2
+		if s.cfg.ProtocolVersion != "" {
+			authMsg.Headers[XGBVerHeaderName] = s.cfg.ProtocolVersion
+		}
 
 		if err := s.sendToPlatform(authMsg, platformAddr); err != nil {
 			return fmt.Errorf("sending authenticated REGISTER: %w", err)
@@ -785,6 +795,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 		if err != nil {
 			return fmt.Errorf("reading 200 OK response: %w", err)
 		}
+		s.notePlatformProtocolVersion(*resp)
 
 		if resp.StatusCode == 200 {
 			if s.cfg.RegisterAuthenticator != nil {
@@ -804,6 +815,37 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	}
 
 	return fmt.Errorf("unexpected REGISTER response: %d", resp.StatusCode)
+}
+
+// XGBVerHeaderName is the REGISTER protocol-version header (GB/T
+// 28181-2022 Annex I: "3.0"=2022, "2.0"=2016). Both sides announce their
+// version during registration; the higher side should then avoid messages
+// the lower one cannot parse.
+const XGBVerHeaderName = "X-GB-Ver"
+
+// notePlatformProtocolVersion records the platform's X-GB-Ver from a
+// REGISTER response (Annex I). Absent header (2016-era platforms) keeps
+// the previous value.
+func (s *Server) notePlatformProtocolVersion(resp SipMessage) {
+	ver := resp.ExtensionHeader(XGBVerHeaderName)
+	if ver == "" {
+		return
+	}
+	s.protoVerMu.Lock()
+	changed := s.platformProtoVer != ver
+	s.platformProtoVer = ver
+	s.protoVerMu.Unlock()
+	if changed {
+		slog.Info("gb28181: platform protocol version", "x_gb_ver", ver)
+	}
+}
+
+// PlatformProtocolVersion returns the platform's X-GB-Ver as last seen on
+// a REGISTER response ("" when the platform never announced one).
+func (s *Server) PlatformProtocolVersion() string {
+	s.protoVerMu.Lock()
+	defer s.protoVerMu.Unlock()
+	return s.platformProtoVer
 }
 
 // sendKeepalive sends a keepalive MESSAGE to the platform.

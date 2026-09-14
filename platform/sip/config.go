@@ -24,6 +24,12 @@ type Config struct {
 	// Password is the SIP digest-auth secret that registered devices must use.
 	Password string `yaml:"password"`
 
+	// ProtocolVersion, when non-empty, is stamped as the X-GB-Ver header on
+	// REGISTER responses (GB/T 28181-2022 Annex I: "3.0"=2022, "2.0"=2016).
+	// Empty (default) omits the header — the peer's REGISTER X-GB-Ver is
+	// still parsed and logged either way.
+	ProtocolVersion string `yaml:"protocol_version"`
+
 	// RegisterFailureLimit is the number of REGISTER authentication
 	// failures (digest or GB35114) from one source host before a temporary
 	// lockout; unset = 5, negative disables the limiter (issue #38).

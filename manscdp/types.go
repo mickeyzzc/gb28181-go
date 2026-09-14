@@ -30,6 +30,13 @@ const (
 	CmdTimeSync               CmdType = "TimeSync"
 	CmdBroadcast              CmdType = "Broadcast"
 	CmdMobilePosition         CmdType = "MobilePosition"
+	// GB/T 28181-2022 information queries (A.2.4.10-14): responses reuse
+	// these CmdType strings under a Response root (A.2.6.12-16).
+	CmdHomePositionQuery    CmdType = "HomePositionQuery"
+	CmdCruiseTrackListQuery CmdType = "CruiseTrackListQuery"
+	CmdCruiseTrackQuery     CmdType = "CruiseTrackQuery"
+	CmdPTZPosition          CmdType = "PTZPosition"
+	CmdSDCardStatus         CmdType = "SDCardStatus"
 )
 
 // Catalog is a device's response to a platform Catalog query. It lists the

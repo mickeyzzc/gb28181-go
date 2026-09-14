@@ -15,7 +15,8 @@ const (
 	streamTypeH264  = 0x1B
 	streamTypeH265  = 0x24
 	streamTypeSVACV = 0x80 // SVAC video (GB/T 28181-2022)
-	streamTypeSVACA = 0x81 // SVAC audio (GB/T 28181-2022)
+	streamTypeAAC   = 0x0F // AAC audio (GB/T 28181-2022 Annex C stream_type table)
+	streamTypeSVACA = 0x9B // SVAC audio (GB/T 28181-2022 Annex C stream_type table; was 0x81, corrected against the standard text)
 
 	streamTypeG711A = 0x90
 	streamTypeG711U = 0x91
@@ -74,6 +75,8 @@ func (m *Muxer) SetAudioCodec(codec string) {
 		m.audioType = streamTypeG711U
 	case "svac":
 		m.audioType = streamTypeSVACA
+	case "aac":
+		m.audioType = streamTypeAAC
 	default:
 		m.audioType = 0
 	}

@@ -46,7 +46,12 @@ const (
 // Config holds GB28181 device (UAC) connection settings. YAML shapes are
 // identical to the source project's `gb28181:` section.
 type Config struct {
-	Enabled               bool   `yaml:"enabled"`                 // Enable GB28181 registration (default: false)
+	Enabled bool `yaml:"enabled"` // Enable GB28181 registration (default: false)
+	// ProtocolVersion, when non-empty, is sent as the X-GB-Ver header on
+	// REGISTER (GB/T 28181-2022 Annex I: "3.0"=2022, "2.0"=2016). The
+	// platform's version, when it answers with one, is exposed via
+	// Server.PlatformProtocolVersion(). Empty (default) omits the header.
+	ProtocolVersion       string `yaml:"protocol_version"`
 	PlatformSIPAddress    string `yaml:"platform_sip_address"`    // SIP server (platform) address
 	PlatformSIPPort       int    `yaml:"platform_sip_port"`       // SIP server (platform) port
 	DeviceID              string `yaml:"device_id"`               // GB28181 device ID (20 digits)

@@ -50,6 +50,13 @@ type Config struct {
 	// when an INVITEd channel's hub is idle (HubActivator). Default "10s".
 	HubActivationTimeout string `yaml:"hub_activation_timeout,omitempty"`
 
+	// RoutePathAnnounce is this platform's 20-digit GB ID (digits 11-13
+	// "200"). When set, INVITE 200 responses carry it as X-RoutePath
+	// (GB/T 28181-2022 Annex H.3): a middle platform tells the upper where
+	// the session was anchored. X-PreferredPath in incoming INVITEs is
+	// parsed and logged either way.
+	RoutePathAnnounce string `yaml:"route_path_announce,omitempty"`
+
 	// Upstreams appends additional upper platforms beyond the legacy single
 	// form (ServerAddr non-empty becomes uppers[0]).
 	Upstreams []Upstream `yaml:"upstreams,omitempty"`

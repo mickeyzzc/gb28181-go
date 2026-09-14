@@ -196,7 +196,9 @@ func TestSVACVideoRoundTrip(t *testing.T) {
 }
 
 // TestSVACPSMDeclaresStreamTypes pins the PSM bytes: stream_type 0x80 for
-// SVAC video and 0x81 for SVAC audio (GB/T 28181-2022 Table).
+// SVAC video and 0x9B for SVAC audio, per the GB/T 28181-2022 Annex C
+// stream_type table (c) SVAC 视频 0x80, j) SVAC 音频 0x9B. The audio value
+// was previously — incorrectly — 0x81, corrected against the standard text.
 func TestSVACPSMDeclaresStreamTypes(t *testing.T) {
 	m := New()
 	m.SetVideoCodec("svac")
@@ -205,5 +207,16 @@ func TestSVACPSMDeclaresStreamTypes(t *testing.T) {
 	// PSM entries are (stream_type, elementary_stream_ID) pairs: SVAC video
 	// on the video ES 0xE0, SVAC audio on the audio ES 0xC0.
 	require.Contains(t, string(ps), string([]byte{0x80, 0xE0}), "PSM must declare SVAC video (0x80, ES 0xE0)")
-	require.Contains(t, string(ps), string([]byte{0x81, 0xC0}), "PSM must declare SVAC audio (0x81, ES 0xC0)")
+	require.Contains(t, string(ps), string([]byte{0x9B, 0xC0}), "PSM must declare SVAC audio (0x9B, ES 0xC0)")
+}
+
+// TestAACPSMDeclaresStreamType pins the AAC audio stream_type 0x0F per the
+// same GB/T 28181-2022 Annex C table (k).
+func TestAACPSMDeclaresStreamType(t *testing.T) {
+	m := New()
+	m.SetVideoCodec("h264")
+	m.SetAudioCodec("aac")
+	ps := m.WriteAU([]byte{0x01}, 90000, true)
+	require.Contains(t, string(ps), string([]byte{0x1B, 0xE0}), "PSM must declare H.264 video (0x1B, ES 0xE0)")
+	require.Contains(t, string(ps), string([]byte{0x0F, 0xC0}), "PSM must declare AAC audio (0x0F, ES 0xC0)")
 }

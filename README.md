@@ -95,6 +95,16 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config; digest path unt
 
 `DeviceControl` carries the 2022 image-snapshot command (`SnapShot`: `SnapNum`/`Interval`/`UploadURL`/`SessionID` per A.2.1.24), `manscdp.Decode` parses the `UploadSnapShotFinished` completion notify (A.2.5.7, `SnapShotList` of `SnapShotFileID`), and `platform.PTZController` grows `SendSnapShotCmd` / `StartManualRecord` / `StopManualRecord`.
 
+### Multi-level cascade activation seam (v0.10.0) & GB28181-2022 alignment
+
+**HubActivator (issue #73, MiBeeNvr #451)** — the upper platform's INVITE for a channel whose hub is idle (a GB child camera not currently recording) now asks the host to start the pull through the `platform/cascade.Service.SetHubActivator` seam, bounded by `Config.HubActivationTimeout` (default 10s), answering 200 only once a real hub exists; a failed activation keeps the legacy 500 and never establishes a medialess dialog. One activated forward holds one reference, released at session teardown (BYE / supersede / Stop). Without an activator the behavior is byte-identical. `Config.RoutePathAnnounce` (optional 20-digit platform ID) stamps `X-RoutePath` on INVITE 200 responses per Annex H.3 for multi-level path discovery; incoming `X-PreferredPath` is parsed and logged.
+
+**2022 signaling additions** (all opt-in or parse-only — the default wire form is unchanged):
+
+- The five 2022 information queries ride `manscdp` codecs with golden tests pinned to the standard text (A.2.4.10-14 / A.2.6.12-16): `HomePositionQuery`, `CruiseTrackListQuery`, `CruiseTrackQuery`, `PTZPosition`, `SDCardStatus`. The device role answers them with the minimal valid empty-capability responses instead of the legacy unknown-CmdType silence.
+- `X-GB-Ver` protocol-version identification (Annex I): `device.Config.ProtocolVersion` / `platform/sip.Config.ProtocolVersion` (opt-in, e.g. "3.0" for 2022) stamp the header on REGISTER and its responses; the device exposes the platform's version via `Server.PlatformProtocolVersion()`.
+- **SVAC-audio stream_type corrected to `0x9B`** (Annex C table; was `0x81`, a wire bug found by diffing the implementation against the standard text) and AAC audio (`0x0F`) is now settable on the PS muxer.
+
 ## Documentation
 
 Topic guides now live in the MiBee documentation hub — the single
