@@ -48,6 +48,10 @@ type mediaSession struct {
 	hub *platform.FrameHub
 	// releaseSub drops the sub-stream reference acquired for the sub tier.
 	releaseSub func()
+	// releaseMain drops the on-demand main-stream reference acquired when
+	// the hub was activated for this INVITE (#451); nil for hubs that were
+	// already live (the host owns those lifetimes).
+	releaseMain func()
 	// wantSub: the camera opted into the low-res cascade tier; run()
 	// acquires it after the INVITE is answered (never inside the SIP
 	// handler — the ready wait would block the transaction).
@@ -213,6 +217,28 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		return
 	}
 	hub := s.src.Hub(cameraID)
+	var releaseMain func()
+	if hub == nil && s.hubAct != nil {
+		// On-demand activation (#451): the channel's stream is idle (a GB
+		// child camera not currently recording). Ask the host to start the
+		// pull, bounded — the 200 goes out only once a real hub exists, so
+		// a failed activation never establishes a medialess dialog.
+		ctx := s.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		actCtx, cancel := context.WithTimeout(ctx, s.hubActTimeout)
+		hub, releaseMain, err = s.hubAct.EnsureHubActive(actCtx, cameraID)
+		cancel()
+		if err != nil || hub == nil {
+			slog.Warn("gb28181-cascade: hub activation failed",
+				"channel", channelID, "camera", cameraID, "error", err)
+			_, _ = s.srv.RespondOnRequest(req, 500, "Stream Unavailable", "", nil)
+			return
+		}
+		slog.Info("gb28181-cascade: hub activated for INVITE",
+			"channel", channelID, "camera", cameraID)
+	}
 	if hub == nil {
 		_, _ = s.srv.RespondOnRequest(req, 500, "Stream Unavailable", "", nil)
 		return
@@ -262,8 +288,9 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		svc: s, callID: callID, channel: channelID, camera: cameraID,
 		upper: s.upperOf(req),
 		conn:  conn, dst: dst, ssrc: sd.ssrc,
-		mux:       psmux.New(),
-		withAudio: strings.Contains(string(req.Body()), "m=audio"),
+		mux:         psmux.New(),
+		withAudio:   strings.Contains(string(req.Body()), "m=audio"),
+		releaseMain: releaseMain,
 	}
 	// Sub-stream forwarding (#512): acquisition happens in run() AFTER the
 	// INVITE is answered — the ready wait (first keyframe) must never block
@@ -546,6 +573,8 @@ func (ms *mediaSession) close() {
 	hub := ms.hub
 	releaseSub := ms.releaseSub
 	ms.releaseSub = nil
+	releaseMain := ms.releaseMain
+	ms.releaseMain = nil
 	audioSubID := ms.audioSubID
 	subID := ms.subID
 	ms.audioSubID = ""
@@ -561,6 +590,9 @@ func (ms *mediaSession) close() {
 	}
 	if releaseSub != nil {
 		releaseSub()
+	}
+	if releaseMain != nil {
+		releaseMain()
 	}
 	if ms.conn != nil {
 		_ = ms.conn.Close()

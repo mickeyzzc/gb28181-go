@@ -11,6 +11,17 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(cascade)` on-demand main-stream activation (multi-level cascade,
+  MiBeeNvr #451): the upper platform's INVITE for a channel whose hub is
+  idle — a GB28181 child camera that is not currently recording — now
+  asks the host to start the pull through the new `HubActivator` seam
+  (`SetHubActivator`, bounded by `Config.HubActivationTimeout`, default
+  10s) and answers 200 only once a real hub exists; a failed activation
+  keeps the legacy 500 and never establishes a medialess dialog. One
+  activated forward holds one reference for its lifetime — release runs
+  at session teardown (BYE / supersede / Stop). Without an activator the
+  behavior is unchanged.
+
 ## [v0.9.0] — 2026-09-10
 
 The device-snapshot capability package (mibee-eye-raspi#28): one

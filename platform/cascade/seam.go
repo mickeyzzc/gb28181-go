@@ -46,6 +46,10 @@ type Config struct {
 	// RegisterRetryMax caps the REGISTER retry wait. Default "5m".
 	RegisterRetryMax string `yaml:"register_retry_max,omitempty"`
 
+	// HubActivationTimeout bounds the on-demand main-stream activation wait
+	// when an INVITEd channel's hub is idle (HubActivator). Default "10s".
+	HubActivationTimeout string `yaml:"hub_activation_timeout,omitempty"`
+
 	// Upstreams appends additional upper platforms beyond the legacy single
 	// form (ServerAddr non-empty becomes uppers[0]).
 	Upstreams []Upstream `yaml:"upstreams,omitempty"`
