@@ -206,7 +206,18 @@ func TestPlaybackControlResumeSeek(t *testing.T) {
 	sought := make(chan error, 1)
 	go func() { sought <- srv.PlaybackControl(fakeChannelID, "seek", 0, -5) }()
 	err = client.answerRetransmits(sip.INFO, func(info sip.Request) {
-		require.Contains(t, string(info.Body()), "Range: npt=0.000-")
+		body := string(info.Body())
+		if !strings.Contains(body, "Range: npt=0.000-") {
+			// Stale retransmission of the resume INFO above, still queued
+			// when the seek phase starts reading (UDP Timer G under CI
+			// load; intermittent, run 34813966333). Answering it 200 only
+			// drains the resume transaction — responses match by CSeq, so
+			// the seek transaction still waits for its own answer and the
+			// assertion below runs on the actual seek body.
+			client.respondRaw(info, 200, "OK", "", "")
+			return
+		}
+		require.Contains(t, body, "Range: npt=0.000-", "seek INFO must clamp negative npt to 0")
 		client.respondRaw(info, 200, "OK", "", "")
 	}, sought, 10*time.Second)
 	require.NoError(t, err)
