@@ -64,6 +64,16 @@ type SubStreamAcquirer interface {
 	AcquireSubHub(ctx context.Context, cameraID string) (hub *platform.FrameHub, release func(), err error)
 }
 
+// HubActivator pulls a camera's main stream on demand (multi-level cascade,
+// host issue #451): when the upper platform INVITEs a channel whose hub is
+// idle — a GB28181 child camera that is not currently recording, say — the
+// cascade asks the host to start the pull, bounded by
+// Config.HubActivationTimeout. One activated forward holds one reference
+// for its lifetime; release runs at session teardown.
+type HubActivator interface {
+	EnsureHubActive(ctx context.Context, cameraID string) (hub *platform.FrameHub, release func(), err error)
+}
+
 // upper is one upper-platform registration session (#370): its own REGISTER /
 // keepalive loop and online state over the shared SIP listener. The single
 // legacy config form becomes uppers[0]; gb28181_cascade.upstreams appends
@@ -85,6 +95,9 @@ type Service struct {
 	segParser SegmentParser
 	// subAcq serves sub-stream forwardings (#512); nil = main-only.
 	subAcq SubStreamAcquirer
+	// hubAct starts idle main streams on the upper's INVITE (#451); nil =
+	// idle channels keep the legacy 500.
+	hubAct HubActivator
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -98,6 +111,9 @@ type Service struct {
 	// New; per-upper Backoff objects live inside registerLoop.
 	retryBase time.Duration
 	retryMax  time.Duration
+
+	// hubActTimeout bounds the on-demand hub activation wait (#451).
+	hubActTimeout time.Duration
 
 	uppers []*upper // #370: one entry per upper platform
 
@@ -153,15 +169,20 @@ func buildUppers(cfg Config) []*upper {
 // once at wiring time, before Start.
 func (s *Service) SetSubStreamAcquirer(a SubStreamAcquirer) { s.subAcq = a }
 
+// SetHubActivator wires the on-demand main-stream starter (#451). Call once
+// at wiring time, before Start.
+func (s *Service) SetHubActivator(a HubActivator) { s.hubAct = a }
+
 func New(cfg Config, src CameraSource, db Store) *Service {
 	return &Service{
 		cfg: cfg, src: src, db: db,
-		retryBase: parseRetryDuration(cfg.RegisterRetryBase, registerRetryBaseDefault),
-		retryMax:  parseRetryDuration(cfg.RegisterRetryMax, registerRetryMaxDefault),
-		uppers:    buildUppers(cfg),
-		sessions:  make(map[string]*mediaSession),
-		playbacks: make(map[string]*playbackSession),
-		subs:      make(map[string]*catalogSub),
+		retryBase:     parseRetryDuration(cfg.RegisterRetryBase, registerRetryBaseDefault),
+		retryMax:      parseRetryDuration(cfg.RegisterRetryMax, registerRetryMaxDefault),
+		hubActTimeout: parseRetryDuration(cfg.HubActivationTimeout, hubActivationTimeoutDefault),
+		uppers:        buildUppers(cfg),
+		sessions:      make(map[string]*mediaSession),
+		playbacks:     make(map[string]*playbackSession),
+		subs:          make(map[string]*catalogSub),
 	}
 }
 
@@ -170,6 +191,10 @@ func New(cfg Config, src CameraSource, db Store) *Service {
 const (
 	registerRetryBaseDefault = time.Second
 	registerRetryMaxDefault  = 5 * time.Minute
+
+	// hubActivationTimeoutDefault bounds an idle hub's on-demand start:
+	// INVITE round trip to the child device plus its first frames.
+	hubActivationTimeoutDefault = 10 * time.Second
 )
 
 // parseRetryDuration parses a config duration, falling back to def for
