@@ -103,6 +103,8 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config; digest path unt
 
 - The five 2022 information queries ride `manscdp` codecs with golden tests pinned to the standard text (A.2.4.10-14 / A.2.6.12-16): `HomePositionQuery`, `CruiseTrackListQuery`, `CruiseTrackQuery`, `PTZPosition`, `SDCardStatus`. The device role answers them with the minimal valid empty-capability responses instead of the legacy unknown-CmdType silence.
 - `X-GB-Ver` protocol-version identification (Annex I): `device.Config.ProtocolVersion` / `platform/sip.Config.ProtocolVersion` (opt-in, e.g. "3.0" for 2022) stamp the header on REGISTER and its responses; the device exposes the platform's version via `Server.PlatformProtocolVersion()`.
+**Multi-level loop prevention (issue #77)** — `CameraInfo.OriginDeviceID` names the downstream device a channel was learned from (empty = local camera). Catalog aggregation is per-upper: channels whose origin equals the requesting upper's platform ID — that upper's own channels echoing back through its downstream registration — are excluded from catalog answers, subscription NOTIFYs and registration pushes, and their INVITEs are answered 404 (same as `CascadeHidden`). Third-party origins keep flowing to every upper.
+
 - **SVAC-audio stream_type corrected to `0x9B`** (Annex C table; was `0x81`, a wire bug found by diffing the implementation against the standard text) and AAC audio (`0x0F`) is now settable on the PS muxer.
 
 ## Documentation

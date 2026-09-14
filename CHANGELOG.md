@@ -11,6 +11,18 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.10.0] — 2026-09-14
+
+- `feat(cascade)` multi-level loop prevention (issue #77, MiBeeNvr #451
+  Slice 3): `CameraInfo.OriginDeviceID` names the downstream device a
+  channel was learned from (empty = local). Catalog aggregation is now
+  per-upper — `catalogItemsFor(u)` excludes channels whose origin equals
+  that upper's platform ID (the upper's own channels echoing back through
+  its downstream registration), covering query answers, subscription
+  NOTIFYs, and registration pushes; INVITEs for excluded channels are
+  answered 404 exactly like `CascadeHidden`. Exclusions log so silent
+  loops surface. Third-party origins are unaffected.
+
 - `feat(manscdp)` GB/T 28181-2022 information queries (standard foreword
   additions): the five query/response pairs — `HomePositionQuery`,
   `CruiseTrackListQuery`, `CruiseTrackQuery`, `PTZPosition`,

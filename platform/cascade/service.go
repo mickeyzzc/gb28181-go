@@ -44,6 +44,16 @@ type CameraInfo struct {
 	// (#512): the INVITE acquires the on-demand sub-stream instead of the
 	// main hub, falling back to main when unavailable.
 	SubStream bool
+	// OriginDeviceID names the downstream device this channel was learned
+	// from (multi-level loop prevention, issue #77): the upper platform
+	// registering into us appears as a device, and channels learned from it
+	// carry its device ID here. Empty = a local camera. When the catalog is
+	// aggregated for upper U, channels with OriginDeviceID == U's platform
+	// ID are excluded and their INVITEs answered 404 — the echo of U's own
+	// channels back to U is what closes signaling/media loops in A←B←C
+	// topologies. Transitive chains are the host's to encode (it sees every
+	// registration).
+	OriginDeviceID string
 	// CascadeHidden excludes the camera from the aggregated catalog and makes
 	// INVITEs for its channel fail with 404 (catalog convergence: expose only
 	// a chosen subset to the upper platform).
@@ -698,7 +708,7 @@ func (s *Service) onMessage(req sip.Request, _ sip.ServerTransaction) {
 }
 
 func (s *Service) answerCatalog(u *upper, sn int) {
-	items, err := s.catalogItems()
+	items, err := s.catalogItemsFor(u)
 	if err != nil {
 		slog.Warn("gb28181-cascade: catalog build failed", "error", err)
 		return

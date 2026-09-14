@@ -217,6 +217,16 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 		_, _ = s.srv.RespondOnRequest(req, 404, "Unknown Channel", "", nil)
 		return
 	}
+	if cam, ok := s.cameraInfo(cameraID); ok && cam.OriginDeviceID != "" {
+		if u := s.upperOf(req); u != nil && cam.OriginDeviceID == u.cfg.ServerDomain {
+			// Issue #77 loop guard: the channel was learned from THIS upper;
+			// answering its own echo closes a loop. Refuse like unknown.
+			slog.Info("gb28181-cascade: INVITE for upper-origin channel refused (loop guard)",
+				"channel", channelID, "camera", cameraID, "origin", cam.OriginDeviceID)
+			_, _ = s.srv.RespondOnRequest(req, 404, "Unknown Channel", "", nil)
+			return
+		}
+	}
 	hub := s.src.Hub(cameraID)
 	var releaseMain func()
 	if hub == nil && s.hubAct != nil {

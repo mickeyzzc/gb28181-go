@@ -148,7 +148,7 @@ func (s *Service) sendCatalogNotify(sub *catalogSub) {
 	if s.srv == nil || sub == nil {
 		return
 	}
-	items, err := s.catalogItems()
+	items, err := s.catalogItemsFor(sub.upper)
 	if err != nil {
 		slog.Warn("gb28181-cascade: catalog build for NOTIFY failed", "error", err)
 		return

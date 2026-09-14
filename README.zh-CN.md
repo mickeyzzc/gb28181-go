@@ -104,6 +104,8 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 - 五组 2022 信息查询进入 `manscdp` 编解码（golden 钉标准原文 A.2.4.10-14 / A.2.6.12-16）：`HomePositionQuery`、`CruiseTrackListQuery`、`CruiseTrackQuery`、`PTZPosition`、`SDCardStatus`。设备角色对它们给出"空能力"的最小合法应答，不再落入旧的未知 CmdType 静默。
 - `X-GB-Ver` 协议版本标识（附录 I）：`device.Config.ProtocolVersion` / `platform/sip.Config.ProtocolVersion`（可选，2022 填 "3.0"）在 REGISTER 及其应答上携带；设备侧经 `Server.PlatformProtocolVersion()` 感知平台版本。
+**多级级联环路防护（issue #77）**——`CameraInfo.OriginDeviceID` 标记通道来自哪个下级设备（空 = 本地相机）。目录聚合按上级维度过滤：来源等于该上级平台编码的通道（上级自己的通道经其下级注册回流）在目录应答、订阅 NOTIFY 与注册推送中一律排除，其 INVITE 按 404 拒绝（与 `CascadeHidden` 一致）；第三方来源不受影响。
+
 - **SVAC 音频 stream_type 修正为 `0x9B`**（附录 C 表；原实现误为 `0x81`，对照标准原文核查时发现的线格式 bug），PS 复用器新增 AAC 音频（`0x0F`）声明。
 
 ## 文档

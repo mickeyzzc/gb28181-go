@@ -14,7 +14,17 @@ import (
 // with GB channel IDs allocated on first sight and persisted
 // (cascade_channels) so the upper platform's bindings survive restarts.
 // Format: <LocalDeviceID[:10]> + "132" + 7-digit serial.
+// catalogItems builds the full aggregated catalog (loop guard off) —
+// used where no upper context exists (registration bookkeeping, tests).
 func (s *Service) catalogItems() ([]manscdp.Item, error) {
+	return s.catalogItemsFor(nil)
+}
+
+// catalogItemsFor builds the catalog for one upper (issue #77 loop
+// prevention): channels whose OriginDeviceID equals that upper's platform
+// ID — the upper's own channels echoing back through a downstream
+// registration — are excluded, with a log line so silent loops surface.
+func (s *Service) catalogItemsFor(u *upper) ([]manscdp.Item, error) {
 	cams := s.src.Cameras()
 
 	alloc := map[string]string{} // cameraID → gbChannelID
@@ -44,6 +54,14 @@ func (s *Service) catalogItems() ([]manscdp.Item, error) {
 			// Catalog convergence: hidden cameras are not advertised. Their
 			// persisted channel allocation is kept so re-enabling restores the
 			// same channel code (upper-side bindings survive).
+			continue
+		}
+		if u != nil && cam.OriginDeviceID != "" && cam.OriginDeviceID == u.cfg.ServerDomain {
+			// Issue #77: this channel came FROM this very upper (it also
+			// registers into us as a device). Echoing it back would close a
+			// signaling/media loop; skip it for this upper only.
+			slog.Info("gb28181-cascade: excluding upper-origin channel (loop guard)",
+				"camera", cam.ID, "origin", cam.OriginDeviceID, "upper", u.cfg.ServerDomain)
 			continue
 		}
 		chID, ok := alloc[cam.ID]
