@@ -59,7 +59,10 @@ func TestRegisterLifecycleXGBVer(t *testing.T) {
 		To:         reg2.To + ";tag=fake",
 		CallID:     reg2.CallID,
 		CSeq:       reg2.CSeq,
-		Headers:    map[string]string{XGBVerHeaderName: "2.0"},
+		Headers: map[string]string{
+			XGBVerHeaderName: "2.0",
+			"Date":           "Tue, 15 Sep 2026 07:29:00 GMT",
+		},
 	}
 	writeSIP(t, platConn, ok, peer)
 
@@ -73,6 +76,32 @@ func TestRegisterLifecycleXGBVer(t *testing.T) {
 	}
 	if got := srv.PlatformProtocolVersion(); got != "2.0" {
 		t.Fatalf("PlatformProtocolVersion = %q, want 2.0", got)
+	}
+	// §9.10.2: the same response's SIP Date is the platform clock
+	// (epoch cross-checked with date -u).
+	if got := srv.PlatformDateUnix(); got != 1789457340 {
+		t.Fatalf("PlatformDateUnix = %d, want 1789457340", got)
+	}
+}
+
+// ParseSIPDate covers all three RFC 3261 §25.1 forms; non-GMT and
+// garbage are rejected.
+func TestParseSIPDateForms(t *testing.T) {
+	const want = int64(1789457340)
+	for _, v := range []string{
+		"Tue, 15 Sep 2026 07:29:00 GMT",
+		"Tuesday, 15-Sep-26 07:29:00 GMT",
+		"Tue Sep 15 07:29:00 2026",
+	} {
+		if got, ok := ParseSIPDate(v); !ok || got != want {
+			t.Fatalf("ParseSIPDate(%q) = %d,%v want %d,true", v, got, ok, want)
+		}
+	}
+	if _, ok := ParseSIPDate("not a date"); ok {
+		t.Fatal("garbage must not parse")
+	}
+	if _, ok := ParseSIPDate("Tue, 15 Sep 2026 07:29:00 +0800"); ok {
+		t.Fatal("non-GMT offsets are outside the SIP grammar")
 	}
 }
 

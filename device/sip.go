@@ -407,6 +407,21 @@ func statusReason(code int) string {
 // BuildStatusResponse builds a bodiless response echoing the request's
 // dialog headers (used by pre-dispatch refusals such as incoming Note
 // verification failures).
+// ParseSIPDate parses a SIP Date header (GB/T 28181-2022 §9.10.2 time
+// sync: the REGISTER response's Date header is the device's time
+// source) in any of the RFC 3261 §25.1 forms: IMF-fixdate, RFC850
+// (2-digit year) or asctime. Returns Unix seconds; ok=false when the
+// value matches none.
+func ParseSIPDate(value string) (unix int64, ok bool) {
+	v := strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC1123, time.RFC850, time.ANSIC} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.Unix(), true
+		}
+	}
+	return 0, false
+}
+
 func BuildStatusResponse(req SipMessage, code int) SipMessage {
 	to := req.To
 	if !strings.Contains(to, "tag=") {

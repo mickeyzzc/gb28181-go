@@ -47,9 +47,12 @@ type Server struct {
 	// protoVerMu guards platformProtoVer (REGISTER X-GB-Ver, Annex I).
 	protoVerMu       sync.Mutex
 	platformProtoVer string
-	cancel           context.CancelFunc
-	mediaCancel      context.CancelFunc
-	sub              *FrameSubscription
+	// platformDate is the platform clock from the REGISTER response's
+	// SIP Date header (§9.10.2), Unix seconds (0 = never seen).
+	platformDate int64
+	cancel       context.CancelFunc
+	mediaCancel  context.CancelFunc
+	sub          *FrameSubscription
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
 	// regRespCh routes REGISTER responses from the recv loop to an active
@@ -825,6 +828,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 		return fmt.Errorf("reading REGISTER response: %w", err)
 	}
 	s.notePlatformProtocolVersion(*resp)
+	s.notePlatformDate(*resp)
 
 	// Handle 401 Unauthorized
 	if resp.StatusCode == 401 {
@@ -860,6 +864,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 			return fmt.Errorf("reading 200 OK response: %w", err)
 		}
 		s.notePlatformProtocolVersion(*resp)
+		s.notePlatformDate(*resp)
 
 		if resp.StatusCode == 200 {
 			if s.cfg.RegisterAuthenticator != nil {
@@ -902,6 +907,41 @@ func (s *Server) notePlatformProtocolVersion(resp SipMessage) {
 	if changed {
 		slog.Info("gb28181: platform protocol version", "x_gb_ver", ver)
 	}
+}
+
+// PlatformDateUnix returns the platform clock as last carried by a
+// REGISTER response's SIP Date header (§9.10.2), Unix seconds — the
+// device-side time-sync source. 0 when no response carried a parseable
+// Date. Applying the clock stays with the host (NTP-fed deployments
+// just observe; NTP-less ones may set it).
+func (s *Server) PlatformDateUnix() int64 {
+	s.protoVerMu.Lock()
+	defer s.protoVerMu.Unlock()
+	return s.platformDate
+}
+
+// notePlatformDate records the platform clock from a REGISTER response's
+// SIP Date header (§9.10.2). Drift beyond 5s logs a warning.
+func (s *Server) notePlatformDate(resp SipMessage) {
+	raw := resp.ExtensionHeader("Date")
+	if raw == "" {
+		return
+	}
+	unix, ok := ParseSIPDate(raw)
+	if !ok {
+		slog.Warn("gb28181: unparseable SIP Date header", "value", raw)
+		return
+	}
+	drift := time.Now().Unix() - unix
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > 5 {
+		slog.Warn("gb28181: platform clock differs", "drift_secs", drift, "platform_unix", unix)
+	}
+	s.protoVerMu.Lock()
+	s.platformDate = unix
+	s.protoVerMu.Unlock()
 }
 
 // PlatformProtocolVersion returns the platform's X-GB-Ver as last seen on
