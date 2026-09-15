@@ -88,6 +88,10 @@ type Server struct {
 	// positionCancel stops the running position report loop (replaced on
 	// re-SUBSCRIBE).
 	positionCancel chan struct{}
+	// audioSink consumes G.711 talkback audio (§9.2 receive half, issue
+	// #80); nil = audio-only INVITEs are refused with 488. Guarded by mu;
+	// set via SetTalkbackSink before Start.
+	audioSink TalkbackSink
 	// metrics receives lifecycle/media observations (issue #40).
 	metrics metrics.Hooks
 }
@@ -932,9 +936,40 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 	return nil
 }
 
+// teardownMediaLocked tears down any previous media session (video push,
+// playback, or talkback receive) so a new INVITE never leaks a goroutine
+// + socket per session. Caller holds s.mu.
+func (s *Server) teardownMediaLocked() {
+	if s.mediaCancel != nil {
+		s.mediaCancel()
+		s.mediaCancel = nil
+	}
+	if s.sub != nil {
+		s.hub.Unsubscribe(s.sub.ID)
+		s.sub = nil
+	}
+	if s.mediaConn != nil {
+		s.mediaConn.Close()
+		s.mediaConn = nil
+	}
+	if s.mediaTCPConn != nil {
+		s.mediaTCPConn.Close()
+		s.mediaTCPConn = nil
+	}
+	s.playbackCtl = nil
+}
+
 // handleInvite handles INVITE requests - parses SDP, binds media, sends 200 OK with device SDP, subscribes to AUHub.
 func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.Addr) {
 	slog.Info("gb28181: received INVITE", "from", fromAddr.String())
+
+	// Audio-only offer (m=audio, no m=video anywhere) = talkback receive
+	// (GB/T 28181-2022 §9.2, issue #80): the platform streams G.711 to the
+	// device. Classified before the video parse, which requires m=video.
+	if offer := parseTalkbackOffer(msg.Body); offer != nil {
+		s.handleTalkbackInvite(ctx, msg, offer, fromAddr)
+		return
+	}
 
 	// Parse SDP for RTP destination and SSRC — the media address comes from the
 	// SDP c=/m= lines, NEVER from the SIP peer address (streaming to the SIP
@@ -991,23 +1026,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// otherwise leak a media goroutine + socket per INVITE, each continuing
 	// to push a parallel RTP stream.
 	s.mu.Lock()
-	if s.mediaCancel != nil {
-		s.mediaCancel()
-		s.mediaCancel = nil
-	}
-	if s.sub != nil {
-		s.hub.Unsubscribe(s.sub.ID)
-		s.sub = nil
-	}
-	if s.mediaConn != nil {
-		s.mediaConn.Close()
-		s.mediaConn = nil
-	}
-	if s.mediaTCPConn != nil {
-		s.mediaTCPConn.Close()
-		s.mediaTCPConn = nil
-	}
-	s.playbackCtl = nil
+	s.teardownMediaLocked()
 	s.mu.Unlock()
 
 	// TCP media where the platform dials the device (a=setup:active in the
@@ -1177,24 +1196,8 @@ func (s *Server) handleBye(ctx context.Context, msg SipMessage, fromAddr net.Add
 	slog.Info("gb28181: received BYE", "from", fromAddr.String())
 
 	s.mu.Lock()
-	if s.sub != nil {
-		s.hub.Unsubscribe(s.sub.ID)
-		s.sub = nil
-	}
-	if s.mediaConn != nil {
-		s.mediaConn.Close()
-		s.mediaConn = nil
-	}
-	if s.mediaTCPConn != nil {
-		s.mediaTCPConn.Close()
-		s.mediaTCPConn = nil
-	}
-	if s.mediaCancel != nil {
-		s.mediaCancel()
-		s.mediaCancel = nil
-	}
+	s.teardownMediaLocked()
 	s.remoteRTPAddr = nil
-	s.playbackCtl = nil
 	s.mu.Unlock()
 
 	// Send 200 OK to BYE

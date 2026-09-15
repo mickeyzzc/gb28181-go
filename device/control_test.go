@@ -41,6 +41,17 @@ func (r *ctrlRecorder) latest() string {
 
 func startCtrlTestServer(t *testing.T, cbs device.ControlCallbacks) (*net.UDPConn, *net.UDPAddr) {
 	t.Helper()
+	return startWireTestServer(t, func(srv *device.Server) {
+		srv.SetControlHandlers(cbs)
+	})
+}
+
+// startWireTestServer boots a real device Server over real UDP sockets and
+// completes the REGISTER handshake — the shared harness for wire-level
+// platform→device tests (controls, talkback, …). configure installs the
+// per-suite host seams before Start.
+func startWireTestServer(t *testing.T, configure func(*device.Server)) (*net.UDPConn, *net.UDPAddr) {
+	t.Helper()
 
 	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -69,7 +80,7 @@ func startCtrlTestServer(t *testing.T, cbs device.ControlCallbacks) (*net.UDPCon
 		RegisterAuthenticator: snapStubAuth{},
 	}
 	srv := device.New(cfg, device.DeviceInfo{}, device.NewFrameHub())
-	srv.SetControlHandlers(cbs)
+	configure(srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
