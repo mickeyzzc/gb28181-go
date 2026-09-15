@@ -74,6 +74,11 @@ type Server struct {
 	// playbackCtl routes SIP INFO PlaybackControl commands to the active
 	// playback goroutine (nil when no playback session is active). Guarded by mu.
 	playbackCtl chan<- PlaybackControl
+	// controlCbs hosts §9.3.2 DeviceControl sub-command callbacks
+	// (issue #81); zero value = every control keeps the reject behavior.
+	// Set via SetControlHandlers before Start (read on the receive
+	// goroutine thereafter).
+	controlCbs ControlCallbacks
 	// metrics receives lifecycle/media observations (issue #40).
 	metrics metrics.Hooks
 }
@@ -102,6 +107,14 @@ func (s *Server) SetMetricsHooks(h metrics.Hooks) {
 // SetTestMode enables test mode which skips REGISTER lifecycle.
 func (s *Server) SetTestMode() {
 	s.testMode = true
+}
+
+// SetControlHandlers installs DeviceControl sub-command callbacks
+// (GB/T 28181 §9.3.2, issue #81). Each callback is optional; a
+// sub-command without its callback is answered with the control reject.
+// Call before Start — callbacks fire on the SIP receive goroutine.
+func (s *Server) SetControlHandlers(c ControlCallbacks) {
+	s.controlCbs = c
 }
 
 // SetRecordingIndex injects the recording index used for RecordInfo queries.
@@ -1162,6 +1175,27 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 			return
 		}
 		slog.Warn("gb28181: snapshot command not executable (no executor or non-UDP transport) — rejecting")
+		s.sendResponseMessage(BuildControlRejectResponseMessage(
+			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
+		return
+	}
+
+	// DeviceControl sub-commands (§9.3.2 / issue #81): a recognized
+	// sub-command with its callback installed executes it and the 200 OK
+	// above is the whole synchronous answer. Unrecognized or
+	// callback-less commands keep the explicit control reject — parity
+	// with the Rust twin's no-handler behavior and a fast failure signal
+	// for the platform. (SnapShot was intercepted above; HomePosition and
+	// DeviceConfig CmdTypes route through their own reject arm.)
+	if dc, ok := parseControlSub(msg.Body); ok {
+		if cb := s.controlCbs.callbackFor(&dc); cb != nil {
+			slog.Info("gb28181: DeviceControl sub-command executed",
+				"sn", dc.SN, "deviceID", dc.DeviceID)
+			cb()
+			return
+		}
+		slog.Warn("gb28181: DeviceControl sub-command not handled — rejecting",
+			"sn", dc.SN, "deviceID", dc.DeviceID)
 		s.sendResponseMessage(BuildControlRejectResponseMessage(
 			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
 		return

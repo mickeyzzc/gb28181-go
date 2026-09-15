@@ -52,6 +52,13 @@ func (c *PTZController) SendDeviceControl(channelID, element, value string) erro
 		dc.TeleBoot = value
 	case "HomePosition":
 		dc.HomePosition = value
+	case "IFrameCmd":
+		// Force the next encoded frame to be an IDR (§9.3.2; the only
+		// valid value is "Send"). Mirrors gb28181-rs #58.
+		if value != "Send" {
+			return fmt.Errorf("gb28181: IFrameCmd value must be %q, got %q", "Send", value)
+		}
+		dc.IFrameCmd = value
 	default:
 		return fmt.Errorf("gb28181: unsupported DeviceControl element %q", element)
 	}
@@ -104,4 +111,11 @@ func (c *PTZController) StartManualRecord(channelID string) error {
 // (DeviceControl RecordCmd=StopRecord).
 func (c *PTZController) StopManualRecord(channelID string) error {
 	return c.SendDeviceControl(channelID, "RecordCmd", "StopRecord")
+}
+
+// SendIFrameCmd forces the device's next encoded frame to be an IDR
+// (GB/T 28181 §9.3.2, issue #81) — platforms send this when starting a
+// pull or after packet loss.
+func (c *PTZController) SendIFrameCmd(channelID string) error {
+	return c.SendDeviceControl(channelID, "IFrameCmd", "Send")
 }

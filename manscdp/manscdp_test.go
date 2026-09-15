@@ -129,6 +129,13 @@ func TestDecode_RoutesAllCmdTypes(t *testing.T) {
 			ct:   CmdDeviceControl,
 		},
 		{
+			// §9.3.2 force-IDR control (issue #81); values mirror
+			// gb28181-rs #58 — "Send" is the only valid IFrameCmd.
+			name: "DeviceControl IFrameCmd",
+			in:   DeviceControl{CmdType: CmdDeviceControl, SN: 17, DeviceID: "34020000001310000001", IFrameCmd: "Send"},
+			ct:   CmdDeviceControl,
+		},
+		{
 			name: "Alarm",
 			in:   Alarm{CmdType: CmdAlarm, SN: 1, DeviceID: "34020000001310000001", AlarmPriority: "1", AlarmMethod: "2", AlarmTime: "2026-08-12T10:00:00", AlarmDescription: "motion"},
 			ct:   CmdAlarm,

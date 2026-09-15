@@ -189,16 +189,20 @@ type RecordItem struct {
 // (§ 9.3.2): RecordCmd ("Record"/"StopRecord"), GuardCmd ("SetGuard"/
 // "ResetGuard"), AlarmCmd ("ResetAlarm"), TeleBoot ("Boot"), HomePosition.
 type DeviceControl struct {
-	XMLName      xml.Name `xml:"Control"`
-	CmdType      CmdType  `xml:"CmdType"`
-	SN           int      `xml:"SN"`
-	DeviceID     string   `xml:"DeviceID"`
-	PTZCmd       string   `xml:"PTZCmd,omitempty"`
-	HomePosition string   `xml:"HomePosition,omitempty"`
-	TeleBoot     string   `xml:"TeleBoot,omitempty"`
-	RecordCmd    string   `xml:"RecordCmd,omitempty"`
-	GuardCmd     string   `xml:"GuardCmd,omitempty"`
-	AlarmCmd     string   `xml:"AlarmCmd,omitempty"`
+	XMLName  xml.Name `xml:"Control"`
+	CmdType  CmdType  `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	PTZCmd   string   `xml:"PTZCmd,omitempty"`
+	// IFrameCmd forces the next encoded frame to be an IDR (§9.3.2;
+	// value "Send"). Platforms send it when starting a pull or after
+	// loss — mirrors gb28181-rs #58 readings (issue #81).
+	IFrameCmd    string `xml:"IFrameCmd,omitempty"`
+	HomePosition string `xml:"HomePosition,omitempty"`
+	TeleBoot     string `xml:"TeleBoot,omitempty"`
+	RecordCmd    string `xml:"RecordCmd,omitempty"`
+	GuardCmd     string `xml:"GuardCmd,omitempty"`
+	AlarmCmd     string `xml:"AlarmCmd,omitempty"`
 	// SnapShot carries the GB/T 28181-2022 image-snapshot command
 	// (A.2.1.24): the device captures JPEGs and uploads them over HTTP,
 	// then reports UploadSnapShotFinished with the same SessionID.
