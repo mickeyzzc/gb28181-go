@@ -33,6 +33,9 @@ type Query struct {
 	StreamType string   `xml:"StreamType"`
 	// Number is the GB/T 28181-2022 CruiseTrackQuery track index (A.2.4.12).
 	Number string `xml:"Number"`
+	// ConfigType lists the types requested by a ConfigDownload query
+	// (A.2.4.7), "/"-separated when several.
+	ConfigType string `xml:"ConfigType"`
 }
 
 // QueryElem represents a MANSCDP Query request with child-element format (for NVR compatibility).
@@ -46,6 +49,7 @@ type QueryElem struct {
 	Type       string   `xml:"Type"`
 	StreamType string   `xml:"StreamType"`
 	Number     string   `xml:"Number"`
+	ConfigType string   `xml:"ConfigType"`
 }
 
 // Response represents a MANSCDP Response message.
@@ -135,6 +139,7 @@ func parseQueryDual(body string) (Query, bool) {
 			Type:       queryElem.Type,
 			StreamType: queryElem.StreamType,
 			Number:     queryElem.Number,
+			ConfigType: queryElem.ConfigType,
 		}, true
 	}
 	return Query{}, false
@@ -491,6 +496,60 @@ func BuildDeviceStatusResponseMessage(sn, deviceID string) SipMessage {
 // BuildControlRejectResponseMessage creates a SIP MESSAGE with control rejection response.
 func BuildControlRejectResponseMessage(cmdType, sn, deviceID string) SipMessage {
 	body := fmt.Sprintf(`<Response CmdType="%s" SN="%s"><DeviceID>%s</DeviceID><Result>ERROR</Result></Response>`, cmdType, sn, deviceID)
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        body,
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
+}
+
+// BuildDeviceConfigResponseMessage answers a DeviceConfig command
+// (A.2.6.8): Response with the SN echoed and the execution Result — OK
+// when a callback executed, ERROR otherwise. Twin of gb28181-rs
+// build_device_config_response (body bytes identical modulo the XML
+// declaration this repo's device builders omit).
+func BuildDeviceConfigResponseMessage(sn, deviceID string, ok bool) SipMessage {
+	result := "ERROR"
+	if ok {
+		result = "OK"
+	}
+	body := fmt.Sprintf(`<Response CmdType="DeviceConfig" SN="%s"><DeviceID>%s</DeviceID><Result>%s</Result></Response>`,
+		sn, deviceID, result)
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        body,
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
+}
+
+// BuildConfigDownloadResponseMessage answers a ConfigDownload query
+// (A.2.6.9): OK plus the optional BasicParam block (A.2.1.19 — every
+// child optional); all other config blocks are optional and omitted,
+// the minimal valid answer. Twin of gb28181-rs build_config_download_response.
+func BuildConfigDownloadResponseMessage(sn, deviceID string, basic *BasicParamCfg) SipMessage {
+	var bp strings.Builder
+	if basic != nil {
+		bp.WriteString("<BasicParam>")
+		if basic.Name != "" {
+			bp.WriteString("<Name>" + basic.Name + "</Name>")
+		}
+		if basic.Expiration != nil {
+			bp.WriteString(fmt.Sprintf("<Expiration>%d</Expiration>", *basic.Expiration))
+		}
+		if basic.HeartbeatInterval != nil {
+			bp.WriteString(fmt.Sprintf("<HeartBeatInterval>%d</HeartBeatInterval>", *basic.HeartbeatInterval))
+		}
+		if basic.HeartbeatCount != nil {
+			bp.WriteString(fmt.Sprintf("<HeartBeatCount>%d</HeartBeatCount>", *basic.HeartbeatCount))
+		}
+		bp.WriteString("</BasicParam>")
+	}
+	body := fmt.Sprintf(`<Response CmdType="ConfigDownload" SN="%s"><DeviceID>%s</DeviceID><Result>OK</Result>%s</Response>`,
+		sn, deviceID, bp.String())
 	return SipMessage{
 		Method:      "MESSAGE",
 		ContentType: "Application/MANSCDP+xml",

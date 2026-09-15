@@ -22,6 +22,7 @@ const (
 	CmdRecordInfo      CmdType = "RecordInfo"
 	CmdRecordInfoQuery CmdType = "RecordInfoQuery"
 	CmdDeviceControl   CmdType = "DeviceControl"
+	CmdDeviceConfig    CmdType = "DeviceConfig"
 	// CmdUploadSnapShotFinished is the GB/T 28181-2022 image-snapshot
 	// completion notify (A.2.5.7): the device reports the uploaded image
 	// IDs after a DeviceControl SnapShot command.
@@ -197,12 +198,15 @@ type DeviceControl struct {
 	// IFrameCmd forces the next encoded frame to be an IDR (§9.3.2;
 	// value "Send"). Platforms send it when starting a pull or after
 	// loss — mirrors gb28181-rs #58 readings (issue #81).
-	IFrameCmd    string `xml:"IFrameCmd,omitempty"`
-	HomePosition string `xml:"HomePosition,omitempty"`
-	TeleBoot     string `xml:"TeleBoot,omitempty"`
-	RecordCmd    string `xml:"RecordCmd,omitempty"`
-	GuardCmd     string `xml:"GuardCmd,omitempty"`
-	AlarmCmd     string `xml:"AlarmCmd,omitempty"`
+	IFrameCmd string `xml:"IFrameCmd,omitempty"`
+	// HomePosition is the 看守位 control (A.2.3.1.10): auto-return to a
+	// preset after ResetTime seconds of inactivity; Enabled=0 disables.
+	// Absent optional fields mean "keep current".
+	HomePosition *HomePositionCmd `xml:"HomePosition,omitempty"`
+	TeleBoot     string           `xml:"TeleBoot,omitempty"`
+	RecordCmd    string           `xml:"RecordCmd,omitempty"`
+	GuardCmd     string           `xml:"GuardCmd,omitempty"`
+	AlarmCmd     string           `xml:"AlarmCmd,omitempty"`
 	// SnapShot carries the GB/T 28181-2022 image-snapshot command
 	// (A.2.1.24): the device captures JPEGs and uploads them over HTTP,
 	// then reports UploadSnapShotFinished with the same SessionID.
@@ -416,4 +420,42 @@ type Subscribe struct {
 	StartTime string   `xml:"StartTime,omitempty"` // Alarm subscription window
 	EndTime   string   `xml:"EndTime,omitempty"`
 	Interval  int      `xml:"Interval,omitempty"` // MobilePosition report period (s)
+}
+
+// HomePositionCmd is the 看守位 (home position) control body (A.2.3.1.10):
+// auto-return to PresetIndex after ResetTime seconds of inactivity.
+type HomePositionCmd struct {
+	Enabled     uint32  `xml:"Enabled"`               // 1 = enabled, 0 = disabled (required)
+	ResetTime   *uint32 `xml:"ResetTime,omitempty"`   // auto-reset interval, seconds
+	PresetIndex *uint32 `xml:"PresetIndex,omitempty"` // preset to return to, 0-255
+}
+
+// BasicParamCmd is the A.2.3.2.2 基本参数配置 body: every child optional.
+type BasicParamCmd struct {
+	Name              string  `xml:"Name,omitempty"`              // 设备名称
+	Expiration        *uint64 `xml:"Expiration,omitempty"`        // 注册过期时间, seconds
+	HeartBeatInterval *uint64 `xml:"HeartBeatInterval,omitempty"` // 心跳间隔时间, seconds
+	HeartBeatCount    *uint32 `xml:"HeartBeatCount,omitempty"`    // 心跳超时次数
+}
+
+// AlarmReportCmd is the A.2.3.2.10 报警上报开关配置 body (0 off, 1 on).
+type AlarmReportCmd struct {
+	MotionDetection uint32 `xml:"MotionDetection"` // 移动侦测事件上报开关
+	FieldDetection  uint32 `xml:"FieldDetection"`  // 区域入侵事件上报开关
+}
+
+// DeviceConfig carries the device-configuration command (GB/T 28181-2022
+// §9.3.3 / A.2.3.2, issue #80). The family allows one sub-command child;
+// this decodes the subset a fixed camera can act on — BasicParam,
+// FrameMirror (A.2.1.22: 0 none, 1 horizontal, 2 vertical, 3 both) and
+// AlarmReport. 校时 is NOT part of this family (2022 §9.10.2 does it via
+// the REGISTER response's SIP Date header).
+type DeviceConfig struct {
+	XMLName     xml.Name        `xml:"Control"`
+	CmdType     CmdType         `xml:"CmdType"`
+	SN          int             `xml:"SN"`
+	DeviceID    string          `xml:"DeviceID"`
+	BasicParam  *BasicParamCmd  `xml:"BasicParam,omitempty"`
+	FrameMirror *uint32         `xml:"FrameMirror,omitempty"`
+	AlarmReport *AlarmReportCmd `xml:"AlarmReport,omitempty"`
 }

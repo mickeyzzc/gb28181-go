@@ -38,6 +38,10 @@ type ControlCallbacks struct {
 	// lens, auxiliary switches). Structurally invalid hex arrives as
 	// Kind=PtzInvalid with RawHex preserving the input.
 	OnPTZCmd func(cmd PtzCommand)
+	// OnHomePosition handles the 看守位 control (A.2.3.1.10):
+	// auto-return to presetIndex after resetTime seconds of inactivity
+	// (enabled=0 disables). Nil optional fields mean "keep current".
+	OnHomePosition func(enabled uint32, resetTime, presetIndex *uint32)
 }
 
 // callbackFor maps a decoded DeviceControl to the installed callback.
@@ -70,6 +74,11 @@ func (c *ControlCallbacks) callbackFor(dc *manscdp.DeviceControl) func() {
 		if c.OnPTZCmd != nil {
 			hex := dc.PTZCmd
 			return func() { c.OnPTZCmd(DecodePTZCommand(hex)) }
+		}
+	case dc.HomePosition != nil:
+		if c.OnHomePosition != nil {
+			hp := dc.HomePosition
+			return func() { c.OnHomePosition(hp.Enabled, hp.ResetTime, hp.PresetIndex) }
 		}
 	}
 	return nil

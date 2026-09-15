@@ -25,8 +25,9 @@ const (
 
 // SendDeviceControl resolves channelID across registered devices and sends a
 // non-PTZ DeviceControl. element is the XML child carrying the command
-// ("RecordCmd"/"GuardCmd"/"AlarmCmd"/"TeleBoot"/"HomePosition"); value its
-// text content ("" for flag-style elements).
+// ("RecordCmd"/"GuardCmd"/"AlarmCmd"/"TeleBoot"); value its text content
+// ("" for flag-style elements). HomePosition has its own wire form — use
+// SetHomePosition.
 func (c *PTZController) SendDeviceControl(channelID, element, value string) error {
 	ch, dev, err := c.locateChannel(channelID)
 	if err != nil {
@@ -50,8 +51,6 @@ func (c *PTZController) SendDeviceControl(channelID, element, value string) erro
 		dc.AlarmCmd = value
 	case "TeleBoot":
 		dc.TeleBoot = value
-	case "HomePosition":
-		dc.HomePosition = value
 	case "IFrameCmd":
 		// Force the next encoded frame to be an IDR (§9.3.2; the only
 		// valid value is "Send"). Mirrors gb28181-rs #58.
@@ -61,6 +60,39 @@ func (c *PTZController) SendDeviceControl(channelID, element, value string) erro
 		dc.IFrameCmd = value
 	default:
 		return fmt.Errorf("gb28181: unsupported DeviceControl element %q", element)
+	}
+	body, err := manscdp.Encode(dc)
+	if err != nil {
+		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
+	}
+	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
+		return fmt.Errorf("gb28181: send DeviceControl to %s: %w", ch.DeviceID, err)
+	}
+	return nil
+}
+
+// SetHomePosition sends the 看守位 control (A.2.3.1.10): auto-return to
+// presetIdx after resetSecs seconds of inactivity (enabled=false sends
+// Enabled=0). Nil optional fields mean "keep current". Replaces the old
+// string-form element, which never matched the standard's wire shape.
+func (c *PTZController) SetHomePosition(channelID string, enabled bool, resetSecs, presetIdx *uint32) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+
+	hp := manscdp.HomePositionCmd{ResetTime: resetSecs, PresetIndex: presetIdx}
+	if enabled {
+		hp.Enabled = 1
+	}
+	dc := manscdp.DeviceControl{
+		CmdType:      manscdp.CmdDeviceControl,
+		SN:           int(c.seq.Add(1)),
+		DeviceID:     ch.ID,
+		HomePosition: &hp,
 	}
 	body, err := manscdp.Encode(dc)
 	if err != nil {

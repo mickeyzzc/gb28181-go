@@ -128,7 +128,6 @@ func TestSendDeviceControlElements(t *testing.T) {
 		{"GuardCmd", GuardCmdSet},
 		{"AlarmCmd", "ResetAlarm"},
 		{"TeleBoot", "Reboot"},
-		{"HomePosition", "Set"},
 	}
 
 	for _, tc := range cases {
@@ -140,6 +139,14 @@ func TestSendDeviceControlElements(t *testing.T) {
 	err := c.SendDeviceControl("34020000001320000001", "BogusCmd", "x")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported DeviceControl element")
+
+	// 看守位 rides its own A.2.3.1.10 wire form (struct element, not a
+	// string value).
+	resetSecs, presetIdx := uint32(300), uint32(7)
+	require.NoError(t, c.SetHomePosition("34020000001320000001", true, &resetSecs, &presetIdx))
+	require.Contains(t, sender.body, "<HomePosition><Enabled>1</Enabled><ResetTime>300</ResetTime><PresetIndex>7</PresetIndex></HomePosition>")
+	require.NoError(t, c.SetHomePosition("34020000001320000001", false, nil, nil))
+	require.Contains(t, sender.body, "<HomePosition><Enabled>0</Enabled></HomePosition>")
 }
 
 func TestSendDeviceControlOfflineAndMissing(t *testing.T) {

@@ -130,7 +130,7 @@ func (s *Service) forwardDeviceControl(dc manscdp.DeviceControl) {
 		case dc.TeleBoot != "":
 			slog.Warn("gb28181-cascade: TeleBoot refused (will not reboot this host)",
 				"channel", dc.DeviceID)
-		case dc.HomePosition != "":
+		case dc.HomePosition != nil:
 			slog.Warn("gb28181-cascade: HomePosition has no local equivalent — ignored",
 				"channel", dc.DeviceID)
 		}

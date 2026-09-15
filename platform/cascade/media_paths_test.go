@@ -147,7 +147,7 @@ func TestLoopbackDeviceControlIgnoredCommands(t *testing.T) {
 		{CmdType: manscdp.CmdDeviceControl, SN: 22, DeviceID: lbChannelOne, GuardCmd: "SetGuard"},
 		{CmdType: manscdp.CmdDeviceControl, SN: 23, DeviceID: lbChannelOne, AlarmCmd: "ResetAlarm"},
 		{CmdType: manscdp.CmdDeviceControl, SN: 24, DeviceID: lbChannelOne, TeleBoot: "Reboot"},
-		{CmdType: manscdp.CmdDeviceControl, SN: 25, DeviceID: lbChannelOne, HomePosition: "Set"},
+		{CmdType: manscdp.CmdDeviceControl, SN: 25, DeviceID: lbChannelOne, HomePosition: &manscdp.HomePositionCmd{Enabled: 1}},
 		{CmdType: manscdp.CmdDeviceControl, SN: 26, DeviceID: "34020099991320000099", PTZCmd: "A50F0108002000DD"},
 	}
 
@@ -156,6 +156,6 @@ func TestLoopbackDeviceControlIgnoredCommands(t *testing.T) {
 		require.NoError(t, err)
 
 		res := up.roundTrip(up.request(sip.MESSAGE, lbChannelOne, string(body), "Application/MANSCDP+xml"))
-		require.Equal(t, 200, int(res.StatusCode()), "DeviceControl %q must be acknowledged", dc.RecordCmd+dc.GuardCmd+dc.AlarmCmd+dc.TeleBoot+dc.HomePosition+dc.PTZCmd)
+		require.Equal(t, 200, int(res.StatusCode()), "DeviceControl SN %d must be acknowledged", dc.SN)
 	}
 }

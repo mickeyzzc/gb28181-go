@@ -161,6 +161,8 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		return unmarshalAs[RecordInfo](body, CmdRecordInfo)
 	case CmdDeviceControl:
 		return unmarshalAs[DeviceControl](body, CmdDeviceControl)
+	case CmdDeviceConfig:
+		return unmarshalAs[DeviceConfig](body, CmdDeviceConfig)
 	case CmdAlarm:
 		return unmarshalAs[Alarm](body, CmdAlarm)
 	case CmdBroadcast:

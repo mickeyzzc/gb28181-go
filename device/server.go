@@ -79,6 +79,10 @@ type Server struct {
 	// Set via SetControlHandlers before Start (read on the receive
 	// goroutine thereafter).
 	controlCbs ControlCallbacks
+	// configCbs hosts DeviceConfig sub-command callbacks (issue #80,
+	// A.2.3.2); zero value = every config command keeps the reject
+	// behavior. Set via SetConfigHandlers before Start.
+	configCbs ConfigCallbacks
 	// notifier is the SUBSCRIBE/NOTIFY bookkeeping + host-facing sender
 	// (issue #80); obtained by hosts via Notifier().
 	notifier *DeviceNotifier
@@ -130,6 +134,14 @@ func (s *Server) SetTestMode() {
 // Call before Start — callbacks fire on the SIP receive goroutine.
 func (s *Server) SetControlHandlers(c ControlCallbacks) {
 	s.controlCbs = c
+}
+
+// SetConfigHandlers installs DeviceConfig sub-command callbacks
+// (GB/T 28181-2022 §9.3.3 / A.2.3.2, issue #80). Each callback is
+// optional; a sub-command without its callback keeps the reject answer.
+// Call before Start — callbacks fire on the SIP receive goroutine.
+func (s *Server) SetConfigHandlers(c ConfigCallbacks) {
+	s.configCbs = c
 }
 
 // Notifier returns the host-facing NOTIFY sender (issue #80): hold it and
@@ -1210,6 +1222,35 @@ func (s *Server) handleBye(ctx context.Context, msg SipMessage, fromAddr net.Add
 
 // handleMessage handles MESSAGE requests - dispatch MANSCDP XML, send 200 OK, and any queued response.
 func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net.Addr) {
+	// ConfigDownload query (A.2.4.7 / A.2.6.9, issue #80): answer the
+	// minimal valid Response — OK plus the BasicParam block (name +
+	// registration tuning from the live config) when the request asked
+	// for it; every other config block is optional and omitted.
+	// Previously this fell through the unknown-CmdType warn + silence.
+	if q, ok := parseQueryDual(msg.Body); ok && q.CmdType == "ConfigDownload" {
+		ok200 := Build200OK(msg, "", "")
+		if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+			slog.Warn("gb28181: failed to send 200 OK to MESSAGE", "error", err)
+		}
+		var basic *BasicParamCfg
+		for _, t := range strings.Split(q.ConfigType, "/") {
+			if strings.TrimSpace(t) == "BasicParam" {
+				exp := uint64(s.cfg.RegisterIntervalSecs)
+				interval := uint64(s.cfg.HeartbeatIntervalSecs)
+				count := uint32(s.cfg.HeartbeatTimeoutCount)
+				basic = &BasicParamCfg{
+					Name:              s.devCtx.Name,
+					Expiration:        &exp,
+					HeartbeatInterval: &interval,
+					HeartbeatCount:    &count,
+				}
+				break
+			}
+		}
+		s.sendResponseMessage(BuildConfigDownloadResponseMessage(q.SN, q.DeviceID, basic), fromAddr)
+		return
+	}
+
 	ok200, queuedResp, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
 	if err != nil {
 		slog.Warn("gb28181: failed to dispatch MESSAGE", "error", err)
@@ -1258,6 +1299,25 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 			"sn", dc.SN, "deviceID", dc.DeviceID)
 		s.sendResponseMessage(BuildControlRejectResponseMessage(
 			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
+		return
+	}
+
+	// DeviceConfig sub-commands (§9.3.3 / A.2.3.2, issue #80): unlike
+	// controls, the answer is a Response body with Result (A.2.6.8) — OK
+	// when a callback executed, the queued reject's ERROR otherwise.
+	if cfg, ok := parseDeviceConfigSub(msg.Body); ok {
+		if cb := s.configCbs.callbackFor(&cfg); cb != nil {
+			slog.Info("gb28181: DeviceConfig sub-command executed",
+				"sn", cfg.SN, "deviceID", cfg.DeviceID)
+			cb()
+			s.sendResponseMessage(BuildDeviceConfigResponseMessage(
+				strconv.Itoa(cfg.SN), cfg.DeviceID, true), fromAddr)
+			return
+		}
+		slog.Warn("gb28181: DeviceConfig sub-command not handled — rejecting",
+			"sn", cfg.SN, "deviceID", cfg.DeviceID)
+		s.sendResponseMessage(BuildDeviceConfigResponseMessage(
+			strconv.Itoa(cfg.SN), cfg.DeviceID, false), fromAddr)
 		return
 	}
 
