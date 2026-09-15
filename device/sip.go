@@ -312,6 +312,34 @@ func BuildBye(requestUri, from, to, callId, cseq, contact string) SipMessage {
 	}
 }
 
+// BuildMediaStatusInfo builds the in-dialog SIP INFO reporting natural
+// end of a playback/download session (GB/T 28181-2016 §9.4.2, kept in
+// 2022): a MANSRTSP-style body "MediaStatus: Play Finished" /
+// "Download Finished" on the fetch dialog, so the platform can tear the
+// session down promptly instead of waiting out stall timeouts (twin of
+// gb28181-rs#64; the receiving half lives in this repo's platform/sip
+// handleInfo). `download` picks the variant.
+func BuildMediaStatusInfo(requestUri, from, to, callId, cseq, contact string, download bool) SipMessage {
+	status := "Play Finished"
+	if download {
+		status = "Download Finished"
+	}
+	return SipMessage{
+		Method:      "INFO",
+		RequestURI:  requestUri,
+		From:        from,
+		To:          to,
+		CallID:      callId,
+		CSeq:        cseq,
+		Contact:     contact,
+		MaxForwards: "70",
+		ContentType: "Application/MANSRTSP",
+		UserAgent:   UserAgent,
+		Body:        "MediaStatus: " + status + "\r\n",
+		Headers:     make(map[string]string),
+	}
+}
+
 // dialogTag is a stable To-tag suffix for this process. A single stable tag
 // is sufficient for a single-dialog GB28181 device. It is drawn from
 // crypto/rand — To-tags must not be predictable across restarts (RFC 3261

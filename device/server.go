@@ -1052,6 +1052,28 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		// Playback/Download: stream recorded segments instead of live AUs.
 		mediaCtx, mediaCancel := context.WithCancel(ctx)
 		ctlCh := make(chan PlaybackControl, 4)
+		// §9.4.2 (issue #82): capture the dialog snapshot for the
+		// completion INFO. UDP SIP only — over TCP/TLS the dialog's
+		// write half stays with the connection handler (follow-up).
+		var endNotify *mediaEndNotify
+		if (s.cfg.Transport == "" || s.cfg.Transport == "udp") && s.sipConn != nil {
+			if udpPeer, ok := fromAddr.(*net.UDPAddr); ok {
+				cseqNum := strings.TrimSpace(strings.SplitN(msg.CSeq, " ", 2)[0])
+				if n, err := strconv.Atoi(cseqNum); err == nil {
+					cseqNum = strconv.Itoa(n + 1)
+				}
+				localIPAddr := localIP()
+				contact := fmt.Sprintf("<sip:%s@%s:%d>", s.cfg.DeviceID, localIPAddr, s.cfg.LocalSIPPort)
+				endNotify = &mediaEndNotify{
+					conn: s.sipConn,
+					addr: udpPeer,
+					msg: BuildMediaStatusInfo(
+						msg.RequestURI, msg.From, msg.To, msg.CallID,
+						cseqNum+" INFO", contact,
+						sessionType == "Download"),
+				}
+			}
+		}
 		s.mu.Lock()
 		s.mediaCancel = mediaCancel
 		s.remoteRTPAddr = rtpDest
@@ -1060,7 +1082,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: playback media goroutine started", "session", sessionType, "remote", rtpDest.String(), "transport", s.cfg.Transport, "segments", len(playbackSegs))
 		go func() {
 			defer mediaCancel()
-			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh)
+			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
 		}()
 		return
 	}

@@ -58,7 +58,17 @@ func parseSDPTimeRange(body string) (startMs, endMs int64) {
 // (PAUSE/PLAY/seek/speed) from the server. It stops when mediaCtx is
 // cancelled (BYE or a replacing INVITE) or when the requested range is
 // exhausted (unless paused, in which case it holds for a seek or BYE).
-func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl) {
+// mediaEndNotify carries the §9.4.2 media-end INFO (issue #82): a
+// playback/download session that completes naturally sends it on the
+// INVITE dialog so the platform stops the fetch promptly. nil (TCP SIP,
+// or pre-#82 callers) keeps the historical silent end.
+type mediaEndNotify struct {
+	conn *net.UDPConn // SIP UDP socket the INFO leaves through
+	addr *net.UDPAddr // the INVITE's source — same path back
+	msg  SipMessage   // prebuilt in-dialog INFO request
+}
+
+func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify) {
 	pusher := NewRtpPusher(mediaConn, rtpDest)
 	pusher.SetMetricsHooks(s.metrics)
 	if mediaTCPConn != nil {
@@ -272,4 +282,14 @@ func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, m
 		slog.Info("gb28181: playback seek", "start", startMs, "end", endMs, "segments", len(segments))
 	}
 	slog.Info("gb28181: playback stream complete", "session", sessionType, "segments", len(segments))
+	// §9.4.2 (issue #82): natural completion notifies the platform with
+	// the in-dialog MediaStatus INFO. A cancelled context is BYE-side
+	// teardown — the platform already ended the dialog; stay silent.
+	if endNotify != nil && mediaCtx.Err() == nil {
+		if _, err := endNotify.conn.WriteToUDP(endNotify.msg.Serialize(), endNotify.addr); err != nil {
+			slog.Warn("gb28181: MediaStatus INFO send failed", "error", err)
+		} else {
+			slog.Info("gb28181: MediaStatus INFO sent", "session", sessionType)
+		}
+	}
 }

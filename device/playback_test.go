@@ -975,3 +975,173 @@ func TestServer_InfoNonPlaybackControlGets200(t *testing.T) {
 		"<sip:34020000012000000001@127.0.0.1:5060>",
 		`<Control><CmdType>DeviceControl</CmdType><SN>1</SN><DeviceID>d</DeviceID><Info><ControlValue>PAUSE</ControlValue></Info></Control>`))
 }
+
+// ── §9.4.2 MediaStatus completion INFO (issue #82) ──────────────────────
+
+// TestBuildMediaStatusInfoGolden pins the wire form of the completion
+// INFO: MANSRTSP-style body, CRLF-terminated, both §9.4.2 variants —
+// byte-compatible with the Rust twin (gb28181-rs#64) and with what this
+// repo's platform/sip handleInfo accepts.
+func TestBuildMediaStatusInfoGolden(t *testing.T) {
+	msg := BuildMediaStatusInfo(
+		"sip:34020000002000000001@3402000000",
+		"<sip:34020000001320000001@3402000000>;tag=4242",
+		"<sip:34020000002000000001@3402000000>",
+		"call-1@192.0.2.10", "2 INFO",
+		"<sip:34020000001320000001@192.0.2.10:5060>", false)
+	out := string(msg.Serialize())
+	if !strings.HasPrefix(out, "INFO sip:34020000002000000001@3402000000 SIP/2.0\r\n") {
+		t.Fatalf("start line: %q", out)
+	}
+	if !containsSubstring(out, "CSeq: 2 INFO\r\n") {
+		t.Fatalf("CSeq missing: %q", out)
+	}
+	if !containsSubstring(out, "Content-Type: Application/MANSRTSP\r\n") {
+		t.Fatalf("Content-Type missing: %q", out)
+	}
+	if !strings.HasSuffix(out, "MediaStatus: Play Finished\r\n") {
+		t.Fatalf("body: %q", out)
+	}
+	if !containsSubstring(out, "Content-Length: 28\r\n") {
+		t.Fatalf("Content-Length: %q", out)
+	}
+
+	dl := BuildMediaStatusInfo("sip:p@r", "<sip:a@b>;tag=1", "<sip:p@r>",
+		"c", "3 INFO", "<sip:a@b>", true)
+	if !strings.HasSuffix(string(dl.Serialize()), "MediaStatus: Download Finished\r\n") {
+		t.Fatalf("download body: %q", dl.Serialize())
+	}
+}
+
+// TestServer_PlaybackCompletionSendsMediaStatus drives a full playback
+// INVITE and asserts the §9.4.2 INFO lands on the platform SIP socket
+// once the paced stream completes naturally.
+func TestServer_PlaybackCompletionSendsMediaStatus(t *testing.T) {
+	dir := t.TempDir()
+	frames := []synthFrame{{0, true}, {50 * time.Millisecond, false}}
+	segs := writeSyntheticRecording(t, dir, frames)
+	idx := &testRecordingIndex{root: dir, segments: segs}
+
+	_, sipPort, cancel := startPlaybackServer(t, idx)
+	defer cancel()
+
+	mediaSock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("bind media socket: %v", err)
+	}
+	defer mediaSock.Close()
+	mediaPort := mediaSock.LocalAddr().(*net.UDPAddr).Port
+
+	invite := buildPlaybackInvite("call-ms@example.com", "Playback", segs[0].StartMS/1000, segs[0].EndMS/1000+1, mediaPort)
+	clientConn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: sipPort})
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer clientConn.Close()
+	if _, err := clientConn.Write(invite.Serialize()); err != nil {
+		t.Fatalf("send INVITE: %v", err)
+	}
+
+	// 200 OK for the INVITE…
+	respBuf := make([]byte, 4096)
+	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := clientConn.ReadFromUDP(respBuf)
+	if err != nil {
+		t.Fatalf("read 200 OK: %v", err)
+	}
+	if resp, _ := Parse(respBuf[:n]); resp.StatusCode != 200 {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+	// …both RTP frames on the media socket…
+	buf := make([]byte, 2048)
+	for range frames {
+		mediaSock.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
+			t.Fatalf("read RTP: %v", err)
+		}
+	}
+	// …then the §9.4.2 MediaStatus INFO on the SIP dialog.
+	clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, _, err = clientConn.ReadFromUDP(respBuf)
+	if err != nil {
+		t.Fatalf("MediaStatus INFO not received: %v", err)
+	}
+	info, err := Parse(respBuf[:n])
+	if err != nil {
+		t.Fatalf("parse INFO: %v", err)
+	}
+	if info.Method != "INFO" {
+		t.Fatalf("method = %q, want INFO", info.Method)
+	}
+	if !strings.HasSuffix(info.Body, "MediaStatus: Play Finished\r\n") {
+		t.Fatalf("INFO body: %q", info.Body)
+	}
+	if !containsSubstring(info.Body, "MediaStatus:") {
+		t.Fatal("body missing MediaStatus")
+	}
+}
+
+// TestServer_ByeSendsNoMediaStatus: BYE-side teardown (context cancel)
+// must stay silent — the platform already ended the dialog.
+func TestServer_ByeSendsNoMediaStatus(t *testing.T) {
+	dir := t.TempDir()
+	frames := []synthFrame{{0, true}, {50 * time.Millisecond, false}}
+	segs := writeSyntheticRecording(t, dir, frames)
+	idx := &testRecordingIndex{root: dir, segments: segs}
+
+	_, sipPort, cancel := startPlaybackServer(t, idx)
+	defer cancel()
+
+	mediaSock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("bind media socket: %v", err)
+	}
+	defer mediaSock.Close()
+	mediaPort := mediaSock.LocalAddr().(*net.UDPAddr).Port
+
+	invite := buildPlaybackInvite("call-bye@example.com", "Playback", segs[0].StartMS/1000, segs[0].EndMS/1000+1, mediaPort)
+	clientConn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: sipPort})
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer clientConn.Close()
+	if _, err := clientConn.Write(invite.Serialize()); err != nil {
+		t.Fatalf("send INVITE: %v", err)
+	}
+	respBuf := make([]byte, 4096)
+	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := clientConn.ReadFromUDP(respBuf); err != nil {
+		t.Fatalf("read 200 OK: %v", err)
+	}
+	// First RTP frame, then BYE mid-stream.
+	buf := make([]byte, 2048)
+	mediaSock.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := mediaSock.ReadFromUDP(buf); err != nil {
+		t.Fatalf("read first RTP: %v", err)
+	}
+	bye := SipMessage{
+		Method:     "BYE",
+		RequestURI: "sip:34020000001320000001@3402000000",
+		From:       invite.To,
+		To:         invite.From,
+		CallID:     invite.CallID,
+		CSeq:       "2 BYE",
+		Headers:    map[string]string{},
+	}
+	if _, err := clientConn.Write(bye.Serialize()); err != nil {
+		t.Fatalf("send BYE: %v", err)
+	}
+	// BYE is answered 200; then the socket must stay silent — no INFO.
+	clientConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	if n, _, err := clientConn.ReadFromUDP(respBuf); err == nil {
+		if msg, perr := Parse(respBuf[:n]); perr == nil && msg.Method == "INFO" {
+			t.Fatalf("unexpected MediaStatus INFO after BYE: %q", msg.Body)
+		}
+	}
+	clientConn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	if n, _, err := clientConn.ReadFromUDP(respBuf); err == nil {
+		if msg, perr := Parse(respBuf[:n]); perr == nil && msg.Method == "INFO" {
+			t.Fatalf("unexpected MediaStatus INFO after BYE (2nd read): %q", msg.Body)
+		}
+	}
+}
