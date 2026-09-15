@@ -79,6 +79,15 @@ type Server struct {
 	// Set via SetControlHandlers before Start (read on the receive
 	// goroutine thereafter).
 	controlCbs ControlCallbacks
+	// notifier is the SUBSCRIBE/NOTIFY bookkeeping + host-facing sender
+	// (issue #80); obtained by hosts via Notifier().
+	notifier *DeviceNotifier
+	// positionSource drives periodic MobilePosition reports (issue #80);
+	// nil = position NOTIFYs only via the notifier's direct sends.
+	positionSource PositionSource
+	// positionCancel stops the running position report loop (replaced on
+	// re-SUBSCRIBE).
+	positionCancel chan struct{}
 	// metrics receives lifecycle/media observations (issue #40).
 	metrics metrics.Hooks
 }
@@ -86,12 +95,14 @@ type Server struct {
 // New creates a new GB28181 server.
 func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 	return &Server{
-		cfg:          cfg,
-		deviceCfg:    deviceCfg,
-		hub:          hub,
-		regRespCh:    make(chan SipMessage, 4),
-		reRegisterCh: make(chan struct{}, 1),
-		metrics:      metrics.NoopHooks{},
+		cfg:            cfg,
+		deviceCfg:      deviceCfg,
+		hub:            hub,
+		regRespCh:      make(chan SipMessage, 4),
+		reRegisterCh:   make(chan struct{}, 1),
+		metrics:        metrics.NoopHooks{},
+		notifier:       newDeviceNotifier(),
+		positionCancel: make(chan struct{}),
 	}
 }
 
@@ -115,6 +126,24 @@ func (s *Server) SetTestMode() {
 // Call before Start — callbacks fire on the SIP receive goroutine.
 func (s *Server) SetControlHandlers(c ControlCallbacks) {
 	s.controlCbs = c
+}
+
+// Notifier returns the host-facing NOTIFY sender (issue #80): hold it and
+// call SendAlarm / SendCatalogChange / SendMobilePosition whenever the
+// business side has something to report — no-ops until the platform
+// subscribes.
+func (s *Server) Notifier() *DeviceNotifier {
+	return s.notifier
+}
+
+// SetPositionSource installs the periodic MobilePosition source: while a
+// MobilePosition subscription is live, the server pulls the source on
+// the SUBSCRIBE's Interval (default 5s) and sends position NOTIFYs.
+// Call before Start.
+func (s *Server) SetPositionSource(src PositionSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.positionSource = src
 }
 
 // SetRecordingIndex injects the recording index used for RecordInfo queries.
@@ -171,6 +200,10 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sipConn = sipConn
 	s.mu.Unlock()
 	slog.Info("gb28181: SIP UDP listener started", "port", s.cfg.LocalSIPPort)
+
+	// SUBSCRIBE/NOTIFY (issue #80): give the host-facing notifier the
+	// sending context before the loop starts answering SUBSCRIBEs.
+	s.notifier.bind(sipConn, s.cfg.DeviceID, s.cfg.SIPDomain, localIP(), uint16(s.cfg.LocalSIPPort))
 
 	// Run REGISTER lifecycle (skip in test mode). A failed initial
 	// REGISTER must NOT kill the server: the platform may be
@@ -241,7 +274,9 @@ func (s *Server) Start(ctx context.Context) error {
 				// No action needed - media is now flowing
 			case "INFO":
 				s.handleInfo(ctx, msg, addr)
-			case "SUBSCRIBE", "NOTIFY", "OPTIONS":
+			case "SUBSCRIBE":
+				s.handleSubscribe(msg, addr)
+			case "NOTIFY", "OPTIONS":
 				slog.Info("gb28181: received method, responding 200 OK", "method", msg.Method, "from", addr.String())
 				ok200 := Build200OK(msg, "", "")
 				if _, err := s.sipConn.WriteToUDP(ok200.Serialize(), addr); err != nil {
