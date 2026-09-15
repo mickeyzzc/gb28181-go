@@ -142,7 +142,7 @@ func TestDeviceControlSubCommandsExecuteCallbacks(t *testing.T) {
 		OnGuardCmd:    func(arm bool) { rec.add("guard:" + strconv.FormatBool(arm)) },
 		OnResetAlarm:  func() { rec.add("alarm") },
 		OnTeleBoot:    func() { rec.add("boot") },
-		OnPTZCmd:      func(hex string) { rec.add("ptz:" + hex) },
+		OnPTZCmd:      func(cmd device.PtzCommand) { rec.add("ptz:" + cmd.RawHex) },
 	}
 	platConn, devAddr := startCtrlTestServer(t, cbs)
 
@@ -158,7 +158,7 @@ func TestDeviceControlSubCommandsExecuteCallbacks(t *testing.T) {
 		{"guard off", "<GuardCmd>ResetGuard</GuardCmd>", "guard:false"},
 		{"alarm", "<AlarmCmd>ResetAlarm</AlarmCmd>", "alarm"},
 		{"teleboot", "<TeleBoot>Boot</TeleBoot>", "boot"},
-		{"ptz passthrough", "<PTZCmd>A50F01021F00</PTZCmd>", "ptz:A50F01021F00"},
+		{"ptz decoded", "<PTZCmd>A50F0102200000D7</PTZCmd>", "ptz:A50F0102200000D7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			callID := "ctrl" + strconv.Itoa(i)

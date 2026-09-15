@@ -33,9 +33,11 @@ type ControlCallbacks struct {
 	// Gate the actual reboot behind an explicit host opt-in; leaving the
 	// callback nil makes the command a control reject.
 	OnTeleBoot func()
-	// OnPTZCmd receives the raw §A.3/A505 command hex; bit-level decode
-	// stays with the host (shared decoder planned under gb28181-rs#57).
-	OnPTZCmd func(a505Hex string)
+	// OnPTZCmd receives the §A.3/A.4 PTZCmd bit-level decoded (the 8-byte
+	// A5 0F command: movement direction/speed bits, presets, cruise, FI
+	// lens, auxiliary switches). Structurally invalid hex arrives as
+	// Kind=PtzInvalid with RawHex preserving the input.
+	OnPTZCmd func(cmd PtzCommand)
 }
 
 // callbackFor maps a decoded DeviceControl to the installed callback.
@@ -66,7 +68,8 @@ func (c *ControlCallbacks) callbackFor(dc *manscdp.DeviceControl) func() {
 		return c.OnTeleBoot
 	case dc.PTZCmd != "":
 		if c.OnPTZCmd != nil {
-			return func() { c.OnPTZCmd(dc.PTZCmd) }
+			hex := dc.PTZCmd
+			return func() { c.OnPTZCmd(DecodePTZCommand(hex)) }
 		}
 	}
 	return nil
