@@ -145,6 +145,11 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		return unmarshalAs[SDCardStatusQuery](body, CmdSDCardStatus)
 	case probe.CmdType == CmdSDCardStatus:
 		return unmarshalAs[SDCardStatusResponse](body, CmdSDCardStatus)
+	// Voice broadcast: the Notify root is the platform's announcement
+	// (A.2.5.5), the Response root is the device's acknowledgement
+	// (A.2.6.11) — same CmdType, discriminated by root element.
+	case probe.CmdType == CmdBroadcast && probe.XMLName.Local == "Response":
+		return unmarshalAs[BroadcastResponse](body, CmdBroadcast)
 	}
 	switch probe.CmdType {
 	case CmdCatalog:

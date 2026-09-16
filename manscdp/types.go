@@ -311,6 +311,39 @@ type Broadcast struct {
 	SNAttr      int     `xml:"SN,attr,omitempty"`
 }
 
+// BroadcastResponse is the voice-broadcast acknowledgement (语音广播
+// 应答, GB/T 28181-2022 A.2.6.11): the audio output device reports
+// whether it can receive the announced broadcast. Attribute-form
+// CmdType/SN like the rest of the Response family.
+type BroadcastResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  CmdType  `xml:"CmdType,attr"`
+	SN       int      `xml:"SN,attr"`
+	DeviceID string   `xml:"DeviceID"`
+	Result   string   `xml:"Result"` // "OK" / "ERROR"
+}
+
+// BroadcastResultOK / BroadcastResultERROR are the A.2.6.11 Result values.
+const (
+	BroadcastResultOK    = "OK"
+	BroadcastResultERROR = "ERROR"
+)
+
+// BuildBroadcastResponse assembles the device-side acknowledgement: OK
+// when the device can receive the broadcast, ERROR otherwise.
+func BuildBroadcastResponse(sn int, deviceID string, ok bool) BroadcastResponse {
+	result := BroadcastResultERROR
+	if ok {
+		result = BroadcastResultOK
+	}
+	return BroadcastResponse{
+		CmdType:  CmdBroadcast,
+		SN:       sn,
+		DeviceID: deviceID,
+		Result:   result,
+	}
+}
+
 func (m *Alarm) normalize() {
 	if m.CmdType == "" {
 		m.CmdType = m.CmdTypeAttr

@@ -157,7 +157,10 @@ type Server struct {
 
 	// Talk sessions (#341): channelID -> active voice intercom.
 	talkMu sync.Mutex
-	talks  map[string]*talkSession
+	// broadcasts holds armed voice-broadcast sessions keyed by device ID
+	// (§9.12.1 delivery, issue #84).
+	broadcasts map[string]*broadcastSession
+	talks      map[string]*talkSession
 	// alarmLinkage drives alarm-triggered streaming (#355).
 	alarmLinkage *alarmLinkage
 	talkSeq      int
@@ -209,6 +212,7 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 		alarmRing:     make(map[string][]GB28181AlarmEvent),
 		posRing:       make(map[string][]platform.GBPosition),
 		talks:         make(map[string]*talkSession),
+		broadcasts:    make(map[string]*broadcastSession),
 		perDeviceMu:   make(map[string]*sync.Mutex),
 	}
 	s.alarmLinkage = newAlarmLinkage(
@@ -1398,6 +1402,15 @@ func (s *Server) handleMessage(req sip.Request, tx sip.ServerTransaction) {
 	}
 
 	switch ct {
+	case manscdp.CmdBroadcast:
+		// The Response root is the device's 语音广播应答 (A.2.6.11, issue
+		// #84): informational — the delivery hinges on the INVITE that
+		// follows. The Notify form never arrives platform-side.
+		if ack, ok := payload.(manscdp.BroadcastResponse); ok {
+			s.handleBroadcastAck(ack, fromUser)
+			s.respond(req, tx, statusOK, "OK", nil)
+			return
+		}
 	case manscdp.CmdKeepalive:
 		p := payload.(manscdp.Keepalive)
 		// A keepalive must come from the device it vouches for — otherwise a
@@ -1728,6 +1741,11 @@ func (s *Server) handleOptions(req sip.Request, tx sip.ServerTransaction) {
 // when no hook is installed (media sessions not yet wired).
 func (s *Server) handleInvite(req sip.Request, tx sip.ServerTransaction) {
 	deviceID, channelID := s.requestIDs(req)
+	// Voice broadcast arm (§9.12.1 信令5, issue #84): an audio-only INVITE
+	// from a device with an armed broadcast completes the delivery.
+	if s.answerBroadcastInvite(req, tx, deviceID, channelID) {
+		return
+	}
 	s.mu.Lock()
 	hook := s.onInvite
 	s.mu.Unlock()

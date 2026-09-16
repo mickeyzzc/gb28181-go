@@ -61,6 +61,18 @@ func (s *Server) SetTalkbackSink(sink TalkbackSink) {
 	s.audioSink = sink
 }
 
+// SetOnBroadcast observes voice-broadcast notifications (§9.12.1 信令1)
+// after this change: the callback is informational — the library runs the
+// acknowledgement and INVITE-back flow automatically when a talkback
+// sink is installed; hosts use this to log or prepare UI. Call before
+// Start.
+func (s *Server) SetOnBroadcast(cb func(sourceID, targetID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onBroadcast = cb
+	s.devCtx.OnBroadcast = cb
+}
+
 // SetTalkbackSource installs the upstream half of §9.2 voice talkback
 // (issue #83): a channel of pre-framed G.711 bytes the device sends as
 // RTP toward the platform's media address on the talk session. Frames

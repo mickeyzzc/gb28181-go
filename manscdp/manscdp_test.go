@@ -2,6 +2,7 @@ package manscdp
 
 import (
 	"bytes"
+	"encoding/xml"
 	"os"
 	"testing"
 
@@ -411,4 +412,43 @@ func TestBroadcastDecode(t *testing.T) {
 	b2, ok := v2.(Broadcast)
 	require.True(t, ok)
 	require.Equal(t, "s2", b2.SourceID)
+}
+
+// ── Voice broadcast (§9.12.1 / A.2.5.5 + A.2.6.11, issue #84) ─────────
+
+// The Notify root is the platform's announcement, the Response root the
+// device's acknowledgement — same CmdType, discriminated by root.
+func TestBroadcastResponseRoundTrip(t *testing.T) {
+	ack := BuildBroadcastResponse(7, "34020000001320000001", true)
+	data, err := xml.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `<Response CmdType="Broadcast" SN="7"><DeviceID>34020000001320000001</DeviceID><Result>OK</Result></Response>`
+	if string(data) != want {
+		t.Fatalf("golden mismatch:\n got %s\nwant %s", data, want)
+	}
+	ct, v, err := Decode(data)
+	if err != nil || ct != CmdBroadcast {
+		t.Fatalf("decode: ct=%v err=%v", ct, err)
+	}
+	back, ok := v.(BroadcastResponse)
+	if !ok || back.Result != BroadcastResultOK || back.SN != 7 || back.DeviceID != "34020000001320000001" {
+		t.Fatalf("decoded = %+v", back)
+	}
+
+	declined := BuildBroadcastResponse(8, "34020000001320000001", false)
+	if declined.Result != BroadcastResultERROR {
+		t.Fatalf("declined result = %q", declined.Result)
+	}
+
+	// The announcement form still decodes as Broadcast (Notify root).
+	notify := []byte(`<Notify><CmdType>Broadcast</CmdType><SN>9</SN><SourceID>34020000002000000001</SourceID><TargetID>34020000001320000001</TargetID></Notify>`)
+	ct2, v2, err := Decode(notify)
+	if err != nil || ct2 != CmdBroadcast {
+		t.Fatalf("notify decode: ct=%v err=%v", ct2, err)
+	}
+	if b, ok := v2.(Broadcast); !ok || b.SourceID != "34020000002000000001" || b.TargetID != "34020000001320000001" || b.SN != 9 {
+		t.Fatalf("notify = %+v", v2)
+	}
 }

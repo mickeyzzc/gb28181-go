@@ -55,9 +55,16 @@ type Server struct {
 	sub          *FrameSubscription
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
+	// onBroadcast is the host callback for voice-broadcast notifications
+	// (§9.12.1), copied into devCtx at Start.
+	onBroadcast func(sourceID, targetID string)
 	// regRespCh routes REGISTER responses from the recv loop to an active
 	// registration attempt (prevents both readers racing on sipConn).
 	regRespCh chan SipMessage
+	// inviteRespCh routes INVITE responses (voice-broadcast handshake,
+	// issue #84) from the recv loop to the goroutine awaiting the
+	// platform's 200 OK.
+	inviteRespCh chan SipMessage
 	// reRegisterCh signals the lifecycle goroutine to re-register now
 	// (keepalive 401/403 rejection, send failures, periodic tick).
 	reRegisterCh chan struct{}
@@ -114,6 +121,7 @@ func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 		deviceCfg:      deviceCfg,
 		hub:            hub,
 		regRespCh:      make(chan SipMessage, 4),
+		inviteRespCh:   make(chan SipMessage, 4),
 		reRegisterCh:   make(chan struct{}, 1),
 		metrics:        metrics.NoopHooks{},
 		notifier:       newDeviceNotifier(),
@@ -191,6 +199,8 @@ func (s *Server) Start(ctx context.Context) error {
 		Firmware:     s.deviceCfg.Firmware,
 		LocalIP:      localIP(),
 		LocalPort:    s.cfg.LocalSIPPort,
+
+		OnBroadcast: s.onBroadcast,
 	}
 
 	// Create child context with cancel for lifecycle management
@@ -708,6 +718,14 @@ func (s *Server) handleResponse(msg SipMessage) {
 	if strings.Contains(msg.CSeq, "REGISTER") {
 		select {
 		case s.regRespCh <- msg:
+		default:
+		}
+		return
+	}
+	// Route INVITE responses to the voice-broadcast handshake (issue #84).
+	if strings.Contains(msg.CSeq, "INVITE") {
+		select {
+		case s.inviteRespCh <- msg:
 		default:
 		}
 		return
@@ -1401,6 +1419,14 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 	// Send 200 OK
 	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
 		slog.Warn("gb28181: failed to send 200 OK to MESSAGE", "error", err)
+	}
+
+	// Voice broadcast (§9.12.1, issue #84): the OnBroadcast callback has
+	// fired inside the dispatch; the §9.12.1 follow-up (acknowledgement
+	// MESSAGE + the INVITE-back receive session) runs asynchronously —
+	// its 5s answer window must not stall signaling.
+	if b, ok := decodeBroadcast(msg.Body); ok {
+		go s.followBroadcast(ctx, b, fromAddr)
 	}
 
 	// DeviceControl(SnapShot) (GB/T 28181-2022 A.2.1.24): with an

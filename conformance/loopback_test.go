@@ -50,6 +50,12 @@ type loopback struct {
 }
 
 func startLoopback(t *testing.T, heartbeat time.Duration) *loopback {
+	return startLoopbackWith(t, heartbeat, nil)
+}
+
+// startLoopbackWith is startLoopback plus a pre-Start device configure
+// hook (host seams like the talkback sink).
+func startLoopbackWith(t *testing.T, heartbeat time.Duration, configure func(*device.Server)) *loopback {
 	t.Helper()
 	ctx := context.Background()
 
@@ -97,6 +103,9 @@ func startLoopback(t *testing.T, heartbeat time.Duration) *loopback {
 		Firmware:     "conf-1",
 		SerialNumber: "conf-sn-1",
 	}, fh)
+	if configure != nil {
+		configure(dsrv)
+	}
 	// device.Server.Start runs its SIP receive loop in the caller's
 	// goroutine and only returns on error/context-cancel — run it like a
 	// host would; registration success is the readiness signal.
@@ -332,4 +341,68 @@ func TestLoopback_SIPSRegisterCatalog(t *testing.T) {
 	dev := lb.onlineDevice(t)
 	require.Equal(t, platform.DeviceOnline, dev.Status.Load())
 	lb.channelOf(t) // catalog query + answer rode the TLS connection
+}
+
+// TestLoopback_VoiceBroadcast covers the §9.12.1 delivery end-to-end
+// (issue #84): the platform announces (信令1), the device acknowledges
+// (信令3) and INVITEs back (信令5), the platform answers and streams
+// host-provided G.711 RTP into the device's talkback sink; Stop sends
+// the in-dialog BYE.
+func TestLoopback_VoiceBroadcast(t *testing.T) {
+	var mu sync.Mutex
+	var got []([]byte)
+	var notified []string
+	lb := startLoopbackWith(t, 0, func(s *device.Server) {
+		s.SetTalkbackSink(talkSinkFunc(func(payload []byte, ssrc uint32, codec device.AudioCodec) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, append([]byte(nil), payload...))
+		}))
+		s.SetOnBroadcast(func(sourceID, targetID string) {
+			mu.Lock()
+			defer mu.Unlock()
+			notified = append(notified, sourceID+"->"+targetID)
+		})
+	})
+	lb.onlineDevice(t)
+	lb.channelOf(t)
+
+	audio := make(chan []byte, 8)
+	h, err := lb.platformSrv.StartBroadcast(lbDeviceID, lbServerID, audio)
+	require.NoError(t, err)
+
+	select {
+	case <-h.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("broadcast session never came up (device INVITE not answered)")
+	}
+
+	audio <- []byte{0xD5, 0x5A, 0xA5, 0x37}
+	audio <- []byte{0x0F}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) < 2 || string(got[0]) != "\xD5\x5A\xA5\x37" || string(got[1]) != "\x0F" {
+		t.Fatalf("sink payloads = %v", got)
+	}
+	if len(notified) != 1 || notified[0] != lbServerID+"->"+lbDeviceID {
+		t.Fatalf("OnBroadcast notifications = %v", notified)
+	}
+	require.NoError(t, lb.platformSrv.StopBroadcast(lbDeviceID))
+}
+
+// talkSinkFunc adapts a closure to the TalkbackSink interface.
+type talkSinkFunc func(payload []byte, ssrc uint32, codec device.AudioCodec)
+
+func (f talkSinkFunc) OnAudio(payload []byte, ssrc uint32, codec device.AudioCodec) {
+	f(payload, ssrc, codec)
 }
