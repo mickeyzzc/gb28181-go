@@ -143,6 +143,12 @@ func TestDeviceControlSubCommandsExecuteCallbacks(t *testing.T) {
 		OnResetAlarm:  func() { rec.add("alarm") },
 		OnTeleBoot:    func() { rec.add("boot") },
 		OnPTZCmd:      func(cmd device.PtzCommand) { rec.add("ptz:" + cmd.RawHex) },
+		OnDragZoom: func(cmd device.DragZoom) {
+			rec.add("dragzoom:" + strconv.FormatBool(cmd.ZoomIn) + ":" +
+				strconv.Itoa(cmd.Length) + "," + strconv.Itoa(cmd.Width) + "," +
+				strconv.Itoa(cmd.MidPointX) + "," + strconv.Itoa(cmd.MidPointY) + "," +
+				strconv.Itoa(cmd.LengthX) + "," + strconv.Itoa(cmd.LengthY))
+		},
 	}
 	platConn, devAddr := startCtrlTestServer(t, cbs)
 
@@ -159,6 +165,18 @@ func TestDeviceControlSubCommandsExecuteCallbacks(t *testing.T) {
 		{"alarm", "<AlarmCmd>ResetAlarm</AlarmCmd>", "alarm"},
 		{"teleboot", "<TeleBoot>Boot</TeleBoot>", "boot"},
 		{"ptz decoded", "<PTZCmd>A50F0102200000D7</PTZCmd>", "ptz:A50F0102200000D7"},
+		{
+			"dragzoom in", "<DragZoomIn><Length>1920</Length><Width>1080</Width>" +
+				"<MidPointX>960</MidPointX><MidPointY>540</MidPointY>" +
+				"<LengthX>480</LengthX><LengthY>270</LengthY></DragZoomIn>",
+			"dragzoom:true:1920,1080,960,540,480,270",
+		},
+		{
+			"dragzoom out", "<DragZoomOut><Length>1920</Length><Width>1080</Width>" +
+				"<MidPointX>960</MidPointX><MidPointY>540</MidPointY>" +
+				"<LengthX>480</LengthX><LengthY>270</LengthY></DragZoomOut>",
+			"dragzoom:false:1920,1080,960,540,480,270",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			callID := "ctrl" + strconv.Itoa(i)
@@ -191,5 +209,34 @@ func TestDeviceControlWithoutCallbackIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(reject.Body, `CmdType="DeviceControl"`) {
 		t.Fatalf("reject body missing DeviceControl echo: %s", reject.Body)
+	}
+}
+
+func TestDragZoomMissingChildIsRejected(t *testing.T) {
+	// A.2.3.1.8/9 mark all six children 必选 — a body missing one gets
+	// the control reject even with the callback installed (parity with
+	// the Rust twin's strict reading).
+	seen := make(chan struct{}, 1)
+	cbs := device.ControlCallbacks{
+		OnDragZoom: func(device.DragZoom) { seen <- struct{}{} },
+	}
+	platConn, devAddr := startCtrlTestServer(t, cbs)
+
+	writeSnapMsg(t, platConn, ctrlMessage("dzmissing",
+		"<DragZoomIn><Length>1920</Length><Width>1080</Width>"+
+			"<MidPointX>960</MidPointX><MidPointY>540</MidPointY>"+
+			"<LengthX>480</LengthX></DragZoomIn>"), devAddr)
+	ok, _ := readSnapMsg(t, platConn)
+	if ok.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200 (msg: %v)", ok.StatusCode, ok)
+	}
+	reject, _ := readSnapMsg(t, platConn)
+	if reject.Method != "MESSAGE" || !strings.Contains(reject.Body, "<Result>ERROR</Result>") {
+		t.Fatalf("expected ControlReject MESSAGE, got %v (body: %s)", reject, reject.Body)
+	}
+	select {
+	case <-seen:
+		t.Fatal("OnDragZoom must not fire for a body missing LengthY")
+	default:
 	}
 }

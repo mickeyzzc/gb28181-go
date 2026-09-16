@@ -203,10 +203,16 @@ type DeviceControl struct {
 	// preset after ResetTime seconds of inactivity; Enabled=0 disables.
 	// Absent optional fields mean "keep current".
 	HomePosition *HomePositionCmd `xml:"HomePosition,omitempty"`
-	TeleBoot     string           `xml:"TeleBoot,omitempty"`
-	RecordCmd    string           `xml:"RecordCmd,omitempty"`
-	GuardCmd     string           `xml:"GuardCmd,omitempty"`
-	AlarmCmd     string           `xml:"AlarmCmd,omitempty"`
+	// DragZoomIn / DragZoomOut carry the 拉框放大/缩小 control
+	// (A.2.3.1.8/9): the box the platform user drew on the playback
+	// window, in window pixels. Mirrors gb28181-rs #58 readings
+	// (issue #81).
+	DragZoomIn  *DragZoomCmd `xml:"DragZoomIn,omitempty"`
+	DragZoomOut *DragZoomCmd `xml:"DragZoomOut,omitempty"`
+	TeleBoot    string       `xml:"TeleBoot,omitempty"`
+	RecordCmd   string       `xml:"RecordCmd,omitempty"`
+	GuardCmd    string       `xml:"GuardCmd,omitempty"`
+	AlarmCmd    string       `xml:"AlarmCmd,omitempty"`
 	// SnapShot carries the GB/T 28181-2022 image-snapshot command
 	// (A.2.1.24): the device captures JPEGs and uploads them over HTTP,
 	// then reports UploadSnapShotFinished with the same SessionID.
@@ -428,6 +434,21 @@ type HomePositionCmd struct {
 	Enabled     uint32  `xml:"Enabled"`               // 1 = enabled, 0 = disabled (required)
 	ResetTime   *uint32 `xml:"ResetTime,omitempty"`   // auto-reset interval, seconds
 	PresetIndex *uint32 `xml:"PresetIndex,omitempty"` // preset to return to, 0-255
+}
+
+// DragZoomCmd is the wire form of the 拉框放大/缩小 control payload
+// (A.2.3.1.8 DragZoomIn / A.2.3.1.9 DragZoomOut): the box the platform
+// user drew on the playback window, in window pixels with the origin at
+// the top-left corner. All six children are required by the standard;
+// they decode as pointers so a missing child stays distinguishable from
+// a legitimate 0 (parity with gb28181-rs #58's strict reading).
+type DragZoomCmd struct {
+	Length    *int `xml:"Length"`    // 播放窗口长度像素值 (window length, px)
+	Width     *int `xml:"Width"`     // 播放窗口宽度像素值 (window width, px)
+	MidPointX *int `xml:"MidPointX"` // 拉框中心横轴坐标像素值 (box centre X, px)
+	MidPointY *int `xml:"MidPointY"` // 拉框中心纵轴坐标像素值 (box centre Y, px)
+	LengthX   *int `xml:"LengthX"`   // 拉框长度像素值 (box length, px)
+	LengthY   *int `xml:"LengthY"`   // 拉框宽度像素值 (box width, px)
 }
 
 // BasicParamCmd is the A.2.3.2.2 基本参数配置 body: every child optional.

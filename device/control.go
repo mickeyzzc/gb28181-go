@@ -42,6 +42,52 @@ type ControlCallbacks struct {
 	// auto-return to presetIndex after resetTime seconds of inactivity
 	// (enabled=0 disables). Nil optional fields mean "keep current".
 	OnHomePosition func(enabled uint32, resetTime, presetIndex *uint32)
+	// OnDragZoom handles the 拉框放大/缩小 control (A.2.3.1.8/9): zoom
+	// the drawn box to fill the playback window (ZoomIn) or the window
+	// into the box (ZoomOut). A body missing any required child gets the
+	// control reject (parity with the Rust twin).
+	OnDragZoom func(cmd DragZoom)
+}
+
+// DragZoom is the decoded 拉框放大/缩小 control (A.2.3.1.8/9) handed to
+// OnDragZoom: the box the platform user drew on the playback window, in
+// window pixels with the origin at the top-left corner.
+type DragZoom struct {
+	// ZoomIn is true for DragZoomIn (放大 — box grows to fill the
+	// window), false for DragZoomOut (缩小 — window shrinks into the
+	// box).
+	ZoomIn bool
+	// Length is the playback-window length in px (播放窗口长度像素值).
+	Length int
+	// Width is the playback-window width in px (播放窗口宽度像素值).
+	Width int
+	// MidPointX is the box centre X in px (拉框中心横轴坐标像素值).
+	MidPointX int
+	// MidPointY is the box centre Y in px (拉框中心纵轴坐标像素值).
+	MidPointY int
+	// LengthX is the box length in px (拉框长度像素值).
+	LengthX int
+	// LengthY is the box width in px (拉框宽度像素值).
+	LengthY int
+}
+
+// decodeDragZoom converts the wire payload; ok=false when a required
+// child is missing (A.2.3.1.8/9 marks all six 必选 — the Rust twin
+// rejects the same bodies).
+func decodeDragZoom(cmd *manscdp.DragZoomCmd, zoomIn bool) (DragZoom, bool) {
+	if cmd == nil || cmd.Length == nil || cmd.Width == nil || cmd.MidPointX == nil ||
+		cmd.MidPointY == nil || cmd.LengthX == nil || cmd.LengthY == nil {
+		return DragZoom{}, false
+	}
+	return DragZoom{
+		ZoomIn:    zoomIn,
+		Length:    *cmd.Length,
+		Width:     *cmd.Width,
+		MidPointX: *cmd.MidPointX,
+		MidPointY: *cmd.MidPointY,
+		LengthX:   *cmd.LengthX,
+		LengthY:   *cmd.LengthY,
+	}, true
 }
 
 // callbackFor maps a decoded DeviceControl to the installed callback.
@@ -79,6 +125,18 @@ func (c *ControlCallbacks) callbackFor(dc *manscdp.DeviceControl) func() {
 		if c.OnHomePosition != nil {
 			hp := dc.HomePosition
 			return func() { c.OnHomePosition(hp.Enabled, hp.ResetTime, hp.PresetIndex) }
+		}
+	case dc.DragZoomIn != nil:
+		if c.OnDragZoom != nil {
+			if dz, ok := decodeDragZoom(dc.DragZoomIn, true); ok {
+				return func() { c.OnDragZoom(dz) }
+			}
+		}
+	case dc.DragZoomOut != nil:
+		if c.OnDragZoom != nil {
+			if dz, ok := decodeDragZoom(dc.DragZoomOut, false); ok {
+				return func() { c.OnDragZoom(dz) }
+			}
 		}
 	}
 	return nil
