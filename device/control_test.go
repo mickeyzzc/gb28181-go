@@ -52,6 +52,16 @@ func startCtrlTestServer(t *testing.T, cbs device.ControlCallbacks) (*net.UDPCon
 // per-suite host seams before Start.
 func startWireTestServer(t *testing.T, configure func(*device.Server)) (*net.UDPConn, *net.UDPAddr) {
 	t.Helper()
+	platConn, devAddr, _ := startWireTestServerFull(t, configure, nil)
+	return platConn, devAddr
+}
+
+// startWireTestServerFull is startWireTestServer also returning the
+// Server (suites that drive the device side itself — e.g. Deregister —
+// need the handle). tweakCfg adjusts the Config before Start (e.g. swap
+// the stub authenticator for the classic Digest path).
+func startWireTestServerFull(t *testing.T, configure func(*device.Server), tweakCfg func(*device.Config)) (*net.UDPConn, *net.UDPAddr, *device.Server) {
+	t.Helper()
 
 	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
@@ -79,6 +89,9 @@ func startWireTestServer(t *testing.T, configure func(*device.Server)) (*net.UDP
 		HeartbeatTimeoutCount: 3,
 		RegisterAuthenticator: snapStubAuth{},
 	}
+	if tweakCfg != nil {
+		tweakCfg(&cfg)
+	}
 	srv := device.New(cfg, device.DeviceInfo{}, device.NewFrameHub())
 	configure(srv)
 
@@ -101,7 +114,7 @@ func startWireTestServer(t *testing.T, configure func(*device.Server)) (*net.UDP
 	}, peer)
 
 	devAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: sipPort}
-	return platConn, devAddr
+	return platConn, devAddr, srv
 }
 
 func ctrlMessage(callID, sub string) device.SipMessage {

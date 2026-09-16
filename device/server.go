@@ -886,6 +886,103 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	return fmt.Errorf("unexpected REGISTER response: %d", resp.StatusCode)
 }
 
+// Deregister de-registers from the platform (REGISTER with Expires: 0,
+// GB/T 28181 graceful departure, issue #84): the same 401 Digest dance
+// as registration with 2s response timeouts. Call it BEFORE Stop() —
+// Stop() hard-cancels without touching the registration, so a host that
+// skips this leaves the platform to learn via keepalive timeout. A
+// returned error must not stop the subsequent Stop(): it merely means
+// the platform never confirmed the departure (the pre-existing
+// behavior). Test mode is a no-op nil.
+func (s *Server) Deregister(ctx context.Context) error {
+	if s.testMode {
+		return nil
+	}
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
+	return s.runDeregisterLifecycle(ctx, s.channelResponseSource())
+}
+
+// runDeregisterLifecycle mirrors runRegisterLifecycleInner with Expires
+// 0 on both legs; a platform may accept the unauthenticated leg outright
+// (200 on leg 1 ends the dance in one round-trip).
+func (s *Server) runDeregisterLifecycle(ctx context.Context, nextResponse regResponseSource) error {
+	requestURI := fmt.Sprintf("sip:%s@%s", s.cfg.SIPDomain, s.cfg.SIPDomain)
+	from := fmt.Sprintf("<sip:%s@%s>", s.cfg.DeviceID, s.cfg.SIPDomain)
+	to := from
+	platformAddr := &net.UDPAddr{
+		IP:   net.ParseIP(s.cfg.PlatformSIPAddress),
+		Port: s.cfg.PlatformSIPPort,
+	}
+	localIPAddr, err := getLocalIP(ctx, platformAddr.String())
+	if err != nil {
+		localIPAddr = localIP()
+	}
+	callID := fmt.Sprintf("%d@%s", time.Now().Unix(), localIPAddr)
+	cseq := "1 REGISTER"
+	contact := fmt.Sprintf("<sip:%s@%s:%d>", s.cfg.DeviceID, localIPAddr, s.cfg.LocalSIPPort)
+	via := fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", s.viaTransportLabel(), localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
+
+	var initialAuth string
+	if s.cfg.RegisterAuthenticator != nil {
+		initialAuth = s.cfg.RegisterAuthenticator.InitialAuthorization()
+	}
+	slog.Info("gb28181: sending de-registration (REGISTER Expires: 0)")
+	dereg := BuildRegister(requestURI, from, to, callID, cseq, contact, initialAuth)
+	dereg.Expires = "0"
+	dereg.Via = via
+	if s.cfg.ProtocolVersion != "" {
+		dereg.Headers[XGBVerHeaderName] = s.cfg.ProtocolVersion
+	}
+	if err := s.sendToPlatform(dereg, platformAddr); err != nil {
+		return fmt.Errorf("sending de-REGISTER: %w", err)
+	}
+	resp, err := nextResponse(2 * time.Second)
+	if err != nil {
+		return fmt.Errorf("reading de-REGISTER response: %w", err)
+	}
+	if resp.StatusCode == 200 {
+		slog.Info("gb28181: de-registered (Expires: 0 accepted)")
+		return nil
+	}
+	if resp.StatusCode != 401 {
+		return fmt.Errorf("unexpected de-REGISTER response: %d", resp.StatusCode)
+	}
+
+	var authHeader string
+	if s.cfg.RegisterAuthenticator != nil {
+		authHeader, err = s.cfg.RegisterAuthenticator.AuthorizeWithChallenge(resp.WWWAuthenticate)
+		if err != nil {
+			return fmt.Errorf("de-REGISTER authentication: %w", err)
+		}
+	} else {
+		auth, err := ParseChallenge(resp.WWWAuthenticate)
+		if err != nil {
+			return fmt.Errorf("parsing digest challenge: %w", err)
+		}
+		authHeader = BuildAuthorizationHeader(auth, s.cfg.DeviceID, s.cfg.Password, requestURI, "REGISTER")
+	}
+	cseq = "2 REGISTER"
+	authMsg := BuildRegister(requestURI, from, to, callID, cseq, contact, authHeader)
+	authMsg.Expires = "0"
+	authMsg.Via = fmt.Sprintf("SIP/2.0/%s %s:%d;branch=z9hG4bK%016x", s.viaTransportLabel(), localIPAddr, s.cfg.LocalSIPPort, time.Now().UnixNano())
+	if s.cfg.ProtocolVersion != "" {
+		authMsg.Headers[XGBVerHeaderName] = s.cfg.ProtocolVersion
+	}
+	if err := s.sendToPlatform(authMsg, platformAddr); err != nil {
+		return fmt.Errorf("sending authenticated de-REGISTER: %w", err)
+	}
+	resp, err = nextResponse(2 * time.Second)
+	if err != nil {
+		return fmt.Errorf("reading de-REGISTER 200 OK: %w", err)
+	}
+	if resp.StatusCode == 200 {
+		slog.Info("gb28181: de-registered (authenticated)")
+		return nil
+	}
+	return fmt.Errorf("unexpected response after auth: %d", resp.StatusCode)
+}
+
 // XGBVerHeaderName is the REGISTER protocol-version header (GB/T
 // 28181-2022 Annex I: "3.0"=2022, "2.0"=2016). Both sides announce their
 // version during registration; the higher side should then avoid messages
