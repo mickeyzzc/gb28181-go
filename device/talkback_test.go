@@ -9,6 +9,7 @@ package device_test
 // a=rtpmap, leading-zero decimal y= SSRC, no trailing CRLF).
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strconv"
@@ -336,5 +337,159 @@ func TestTalkbackBYETearsDownReceiver(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if got := len(sink.packets()); got != n {
 		t.Fatalf("deliveries after BYE = %d, want %d", got, n)
+	}
+}
+
+// ── Upstream half (issue #83): device→platform G.711 RTP ─────────────
+
+// recvOnlyAudioInvite builds an a=recvonly audio offer (the platform
+// only listens — the device must send) targeting the fake platform's
+// media socket.
+func recvOnlyAudioInvite(callID string, mLine string, y string) device.SipMessage {
+	msg := audioInvite(callID, mLine, y)
+	msg.Body = strings.Replace(msg.Body, "a=sendonly", "a=recvonly", 1)
+	return msg
+}
+
+// talkFrame is one upstream RTP packet captured by the fake platform.
+type talkFrame struct {
+	data []byte
+	from *net.UDPAddr
+}
+
+// readTalkFrame waits for one datagram on the platform's media socket.
+func readTalkFrame(t *testing.T, mediaConn *net.UDPConn) talkFrame {
+	t.Helper()
+	buf := make([]byte, 2048)
+	_ = mediaConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, from, err := mediaConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("no upstream RTP within 5s: %v", err)
+	}
+	return talkFrame{data: append([]byte(nil), buf[:n]...), from: from}
+}
+
+// With a source installed, an a=recvonly offer is answered 200 with
+// a=sendonly, and pushed G.711 frames leave as RTP toward the offer's
+// c=/m= address: payload type 8, growing sequence numbers, timestamps
+// advancing by payload length (8 kHz G.711 clock), stable SSRC, payload
+// copied verbatim.
+func TestTalkbackUpstreamSendsRTP(t *testing.T) {
+	sink := &talkRecorder{}
+	frames := make(chan []byte, 8)
+	platConn, devAddr := startWireTestServer(t, func(srv *device.Server) {
+		srv.SetTalkbackSink(sink)
+		srv.SetTalkbackSource(frames)
+	})
+
+	// The platform's media receive socket is the c=/m= target.
+	mediaConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("media listen: %v", err)
+	}
+	defer mediaConn.Close()
+	mediaPort := mediaConn.LocalAddr().(*net.UDPAddr).Port
+
+	inv := recvOnlyAudioInvite("talk-up-1", fmt.Sprintf("m=audio %d RTP/AVP 8", mediaPort), "999")
+	inv.Body = strings.Replace(inv.Body, "c=IN IP4 127.0.0.1", "c=IN IP4 127.0.0.1", 1)
+	writeSnapMsg(t, platConn, inv, devAddr)
+	resp, _ := readSnapMsg(t, platConn)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	// Golden sendonly answer form: the direction line sits before y=.
+	port := audioPortFromAnswer(t, resp.Body)
+	wantBody := fmt.Sprintf("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Play\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n"+
+		"m=audio %d RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\na=sendonly\r\ny=999\r\n", port)
+	if resp.Body != wantBody {
+		t.Fatalf("sendonly answer body mismatch:\n got %q\nwant %q", resp.Body, wantBody)
+	}
+
+	frame1 := []byte{0xD5, 0x5A, 0xA5, 0x37, 0x11, 0x22, 0x33, 0x44}
+	frame2 := []byte{0x0F}
+	frames <- frame1
+	frames <- frame2
+
+	f1 := readTalkFrame(t, mediaConn)
+	if len(f1.data) != 12+len(frame1) {
+		t.Fatalf("packet length = %d, want %d", len(f1.data), 12+len(frame1))
+	}
+	if f1.data[0] != 0x80 {
+		t.Fatalf("V/P/X/CC = %#x, want 0x80", f1.data[0])
+	}
+	if f1.data[1] != 8 {
+		t.Fatalf("payload type = %d, want 8 (PCMA)", f1.data[1])
+	}
+	ssrc := binary.BigEndian.Uint32(f1.data[8:12])
+	seq1 := binary.BigEndian.Uint16(f1.data[2:4])
+	ts1 := binary.BigEndian.Uint32(f1.data[4:8])
+	if string(f1.data[12:]) != string(frame1) {
+		t.Fatalf("payload not copied verbatim: %v", f1.data[12:])
+	}
+
+	f2 := readTalkFrame(t, mediaConn)
+	seq2 := binary.BigEndian.Uint16(f2.data[2:4])
+	ts2 := binary.BigEndian.Uint32(f2.data[4:8])
+	if seq2 != seq1+1 {
+		t.Fatalf("sequence = %d after %d, want +1", seq2, seq1)
+	}
+	if ts2-ts1 != uint32(len(frame1)) {
+		t.Fatalf("timestamp delta = %d, want %d (one sample per byte @8 kHz)", ts2-ts1, len(frame1))
+	}
+	if got := binary.BigEndian.Uint32(f2.data[8:12]); got != ssrc {
+		t.Fatalf("SSRC changed: %d after %d", got, ssrc)
+	}
+	if string(f2.data[12:]) != string(frame2) {
+		t.Fatalf("frame 2 payload not copied verbatim: %v", f2.data[12:])
+	}
+}
+
+// An offer that requires upstream audio (a=recvonly) without a source
+// wired is refused with 488 — the mirror of the no-sink refusal.
+func TestTalkbackRecvOnlyWithoutSourceReturns488(t *testing.T) {
+	sink := &talkRecorder{}
+	platConn, devAddr := startWireTestServer(t, func(srv *device.Server) {
+		srv.SetTalkbackSink(sink)
+	})
+
+	writeSnapMsg(t, platConn, recvOnlyAudioInvite("talk-up-nosrc", "m=audio 30000 RTP/AVP 8", "777"), devAddr)
+	resp, _ := readSnapMsg(t, platConn)
+	if resp.StatusCode != 488 {
+		t.Fatalf("status = %d, want 488", resp.StatusCode)
+	}
+}
+
+// A source installed against an a=sendonly offer (platform speaks, device
+// listens) must NOT start the upstream sender: no RTP leaves the device.
+func TestTalkbackSendOnlyOfferKeepsUpstreamOff(t *testing.T) {
+	sink := &talkRecorder{}
+	frames := make(chan []byte, 8)
+	platConn, devAddr := startWireTestServer(t, func(srv *device.Server) {
+		srv.SetTalkbackSink(sink)
+		srv.SetTalkbackSource(frames)
+	})
+
+	mediaConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("media listen: %v", err)
+	}
+	defer mediaConn.Close()
+	mediaPort := mediaConn.LocalAddr().(*net.UDPAddr).Port
+
+	// Plain (sendonly) offer: 200, directionless answer.
+	writeSnapMsg(t, platConn, audioInvite("talk-up-mute", fmt.Sprintf("m=audio %d RTP/AVP 8", mediaPort), "777"), devAddr)
+	resp, _ := readSnapMsg(t, platConn)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if strings.Contains(resp.Body, "a=sendonly") {
+		t.Fatalf("sendonly offer must keep the directionless answer: %q", resp.Body)
+	}
+
+	frames <- []byte{0xD5, 0x5A}
+	_ = mediaConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	buf := make([]byte, 2048)
+	if n, _, err := mediaConn.ReadFromUDP(buf); err == nil {
+		t.Fatalf("upstream RTP must not flow for a=sendonly offers, got %d bytes", n)
 	}
 }

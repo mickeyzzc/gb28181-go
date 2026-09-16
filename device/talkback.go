@@ -10,12 +10,14 @@ package device
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // AudioCodec is the G.711 variant negotiated for talkback: the RTP
@@ -59,12 +61,29 @@ func (s *Server) SetTalkbackSink(sink TalkbackSink) {
 	s.audioSink = sink
 }
 
+// SetTalkbackSource installs the upstream half of §9.2 voice talkback
+// (issue #83): a channel of pre-framed G.711 bytes the device sends as
+// RTP toward the platform's media address on the talk session. Frames
+// are drained at one per 20 ms tick — push ~160-byte frames (20 ms of
+// 8 kHz G.711) at a real-time cadence; the channel buffers bursts. An
+// offer that requires upstream audio (a=recvonly) without a source is
+// refused with 488, mirroring the no-sink refusal.
+func (s *Server) SetTalkbackSource(frames <-chan []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.audioSource = frames
+}
+
 // talkbackOffer is the parsed form of an audio-only INVITE SDP offer.
 type talkbackOffer struct {
-	codec   AudioCodec // valid iff codecOK
-	codecOK bool
-	ssrc    uint32
-	tcp     bool
+	codec     AudioCodec // valid iff codecOK
+	codecOK   bool
+	ssrc      uint32
+	tcp       bool
+	connIP    string // c= address — the upstream RTP target
+	mediaPort int    // m=audio port — the upstream RTP target
+	recvOnly  bool   // a=recvonly: platform receives only — device must send
+	sendOnly  bool   // a=sendonly: platform sends only — receive-only session
 }
 
 // parseTalkbackOffer classifies an INVITE SDP body: m=audio with no m=
@@ -88,12 +107,23 @@ func parseTalkbackOffer(body string) *talkbackOffer {
 			parts := strings.Fields(line)
 			if len(parts) >= 3 {
 				mLineProto = parts[2]
+				if port, err := strconv.Atoi(parts[1]); err == nil {
+					offer.mediaPort = port
+				}
 				for _, p := range parts[3:] {
 					if pt, err := strconv.Atoi(p); err == nil {
 						payloadTypes = append(payloadTypes, pt)
 					}
 				}
 			}
+		case strings.HasPrefix(line, "c=IN IP4 "):
+			if offer.connIP == "" {
+				offer.connIP = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4 "))
+			}
+		case line == "a=recvonly":
+			offer.recvOnly = true
+		case line == "a=sendonly":
+			offer.sendOnly = true
 		case strings.HasPrefix(line, "a=rtpmap:"):
 			rtpmaps = append(rtpmaps, strings.TrimPrefix(line, "a=rtpmap:"))
 		case strings.HasPrefix(line, "y="):
@@ -140,12 +170,15 @@ func parseTalkbackOffer(body string) *talkbackOffer {
 // buildTalkbackSDP builds the SDP answer for an audio-only talkback
 // INVITE (§9.2): the device advertises the UDP port its RTP receive loop
 // is bound to and mirrors the offered G.711 codec. Byte-for-byte twin of
-// gb28181-rs build_audio_sdp_answer.
-func buildTalkbackSDP(deviceIP string, mediaPort int, ssrc uint32, codec AudioCodec) string {
+// gb28181-rs build_audio_sdp_answer. direction is an optional direction
+// attribute line (with CRLF) inserted before y= — only the upstream form
+// sets it (offer a=recvonly → answer a=sendonly); every other answer
+// stays directionless, byte-identical to the pre-upstream wire form.
+func buildTalkbackSDP(deviceIP string, mediaPort int, ssrc uint32, codec AudioCodec, direction string) string {
 	pt := codec.PayloadType()
 	return fmt.Sprintf("v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n"+
-		"m=audio %d RTP/AVP %d\r\na=rtpmap:%d %s/8000\r\ny=%d\r\n",
-		deviceIP, deviceIP, mediaPort, pt, pt, codec.Name(), ssrc)
+		"m=audio %d RTP/AVP %d\r\na=rtpmap:%d %s/8000\r\n%sy=%d\r\n",
+		deviceIP, deviceIP, mediaPort, pt, pt, codec.Name(), direction, ssrc)
 }
 
 // handleTalkbackInvite serves an audio-only INVITE (talkback receive,
@@ -159,6 +192,7 @@ func buildTalkbackSDP(deviceIP string, mediaPort int, ssrc uint32, codec AudioCo
 func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer *talkbackOffer, fromAddr net.Addr) {
 	s.mu.Lock()
 	sink := s.audioSink
+	source := s.audioSource
 	s.mu.Unlock()
 
 	if sink == nil {
@@ -173,6 +207,14 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 	}
 	if offer.tcp {
 		slog.Warn("gb28181: talkback over TCP media unsupported — 488")
+		s.rejectInvite488(msg, fromAddr)
+		return
+	}
+	// Upstream-required offers (a=recvonly — the platform only listens)
+	// must not be answered by a device that cannot send: mirror the
+	// no-sink refusal (issue #83).
+	if offer.recvOnly && source == nil {
+		slog.Warn("gb28181: talkback INVITE requires upstream audio but no talkback source configured — 488")
 		s.rejectInvite488(msg, fromAddr)
 		return
 	}
@@ -199,7 +241,13 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 		localIPAddr = localIP()
 	}
 
-	sdp := buildTalkbackSDP(localIPAddr, int(mediaPort), offer.ssrc, offer.codec)
+	// Only the upstream-required form announces a direction — every other
+	// answer stays byte-identical to the pre-upstream wire form.
+	direction := ""
+	if offer.recvOnly {
+		direction = "a=sendonly\r\n"
+	}
+	sdp := buildTalkbackSDP(localIPAddr, int(mediaPort), offer.ssrc, offer.codec, direction)
 	ok200 := Build200OK(msg, "application/sdp", sdp)
 	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
 		slog.Warn("gb28181: failed to send talkback 200 OK", "error", err)
@@ -209,17 +257,89 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 
 	// The receiver exits on socket close; the cancel links its lifetime to
 	// the server context for the shared teardown contract.
-	_, mediaCancel := context.WithCancel(ctx)
+	mediaCtx, mediaCancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.mediaConn = mediaConn
 	s.mediaCancel = mediaCancel
 	s.mu.Unlock()
+
+	// Upstream half (issue #83): with a source installed the device sends
+	// G.711 RTP to the platform's media address, unless the offer is
+	// explicitly receive-only-for-the-device (a=sendonly).
+	if source != nil && !offer.sendOnly {
+		dst := &net.UDPAddr{IP: net.ParseIP(offer.connIP), Port: offer.mediaPort}
+		if dst.IP == nil {
+			// No c= line — fall back to the SIP peer's address.
+			if udpPeer, ok := fromAddr.(*net.UDPAddr); ok {
+				dst.IP = udpPeer.IP
+			}
+		}
+		if dst.IP != nil && dst.Port > 0 {
+			go runTalkbackSender(mediaCtx, mediaConn, dst, offer.codec, source)
+		} else {
+			slog.Warn("gb28181: talkback offer lacks a usable c=/m= media address — upstream disabled")
+		}
+	}
 
 	slog.Info("gb28181: talkback session receiving", "call_id", msg.CallID, "codec", offer.codec.Name(), "port", mediaPort)
 	go func() {
 		defer mediaCancel()
 		runTalkbackReceiver(mediaConn, sink, offer.ssrc, offer.codec)
 	}()
+}
+
+// runTalkbackSender paces the upstream half of a talkback session
+// (issue #83): one source frame per 20 ms tick is packetized as RTP —
+// payload type 8/0, 8 kHz clock (G.711: one byte per sample, so the
+// timestamp advances by the payload length), random per-session
+// SSRC/sequence/timestamp bases. Exits when the media context is
+// cancelled (BYE / session recycle / server stop) or the socket breaks.
+func runTalkbackSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr, codec AudioCodec, frames <-chan []byte) {
+	pt := byte(codec.PayloadType())
+	buf := make([]byte, 12+2048)
+	ssrc := randUint32()
+	seq := uint16(randUint32())
+	ts := randUint32()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			select {
+			case frame := <-frames:
+				if len(frame) == 0 || len(frame) > 2048 {
+					continue
+				}
+				buf[0] = 0x80 // V=2, no padding/extension/CSRC
+				buf[1] = pt   // M=0 — continuous G.711 stream
+				binary.BigEndian.PutUint16(buf[2:], seq)
+				binary.BigEndian.PutUint32(buf[4:], ts)
+				binary.BigEndian.PutUint32(buf[8:], ssrc)
+				copy(buf[12:], frame)
+				if _, err := conn.WriteToUDP(buf[:12+len(frame)], dst); err != nil {
+					slog.Debug("gb28181: talkback send loop ended", "error", err)
+					return
+				}
+				seq++
+				ts += uint32(len(frame))
+			default:
+				// Nothing queued this ptime — nothing is sent.
+			}
+		}
+	}
+}
+
+// randUint32 draws a random u32 from crypto/rand, falling back to a
+// time-seeded value (randomTag's contract: session identities must not
+// be predictable across restarts).
+func randUint32() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return uint32(time.Now().UnixNano())
+	}
+	return binary.BigEndian.Uint32(b[:])
 }
 
 // rejectInvite488 answers an INVITE with 488 Not Acceptable Here,

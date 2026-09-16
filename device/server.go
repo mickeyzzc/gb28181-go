@@ -95,6 +95,10 @@ type Server struct {
 	// positionCancel stops the running position report loop (replaced on
 	// re-SUBSCRIBE).
 	positionCancel chan struct{}
+	// audioSource feeds the talkback upstream half (§9.2 send half,
+	// issue #83): pre-framed G.711 bytes packetized as RTP toward the
+	// platform.
+	audioSource <-chan []byte
 	// audioSink consumes G.711 talkback audio (§9.2 receive half, issue
 	// #80); nil = audio-only INVITEs are refused with 488. Guarded by mu;
 	// set via SetTalkbackSink before Start.
