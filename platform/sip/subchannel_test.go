@@ -154,13 +154,17 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	// gosip's BYE transaction stalls for Timer F (32s), and the channel
 	// unregistration (release → UnregisterChannel) then blows the Eventually
 	// budget below on loaded CI runners (flake 2026-08-28). The answerer
-	// exits on first BYE (or a short idle window), strictly before the
+	// exits on first BYE (or its idle window), strictly before the
 	// memoized re-INVITE check below — which polls the same UDP socket and
-	// must not race another reader.
+	// must not race another reader. The window is generous (10s): under
+	// load the whole INVITE→200→probe-timeout→BYE chain can lag seconds
+	// past the answerer's start — a missed BYE costs a 32s Timer F stall
+	// (observed as the 30.03s Eventually overshoot after the first
+	// widening, 2026-09-17).
 	byeAnswered := make(chan struct{})
 	go func() {
 		defer close(byeAnswered)
-		gone := time.Now().Add(3 * time.Second)
+		gone := time.Now().Add(10 * time.Second)
 		for time.Now().Before(gone) {
 			req := client.nextRequest(300 * time.Millisecond)
 			if req == nil {
@@ -182,15 +186,23 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	// Timeout elapses → synthetic channel removed, nothing persisted. The
 	// 200ms probe timeout is a floor, not a ceiling: on a loaded CI runner the
 	// INVITE transaction teardown (release → SIP BYE) can take seconds, and
-	// the 10s budget has already been overshot once by 30ms (#95, same
-	// deadline family as the #75 fix) — 30s keeps the assertion meaningful
-	// (the channel MUST be unregistered) without racing the runner's load.
-	// Green runs still finish in ~200ms.
+	// even the widened budgets have been overshot (#95: 10.03s once, 30.03s
+	// after the first widening — a BYE the answerer's window missed costs a
+	// 32s gosip Timer F). 45s clears even that worst case; green runs still
+	// finish in ~200ms.
 	require.Eventually(t, func() bool {
 		_, ok := dm.FindChannel(testDeviceID, candidate)
 		return !ok
-	}, 30*time.Second, 50*time.Millisecond, "synthetic sub-channel must be unregistered after probe timeout")
+	}, 45*time.Second, 50*time.Millisecond, "synthetic sub-channel must be unregistered after probe timeout")
 	require.True(t, fe.subSetEmpty(), "no sub_channel_id may be persisted on probe timeout")
+
+	// The memoized re-INVITE check polls the same UDP socket — wait for the
+	// BYE answerer to be gone first (single reader; it discards everything,
+	// so a live answerer could eat an INVITE and mask a memoization bug).
+	select {
+	case <-byeAnswered:
+	case <-time.After(2 * time.Second):
+	}
 
 	// Memoized: re-running the probe path issues no second INVITE.
 	srv.maybeProbeSubChannels(testDeviceID)
