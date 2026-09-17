@@ -444,6 +444,41 @@ func TestTalkbackUpstreamSendsRTP(t *testing.T) {
 	}
 }
 
+// The upstream law seam follows the offer: a PCMU offer (payload type 0)
+// flips TalkbackUpstreamCodec — the host encoder polls it to pick its
+// G.711 variant. Default (no offer yet) is PCMA.
+func TestTalkbackUpstreamCodecFollowsOffer(t *testing.T) {
+	sink := &talkRecorder{}
+	frames := make(chan []byte, 8)
+	var srvRef *device.Server
+	platConn, devAddr := startWireTestServer(t, func(srv *device.Server) {
+		srvRef = srv
+		srv.SetTalkbackSink(sink)
+		srv.SetTalkbackSource(frames)
+	})
+
+	if got := srvRef.TalkbackUpstreamCodec(); got != device.AudioPCMA {
+		t.Fatalf("default upstream codec = %v, want AudioPCMA", got)
+	}
+
+	mediaConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("media listen: %v", err)
+	}
+	defer mediaConn.Close()
+	mediaPort := mediaConn.LocalAddr().(*net.UDPAddr).Port
+
+	inv := recvOnlyAudioInvite("talk-up-mu", fmt.Sprintf("m=audio %d RTP/AVP 0", mediaPort), "999")
+	writeSnapMsg(t, platConn, inv, devAddr)
+	resp, _ := readSnapMsg(t, platConn)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := srvRef.TalkbackUpstreamCodec(); got != device.AudioPCMU {
+		t.Fatalf("upstream codec after PCMU offer = %v, want AudioPCMU", got)
+	}
+}
+
 // An offer that requires upstream audio (a=recvonly) without a source
 // wired is refused with 488 — the mirror of the no-sink refusal.
 func TestTalkbackRecvOnlyWithoutSourceReturns488(t *testing.T) {

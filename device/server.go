@@ -106,6 +106,13 @@ type Server struct {
 	// issue #83): pre-framed G.711 bytes packetized as RTP toward the
 	// platform.
 	audioSource <-chan []byte
+	// upstreamLaw is the G.711 variant negotiated for the CURRENT
+	// talkback upstream session: the host encoder polls
+	// TalkbackUpstreamCodec to match its mic encoding to the platform's
+	// offer (PCMA until a PCMU offer is accepted; re-negotiated per
+	// session). Set to AudioPCMA in New — the zero value would read as
+	// PCMU.
+	upstreamLaw atomic.Int32
 	// audioSink consumes G.711 talkback audio (§9.2 receive half, issue
 	// #80); nil = audio-only INVITEs are refused with 488. Guarded by mu;
 	// set via SetTalkbackSink before Start.
@@ -116,7 +123,7 @@ type Server struct {
 
 // New creates a new GB28181 server.
 func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
-	return &Server{
+	s := &Server{
 		cfg:            cfg,
 		deviceCfg:      deviceCfg,
 		hub:            hub,
@@ -127,6 +134,9 @@ func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 		notifier:       newDeviceNotifier(),
 		positionCancel: make(chan struct{}),
 	}
+	// Upstream law defaults to PCMA — see the upstreamLaw field note.
+	s.upstreamLaw.Store(int32(AudioPCMA))
+	return s
 }
 
 // SetMetricsHooks installs observability hooks (issue #40); they are also

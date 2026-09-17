@@ -86,6 +86,14 @@ func (s *Server) SetTalkbackSource(frames <-chan []byte) {
 	s.audioSource = frames
 }
 
+// TalkbackUpstreamCodec reports the G.711 variant negotiated for the
+// current talkback upstream session (§9.2 send half): the host encoder
+// should encode its frames to match. PCMA until an offer that enables
+// upstream is accepted; re-negotiated per session.
+func (s *Server) TalkbackUpstreamCodec() AudioCodec {
+	return AudioCodec(s.upstreamLaw.Load())
+}
+
 // talkbackOffer is the parsed form of an audio-only INVITE SDP offer.
 type talkbackOffer struct {
 	codec     AudioCodec // valid iff codecOK
@@ -287,6 +295,9 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 			}
 		}
 		if dst.IP != nil && dst.Port > 0 {
+			// Publish the negotiated law to the host encoder's polling
+			// seam — only meaningful while upstream is actually enabled.
+			s.upstreamLaw.Store(int32(offer.codec))
 			go runTalkbackSender(mediaCtx, mediaConn, dst, offer.codec, source)
 		} else {
 			slog.Warn("gb28181: talkback offer lacks a usable c=/m= media address — upstream disabled")
