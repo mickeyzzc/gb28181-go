@@ -298,17 +298,18 @@ func (s *Server) sendPlaybackInvite(deviceID, channelID, netAddr string, sdp []b
 	if err != nil {
 		return fmt.Errorf("gb28181: build playback INVITE: %w", err)
 	}
+	snap := newInviteSnapshot(req) // ACK builds from the snapshot (#95)
 
 	tx, err := srv.Request(req)
 	if err != nil {
 		return fmt.Errorf("gb28181: send playback INVITE: %w", err)
 	}
-	resp, err := s.awaitInviteAnswer(srv, tx, req)
+	resp, err := s.awaitInviteAnswer(srv, tx, snap)
 	if err != nil {
 		return fmt.Errorf("gb28181: playback INVITE to %s: %w", channelID, err)
 	}
 	if resp != nil {
-		ack := sip.NewAckRequest("", req, resp, "", nil)
+		ack := snap.ackFor(resp)
 		if err := srv.Send(ack); err != nil {
 			slog.Warn("gb28181: playback ACK send failed", "channel", channelID, "error", err)
 		}

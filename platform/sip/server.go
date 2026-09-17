@@ -728,6 +728,10 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		_ = s.sessionMgr.Bye(channelID)
 		return fmt.Errorf("gb28181: build INVITE request: %w", err)
 	}
+	// Snapshot before the hand-off: gosip's transport rewrites the request's
+	// Via in place on every send (retransmits included, unsynchronized), and
+	// every ACK for this dialog is built from the snapshot (#95).
+	snap := newInviteSnapshot(req)
 
 	s.mu.Lock()
 	srv2 := s.gosipSrv
@@ -743,7 +747,7 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		return fmt.Errorf("gb28181: send INVITE to %s: %w", channelID, err)
 	}
 
-	resp, err := s.awaitInviteAnswer(srv2, tx, req)
+	resp, err := s.awaitInviteAnswer(srv2, tx, snap)
 	if err != nil {
 		_ = s.sessionMgr.Bye(channelID)
 		// 486 Busy usually means the device still holds a dialog from before
@@ -758,7 +762,7 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 	if resp != nil {
 		// Complete the 3-way handshake with the matched 2xx: without the ACK
 		// most GB28181 devices never start the RTP stream (RFC 3261 §13.2.2.4).
-		ack := sip.NewAckRequest("", req, resp, "", nil)
+		ack := snap.ackFor(resp)
 		if err := srv2.Send(ack); err != nil {
 			slog.Warn("gb28181: send ACK failed", "channel", channelID, "error", err)
 		}
@@ -848,7 +852,7 @@ func (s *Server) watchSession(deviceID, channelID string) {
 // speculative ACK (built from the INVITE, no To-tag) is sent anyway: for
 // compliant stacks a stray/duplicate ACK is ignored, for loose firmware it
 // completes the handshake and the stream starts — confirmed by first RTP.
-func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, inviteReq sip.Request) (sip.Response, error) {
+func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, snap inviteSnapshot) (sip.Response, error) {
 	responses := tx.Responses()
 	deadline := time.NewTimer(s.cfg.InviteTimeout())
 	defer deadline.Stop()
@@ -875,7 +879,7 @@ func (s *Server) awaitInviteAnswer(srv gosip.Server, tx sip.ClientTransaction, i
 
 		case <-speculative.C:
 			speculative.Stop()
-			if err := srv.Send(buildSpeculativeAck(inviteReq)); err != nil {
+			if err := srv.Send(snap.speculativeAck()); err != nil {
 				slog.Debug("gb28181: speculative ACK send failed", "error", err)
 			}
 
