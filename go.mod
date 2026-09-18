@@ -2,6 +2,8 @@ module github.com/mickeyzzc/gb28181-go
 
 go 1.26
 
+toolchain go1.26.6
+
 require (
 	github.com/emmansun/gmsm v0.44.1
 	github.com/ghettovoice/gosip v0.0.0-20260603143348-d1f3b494c69a
