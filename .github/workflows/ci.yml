@@ -44,9 +44,12 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+        run: go test -race -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: Coverage gate (statements ≥ 80%)
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print substr($3, 1, length($3)-1)}')
+          echo "total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t < 80) { printf "coverage %s%% below the 80%% floor\n", t; exit 1 } }'
       - name: Vet (gb35114)
         run: go vet -tags gb35114 ./...
       - name: Test (gb35114)
