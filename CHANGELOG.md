@@ -11,6 +11,104 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.11.0] — 2026-09-20
+
+The GB/T 28181-2022 device-side closure package (#80/#81): every
+platform→device control, config, and intercom flow the standard defines
+for the device role now has a decoded wire path and a host seam — plus
+two SIP-level race fixes and a hardened CI floor.
+
+- `feat(device)` DeviceControl sub-command decode + host callbacks
+  (#85): `IFrameCmd Send`, `RecordCmd Record|StopRecord`, `GuardCmd`,
+  `AlarmCmd`, `TeleBoot Boot`, and `PTZCmd` A5 05 passthrough decode
+  via `ControlCallbacks`/`SetControlHandlers` — a command with no
+  registered callback keeps the historical explicit reject. Platform
+  builder `SendIFrameCmd` added alongside.
+
+- `feat(device)` PTZCmd bit-level decode (#89): a total
+  `DecodePTZCommand` (length/A5/checksum failures → `PtzInvalid` with
+  the raw hex preserved), direction/lens bits, preset, cruise, FI and
+  aux switches, driven by a golden table generated from the
+  platform-side constructors so encode and decode cannot drift.
+
+- `feat(device)` DragZoom control decode + `OnDragZoom` seam (#92):
+  2022 §A.2.3.1.8/9 line format — six required integer children
+  (`Length/Width/MidPointX/MidPointY/LengthX/LengthY`); a missing child
+  is an explicit reject on both twins.
+
+- `feat` DeviceConfig minimum + ConfigDownload + HomePosition (#90):
+  `ConfigCallbacks` (`BasicParam` all-optional children, `FrameMirror`
+  0–3, `AlarmReport` switches), minimal `ConfigDownload` response, and
+  `OnHomePosition` (DeviceControl family). Also fixes the platform
+  `SendDeviceControl` HomePosition wire form — the old string-form body
+  never matched A.2.3.1.10.
+
+- `feat(device)` SUBSCRIBE/NOTIFY framework (#87): per-event
+  subscription registry (renewal, read-time expiry, CSeq bookkeeping),
+  host `DeviceNotifier` (`SendAlarm`/`SendCatalogChange`/
+  `SendMobilePosition`, unsubscribed = no-op), `SetPositionSource`
+  periodic MobilePosition reporting.
+
+- `feat` §9.4.2 MediaStatus INFO (#86): `BuildMediaStatusInfo` is
+  byte-identical with the rust twin; the notification fires only on
+  natural session completion — BYE aborts stay silent.
+
+- `feat(device)` voice talkback receive session (#88): `TalkbackSink`
+  for G.711 PCMA/PCMU downlink, 488 without a sink, single-dialog slot
+  teardown shared across video/playback/talkback, wire goldens pinned
+  against real NVR offers.
+
+- `feat(device)` talkback upstream — device→platform G.711 RTP sender
+  (#94): `SetTalkbackSource`, 20 ms pacing, PT 8/0; a `recvonly` offer
+  without a source is refused 488 and goldens are otherwise unchanged.
+
+- `feat` voice broadcast delivery end-to-end (#96): platform
+  `StartBroadcast` (A.2.5.5 notify) → device `followBroadcast`
+  (A.2.6.11 ack + audio INVITE back-call with the platform's real
+  address as Request-URI) → platform `answerBroadcastInvite` streaming
+  20 ms PCMA RTP; device `SetOnBroadcast` replaces the unreachable
+  dead API. Pinned by the conformance loopback
+  `TestLoopback_VoiceBroadcast`.
+
+- `feat(device)` graceful deregistration helper (#93):
+  `Server.Deregister(ctx)` — REGISTER with `Expires: 0`.
+
+- `feat(device)` SIP-Date time sync observation (#91): parses the
+  three RFC 3261 Date forms from REGISTER responses; observation only,
+  never sets the clock.
+
+- `feat(device)` expose the negotiated upstream talkback law (#98):
+  `Server.TalkbackUpstreamCodec()` — the per-offer negotiated PCMA/PCMU
+  law for hosts feeding the upstream sender.
+
+- `fix(sip)` ACKs are built from a pre-send INVITE snapshot (#97,
+  fixes #95): gosip's transport layer rewrites the top Via of in-flight
+  requests without a lock (upstream gosip#87), so the four ACK paths
+  now deep-clone the INVITE before handing it to the transaction layer.
+  The race detector showed 89 reports with the pass-through variant
+  and is clean with the snapshot.
+
+- `test(sip)` probe-silent teardown answers the BYE for real (#99):
+  the 3 s answer window was shorter than the probe chain under load,
+  leaving the BYE unanswered on gosip Timer F (~32 s). Root fix: 10 s
+  window + 45 s Eventually + explicit answerer-exit wait.
+
+- `chore` toolchain floor go1.26.6 (#100): pulls the stdlib security
+  fixes (net/url, crypto/tls, net/http, encoding/xml, …); govulncheck
+  clean.
+
+- `ci` statements coverage gate at 80% (#101): the test job now counts
+  cross-package coverage (`-coverpkg=./...`, measured baseline 83.0%)
+  and fails below the floor.
+
+- `test` fuzz targets on every untrusted parse surface (#102): native
+  Go fuzz for `device.Parse` (raw SIP datagrams), `manscdp.Decode`
+  (MESSAGE bodies incl. the GBK/GB18030 path, invariant: nil error
+  always identifies a CmdType), `DecodePTZCommand` (byte-faithful
+  totality), `ParseChallenge`, SDP parsing, and `ParseSIPDate`. Seeds
+  run on every `go test`; extended local runs: 2M+ execs, zero
+  crashes.
+
 ## [v0.10.0] — 2026-09-14
 
 - `feat(cascade)` multi-level loop prevention (issue #77, MiBeeNvr #451
