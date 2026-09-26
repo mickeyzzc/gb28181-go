@@ -6,7 +6,7 @@ toolchain go1.26.6
 
 require (
 	github.com/emmansun/gmsm v0.44.1
-	github.com/ghettovoice/gosip v0.0.0-20260603143348-d1f3b494c69a
+	github.com/ghettovoice/gosip v0.0.0-20260919124345-798b72cc95a2
 	github.com/pion/rtp v1.10.2
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/text v0.41.0
