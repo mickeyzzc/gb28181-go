@@ -708,6 +708,22 @@ func (f *fakeEnroller) enrolledEmpty() bool {
 	return len(f.enrolled) == 0
 }
 
+func (f *fakeEnroller) enrolledContains(entry string) bool {
+	return f.enrolledCount(entry) > 0
+}
+
+func (f *fakeEnroller) enrolledCount(entry string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, e := range f.enrolled {
+		if e == entry {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fakeEnroller) archivedEmpty() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -807,6 +823,62 @@ func TestRetireDeviceSelfChannel_NoRealChannels(t *testing.T) {
 	srv.mergeCatalogChannels("dev-c", []manscdp.Item{{DeviceID: "org-1", Parental: 1}})
 	_, ok := dm.FindChannel("dev-c", "dev-c")
 	require.True(t, ok, "parental-only catalog must not retire the device-self channel")
+}
+
+// TestMergeCatalog_SelfItemIsPlatformID (#105): a catalog that lists the
+// device ID itself ALONGSIDE real video channels treats the self item as a
+// platform identifier, not a camera — gateway platforms that (non-compliantly)
+// report themselves as a catalog item must not become ghost cameras that can
+// never stream. Single-channel devices keep the historic behavior (covered by
+// TestRetireDeviceSelfChannel_KeptWhenStreamingOrListed).
+func TestMergeCatalog_SelfItemIsPlatformID(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	fe := &fakeEnroller{}
+	srv.SetCameraEnroller(fe)
+
+	dm.Register(&platform.Device{ID: "dev-d", NetAddr: "127.0.0.1:60004"})
+	srv.mergeCatalogChannels("dev-d", []manscdp.Item{
+		{DeviceID: "dev-d", Name: ""},
+		{DeviceID: "dev-d-ch1", Name: "Real Channel"},
+	})
+
+	require.Eventually(t, func() bool { return fe.enrolledContains("dev-d/dev-d-ch1") },
+		2*time.Second, 20*time.Millisecond, "real channel must still be enrolled")
+	require.Equal(t, 0, fe.enrolledCount("dev-d/dev-d"),
+		"self item listed alongside real channels must not be enrolled")
+	_, ok := dm.FindChannel("dev-d", "dev-d")
+	require.False(t, ok, "self item must not register as a channel when real channels exist")
+}
+
+// TestRetireDeviceSelfChannel_MultiChannelCatalogArchivesGhost (#105): an
+// already-enrolled self camera (historic ghost, e.g. from the REGISTER-time
+// speculative enroll) is archived when a catalog lists the device ID
+// alongside real channels — and later catalog cycles must not rebuild it.
+func TestRetireDeviceSelfChannel_MultiChannelCatalogArchivesGhost(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	fe := &fakeEnroller{}
+	srv.SetCameraEnroller(fe)
+
+	dm.Register(&platform.Device{ID: "dev-e", NetAddr: "127.0.0.1:60005"})
+	dm.RegisterChannel("dev-e", &platform.Channel{ID: "dev-e", DeviceID: "dev-e"}) // historic ghost channel
+	require.NoError(t, fe.EnsureGB28181Camera("dev-e", "dev-e", "", ""))           // historic ghost camera (seed: enrolled count = 1)
+
+	catalog := []manscdp.Item{{DeviceID: "dev-e"}, {DeviceID: "dev-e-ch1", Name: "Real"}}
+	srv.mergeCatalogChannels("dev-e", catalog)
+
+	_, ok := dm.FindChannel("dev-e", "dev-e")
+	require.False(t, ok, "idle self channel must retire when real channels exist")
+	require.True(t, fe.archivedContains("dev-e/dev-e"), "historic ghost camera must be archived")
+	require.Equal(t, 1, fe.enrolledCount("dev-e/dev-e"),
+		"self item must not be re-enrolled by the catalog cycle")
+
+	// Next catalog cycle: nothing rebuilds (NVR-side archives stay dead).
+	srv.mergeCatalogChannels("dev-e", catalog)
+	require.Equal(t, 1, fe.enrolledCount("dev-e/dev-e"), "later catalog cycles must not rebuild the ghost")
+	_, ok = dm.FindChannel("dev-e", "dev-e")
+	require.False(t, ok)
 }
 
 func (f *fakeEnroller) GB28181RecordingWanted(deviceID, channelID string) bool { return false }

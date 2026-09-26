@@ -1569,7 +1569,26 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 		srcHost = hostOfAddr(d.NetAddr)
 		d.Mu.RUnlock()
 	}
+	// A catalog that lists the device ID itself ALONGSIDE at least one other
+	// real (non-parental) channel treats the self item as a platform
+	// identifier, not a camera (#105): gateway platforms that (non-compliantly)
+	// report themselves as a catalog item would otherwise auto-enroll a ghost
+	// camera that can never stream and resurrects after every NVR-side
+	// archive. A self-only catalog is a single-channel device whose channel
+	// equals its ID — that keeps the historic behavior.
+	selfIsPlatformID := false
+	for _, it := range items {
+		if it.Parental != 1 && it.DeviceID != deviceID {
+			selfIsPlatformID = true
+			break
+		}
+	}
 	for _, item := range items {
+		if selfIsPlatformID && item.DeviceID == deviceID {
+			// Skip registration and enrollment entirely;
+			// retireDeviceSelfChannel below cleans up any legacy state.
+			continue
+		}
 		// Parental=1 entries are organization/group nodes, not video
 		// channels — registering them as INVITEable channels breaks
 		// media setup on tree-shaped catalogs (Hikvision/Dahua NVRs).
@@ -1634,9 +1653,10 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 		}
 	}
 	// A catalog with real (non-parental) channels supersedes the device-self
-	// pseudo-channel created speculatively at first REGISTER — UNLESS the
-	// catalog lists the device ID itself (single-channel devices whose channel
-	// equals the device ID) or the pseudo-channel is actively streaming (#352).
+	// pseudo-channel created speculatively at first REGISTER — and retires a
+	// gateway platform's self-listed item (#105) — UNLESS the self item is
+	// the only real channel (single-channel devices whose channel equals the
+	// device ID) or it is actively streaming (#352).
 	s.retireDeviceSelfChannel(deviceID, items)
 	// Channels may have been discovered by this catalog (or a prior one):
 	// INVITE every channel that now has a bound camera and no active
@@ -1691,24 +1711,25 @@ func channelStatusString(status int32) string {
 // retireDeviceSelfChannel removes the device-self pseudo-channel once a
 // catalog proves the device's real channels (#352). Guards:
 //   - the catalog must contain at least one real (non-parental) channel
-//   - the device ID itself must NOT be among the catalog items (single-channel
-//     devices whose channel equals the device ID keep it)
+//     OTHER than the device ID — that channel is either the speculative
+//     pseudo-channel being superseded (#352) or a gateway platform listing
+//     itself as a catalog item (#105); both retire. A catalog whose only
+//     real item IS the device ID is a single-channel device whose channel
+//     equals its ID: keep it
 //   - the pseudo-channel must never have streamed (idle) — a playing
 //     device-self session means some firmware actually streams on it
 //
 // Removal covers the in-memory registry, the DB row, and the auto-enrolled
 // camera (archived, preserving its recordings).
 func (s *Server) retireDeviceSelfChannel(deviceID string, items []manscdp.Item) {
-	realCount := 0
+	otherReal := false
 	for _, item := range items {
-		if item.Parental != 1 {
-			realCount++
-			if item.DeviceID == deviceID {
-				return // device-self IS a catalog channel — keep it
-			}
+		if item.Parental != 1 && item.DeviceID != deviceID {
+			otherReal = true
+			break
 		}
 	}
-	if realCount == 0 {
+	if !otherReal {
 		return
 	}
 	ch, ok := s.deviceMgr.FindChannel(deviceID, deviceID)
