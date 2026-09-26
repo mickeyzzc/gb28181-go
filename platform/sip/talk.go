@@ -126,13 +126,12 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		conn.Close()
 		return fmt.Errorf("gb28181: build talk INVITE: %w", err)
 	}
-	snap := newInviteSnapshot(req) // ACKs build from the snapshot (#95)
 	tx, err := srv.Request(req)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("gb28181: send talk INVITE to %s: %w", channelID, err)
 	}
-	resp, err := s.awaitInviteAnswer(srv, tx, snap)
+	resp, err := s.awaitInviteAnswer(srv, tx, req)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("gb28181: talk INVITE to %s: %w", channelID, err)
@@ -147,7 +146,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 	if !ok {
 		// Some firmwares answer video-form SDPs; without a usable media
 		// address we cannot deliver audio — fail the talk cleanly.
-		ack := snap.ackFor(resp)
+		ack := sip.NewAckRequest("", req, resp, "", nil)
 		_ = srv.Send(ack)
 		byeErr := s.sendByeForTalk(req, resp)
 		conn.Close()
@@ -157,7 +156,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		return fmt.Errorf("gb28181: talk answer SDP carries no usable audio address")
 	}
 
-	ack := snap.ackFor(resp)
+	ack := sip.NewAckRequest("", req, resp, "", nil)
 	if err := srv.Send(ack); err != nil {
 		conn.Close()
 		return fmt.Errorf("gb28181: send talk ACK: %w", err)
