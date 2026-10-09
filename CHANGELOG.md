@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+- `docs` multicast explicitly out of scope (#111): the README states
+  media distribution is unicast-only on both roles — SDP multicast
+  `c=` offers are not joined and the platform never issues an IGMP
+  join. Revisit when a real multi-viewer-same-stream scenario shows up
+  (per the issue's own trigger criterion).
+
 - `feat(platform)` ES over RTP receive side (#110): GB/T 28181-2022
   allows the media channel to carry bare H.264/H.265 over RTP instead
   of MPEG-PS. The Receiver classifies each session's first payload (PS
