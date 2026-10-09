@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+- `docs` multicast explicitly out of scope (#111): the README states
+  media distribution is unicast-only on both roles — SDP multicast
+  `c=` offers are not joined and the platform never issues an IGMP
+  join. Revisit when a real multi-viewer-same-stream scenario shows up
+  (per the issue's own trigger criterion).
+
 - `feat(device)` DeviceConfig closure family (#109): five more 2022
   sub-commands decode and fire optional host callbacks —
   `VideoParamAttribute` (per-stream codec attributes, A.2.3.2.5),
