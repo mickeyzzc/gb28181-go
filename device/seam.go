@@ -84,6 +84,13 @@ type Config struct {
 	TLSKeyFile            string `yaml:"tls_key_file,omitempty"`             // client certificate key
 	TLSInsecureSkipVerify bool   `yaml:"tls_insecure_skip_verify,omitempty"` // accept any platform cert (lab only)
 
+	// ConfigDownload VideoParamOpt block (A.2.1.20, issue #109): the
+	// device's download speeds and supported resolutions as "/"-joined
+	// strings (e.g. "1/2/4", "1920x1080/640x480", values per Annex G).
+	// Empty (default) omits the block from ConfigDownload answers.
+	VideoParamOptDownloadSpeed string `yaml:"video_param_opt_download_speed,omitempty"`
+	VideoParamOptResolution    string `yaml:"video_param_opt_resolution,omitempty"`
+
 	// RegisterAuthenticator opts into an alternative REGISTER
 	// authentication strategy (e.g. GB 35114 A-level via the tagged
 	// security35114 package). Nil keeps the built-in SIP Digest flow.

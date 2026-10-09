@@ -11,6 +11,23 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` DeviceConfig closure family (#109): five more 2022
+  sub-commands decode and fire optional host callbacks —
+  `VideoParamAttribute` (per-stream codec attributes, A.2.3.2.5),
+  `VideoRecordPlan` (weekly schedule, A.2.3.2.6), `VideoAlarmRecord`
+  (alarm recording with pre/post roll, A.2.3.2.7), `PictureMask`
+  (privacy-mask regions, A.2.3.2.8) and `OSDConfig` (time/text
+  overlay, A.2.3.2.11) — wire forms verified against the standard
+  text (A.2.1.12-17). No callback keeps the explicit reject. SVAC
+  encode/decode configs (A.2.3.2.3/4) are now documented as
+  explicitly unsupported; cruise-track configuration is NOT a
+  DeviceConfig command in 2022 — it rides the PTZCmd cruise
+  instructions (A.3.5, already decoded).
+- `feat(device)` ConfigDownload grows the `VideoParamOpt` block
+  (A.2.1.20): download speeds + resolutions from the new
+  `Config.VideoParamOptDownloadSpeed`/`VideoParamOptResolution`
+  ("/"-joined, empty omits the block).
+
 - `fix(manscdp)` snapshot rides the device-config channel (#107): the
   2022 image-snapshot command is a `Control` body with
   `CmdType=DeviceConfig` carrying `SnapShotConfig` — not

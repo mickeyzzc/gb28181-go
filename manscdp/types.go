@@ -496,6 +496,100 @@ type AlarmReportCmd struct {
 	FieldDetection  uint32 `xml:"FieldDetection"`  // 区域入侵事件上报开关
 }
 
+// VideoParamItem is one stream's video attributes (A.2.1.13
+// videoParamAttributeCfgType Item): values per Annex G (SDP f=).
+type VideoParamItem struct {
+	StreamNumber int    `xml:"StreamNumber"` // 0 main, 1.. sub
+	VideoFormat  string `xml:"VideoFormat"`  // e.g. "H.264"
+	Resolution   string `xml:"Resolution"`   // e.g. "1920x1080"
+	FrameRate    string `xml:"FrameRate"`    // e.g. "25"
+	BitRateType  string `xml:"BitRateType"`  // per Annex G
+	// VideoBitRate is required with a fixed bitrate; "" when absent.
+	VideoBitRate string `xml:"VideoBitRate,omitempty"`
+}
+
+// VideoParamAttributeCmd is the A.2.3.2.5 视频参数属性配置 body.
+type VideoParamAttributeCmd struct {
+	Num   int              `xml:"Num,attr,omitempty"`
+	Items []VideoParamItem `xml:"Item"`
+}
+
+// RecordTimeSegment is one recording window inside a day (A.2.1.15).
+type RecordTimeSegment struct {
+	StartHour int `xml:"StartHour"`
+	StartMin  int `xml:"StartMin"`
+	StartSec  int `xml:"StartSec"`
+	StopHour  int `xml:"StopHour"`
+	StopMin   int `xml:"StopMin"`
+	StopSec   int `xml:"StopSec"`
+}
+
+// RecordSchedule is one weekday's recording plan (A.2.1.15): WeekDayNum
+// 1..7 (Mon..Sun), up to 8 time segments.
+type RecordSchedule struct {
+	WeekDayNum        int                 `xml:"WeekDayNum"`
+	TimeSegmentSumNum int                 `xml:"TimeSegmentSumNum"`
+	TimeSegments      []RecordTimeSegment `xml:"TimeSegment"`
+}
+
+// VideoRecordPlanCmd is the A.2.3.2.6 录像计划配置 body.
+type VideoRecordPlanCmd struct {
+	RecordEnable   int              `xml:"RecordEnable"` // 0 off, 1 on
+	ScheduleSumNum int              `xml:"RecordScheduleSumNum"`
+	Schedules      []RecordSchedule `xml:"RecordSchedule"`
+	StreamNumber   int              `xml:"StreamNumber"`
+}
+
+// VideoAlarmRecordCmd is the A.2.3.2.7 报警录像配置 body (A.2.1.16).
+type VideoAlarmRecordCmd struct {
+	RecordEnable  int  `xml:"RecordEnable"`            // 0 off, 1 on
+	RecordTime    *int `xml:"RecordTime,omitempty"`    // post-alarm secs
+	PreRecordTime *int `xml:"PreRecordTime,omitempty"` // pre-alarm secs
+	StreamNumber  int  `xml:"StreamNumber"`
+}
+
+// PictureMaskRegion is one masked region (A.2.1.17): Seq 1..4 and the
+// corners "lx,ly,rx,ry" in pixels.
+type PictureMaskRegion struct {
+	Seq   int    `xml:"Seq"`
+	Point string `xml:"Point"`
+}
+
+// pictureMaskRegionList wraps the RegionList element and its Num
+// attribute.
+type pictureMaskRegionList struct {
+	Num   *int                `xml:"Num,attr,omitempty"`
+	Items []PictureMaskRegion `xml:"Item"`
+}
+
+// PictureMaskCmd is the A.2.3.2.8 视频画面遮挡配置 body (A.2.1.17).
+type PictureMaskCmd struct {
+	On         int                    `xml:"On"` // 0 off, 1 on
+	SumNum     int                    `xml:"SumNum"`
+	RegionList *pictureMaskRegionList `xml:"RegionList,omitempty"`
+}
+
+// OSDItem is one OSD text entry (A.2.1.12): Text (0..32 bytes) plus its
+// pixel position.
+type OSDItem struct {
+	Text string `xml:"Text"`
+	X    int    `xml:"X"`
+	Y    int    `xml:"Y"`
+}
+
+// OSDConfigCmd is the A.2.3.2.11 前端 OSD 配置 body (A.2.1.12 OSDCfgType).
+type OSDConfigCmd struct {
+	Length     int       `xml:"Length"`
+	Width      int       `xml:"Width"`
+	TimeX      int       `xml:"TimeX"`
+	TimeY      int       `xml:"TimeY"`
+	TimeEnable *int      `xml:"TimeEnable,omitempty"` // 0 off, 1 on (default 1)
+	TimeType   *int      `xml:"TimeType,omitempty"`   // 0 ISO, 1 CN style
+	TextEnable *int      `xml:"TextEnable,omitempty"` // 0 off, 1 on (default 1)
+	SumNum     int       `xml:"SumNum"`
+	Items      []OSDItem `xml:"Item"`
+}
+
 // DeviceConfig carries the device-configuration command (GB/T 28181-2022
 // §9.3.3 / A.2.3.2, issue #80). The family allows one sub-command child;
 // this decodes the subset a fixed camera can act on — BasicParam,
@@ -504,12 +598,17 @@ type AlarmReportCmd struct {
 // of this family (2022 §9.10.2 does it via the REGISTER response's SIP
 // Date header).
 type DeviceConfig struct {
-	XMLName        xml.Name        `xml:"Control"`
-	CmdType        CmdType         `xml:"CmdType"`
-	SN             int             `xml:"SN"`
-	DeviceID       string          `xml:"DeviceID"`
-	BasicParam     *BasicParamCmd  `xml:"BasicParam,omitempty"`
-	FrameMirror    *uint32         `xml:"FrameMirror,omitempty"`
-	AlarmReport    *AlarmReportCmd `xml:"AlarmReport,omitempty"`
-	SnapShotConfig *SnapShotCmd    `xml:"SnapShotConfig,omitempty"`
+	XMLName             xml.Name                `xml:"Control"`
+	CmdType             CmdType                 `xml:"CmdType"`
+	SN                  int                     `xml:"SN"`
+	DeviceID            string                  `xml:"DeviceID"`
+	BasicParam          *BasicParamCmd          `xml:"BasicParam,omitempty"`
+	FrameMirror         *uint32                 `xml:"FrameMirror,omitempty"`
+	AlarmReport         *AlarmReportCmd         `xml:"AlarmReport,omitempty"`
+	SnapShotConfig      *SnapShotCmd            `xml:"SnapShotConfig,omitempty"`
+	VideoParamAttribute *VideoParamAttributeCmd `xml:"VideoParamAttribute,omitempty"`
+	VideoRecordPlan     *VideoRecordPlanCmd     `xml:"VideoRecordPlan,omitempty"`
+	VideoAlarmRecord    *VideoAlarmRecordCmd    `xml:"VideoAlarmRecord,omitempty"`
+	PictureMask         *PictureMaskCmd         `xml:"PictureMask,omitempty"`
+	OSDConfig           *OSDConfigCmd           `xml:"OSDConfig,omitempty"`
 }

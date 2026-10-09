@@ -1402,8 +1402,10 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 			slog.Warn("gb28181: failed to send 200 OK to MESSAGE", "error", err)
 		}
 		var basic *BasicParamCfg
+		var videoParamOpt *VideoParamOptCfg
 		for _, t := range strings.Split(q.ConfigType, "/") {
-			if strings.TrimSpace(t) == "BasicParam" {
+			switch strings.TrimSpace(t) {
+			case "BasicParam":
 				exp := uint64(s.cfg.RegisterIntervalSecs)
 				interval := uint64(s.cfg.HeartbeatIntervalSecs)
 				count := uint32(s.cfg.HeartbeatTimeoutCount)
@@ -1413,10 +1415,16 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 					HeartbeatInterval: &interval,
 					HeartbeatCount:    &count,
 				}
-				break
+			case "VideoParamOpt":
+				if s.cfg.VideoParamOptDownloadSpeed != "" || s.cfg.VideoParamOptResolution != "" {
+					videoParamOpt = &VideoParamOptCfg{
+						DownloadSpeed: s.cfg.VideoParamOptDownloadSpeed,
+						Resolution:    s.cfg.VideoParamOptResolution,
+					}
+				}
 			}
 		}
-		s.sendResponseMessage(BuildConfigDownloadResponseMessage(q.SN, q.DeviceID, basic), fromAddr)
+		s.sendResponseMessage(BuildConfigDownloadResponseMessage(q.SN, q.DeviceID, basic, videoParamOpt), fromAddr)
 		return
 	}
 

@@ -526,11 +526,21 @@ func BuildDeviceConfigResponseMessage(sn, deviceID string, ok bool) SipMessage {
 	}
 }
 
+// VideoParamOptCfg is the ConfigDownload VideoParamOpt block payload
+// (A.2.1.20 videoParamOptCfgType): "/"-joined download speeds and
+// supported resolutions. Empty fields are omitted from the block.
+type VideoParamOptCfg struct {
+	DownloadSpeed string
+	Resolution    string
+}
+
 // BuildConfigDownloadResponseMessage answers a ConfigDownload query
-// (A.2.6.9): OK plus the optional BasicParam block (A.2.1.19 — every
-// child optional); all other config blocks are optional and omitted,
-// the minimal valid answer. Twin of gb28181-rs build_config_download_response.
-func BuildConfigDownloadResponseMessage(sn, deviceID string, basic *BasicParamCfg) SipMessage {
+// (A.2.6.9): OK plus the optional requested blocks the host configured
+// — BasicParam (A.2.1.19, every child optional) and VideoParamOpt
+// (A.2.1.20, issue #109); all other config blocks are optional and
+// omitted, the minimal valid answer. Twin of gb28181-rs
+// build_config_download_response.
+func BuildConfigDownloadResponseMessage(sn, deviceID string, basic *BasicParamCfg, videoParamOpt *VideoParamOptCfg) SipMessage {
 	var bp strings.Builder
 	if basic != nil {
 		bp.WriteString("<BasicParam>")
@@ -547,6 +557,16 @@ func BuildConfigDownloadResponseMessage(sn, deviceID string, basic *BasicParamCf
 			bp.WriteString(fmt.Sprintf("<HeartBeatCount>%d</HeartBeatCount>", *basic.HeartbeatCount))
 		}
 		bp.WriteString("</BasicParam>")
+	}
+	if videoParamOpt != nil && (videoParamOpt.DownloadSpeed != "" || videoParamOpt.Resolution != "") {
+		bp.WriteString("<VideoParamOpt>")
+		if videoParamOpt.DownloadSpeed != "" {
+			bp.WriteString("<DownloadSpeed>" + videoParamOpt.DownloadSpeed + "</DownloadSpeed>")
+		}
+		if videoParamOpt.Resolution != "" {
+			bp.WriteString("<Resolution>" + videoParamOpt.Resolution + "</Resolution>")
+		}
+		bp.WriteString("</VideoParamOpt>")
 	}
 	body := fmt.Sprintf(`<Response CmdType="ConfigDownload" SN="%s"><DeviceID>%s</DeviceID><Result>OK</Result>%s</Response>`,
 		sn, deviceID, bp.String())
