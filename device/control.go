@@ -46,7 +46,12 @@ type ControlCallbacks struct {
 	// the drawn box to fill the playback window (ZoomIn) or the window
 	// into the box (ZoomOut). A body missing any required child gets the
 	// control reject (parity with the Rust twin).
-	OnDragZoom func(cmd DragZoom)
+	OnDragZoom func(cmd DragZoom) // OnFormatSDCard handles A.2.3.1.13 存储卡格式化 (issue #108):
+	// the card number starting at 1; 0 formats every card.
+	OnFormatSDCard func(card int)
+	// OnPTZPrecise handles A.2.3.1.11 PTZ 精准控制 (issue #108):
+	// absolute Pan/Tilt/Zoom angles, every field optional (nil = keep).
+	OnPTZPrecise func(p manscdp.PTZPreciseCmd)
 }
 
 // DragZoom is the decoded 拉框放大/缩小 control (A.2.3.1.8/9) handed to
@@ -137,6 +142,16 @@ func (c *ControlCallbacks) callbackFor(dc *manscdp.DeviceControl) func() {
 			if dz, ok := decodeDragZoom(dc.DragZoomOut, false); ok {
 				return func() { c.OnDragZoom(dz) }
 			}
+		}
+	case dc.FormatSDCard != nil:
+		if c.OnFormatSDCard != nil {
+			card := *dc.FormatSDCard
+			return func() { c.OnFormatSDCard(card) }
+		}
+	case dc.PTZPreciseCtrl != nil:
+		if c.OnPTZPrecise != nil {
+			p := *dc.PTZPreciseCtrl
+			return func() { c.OnPTZPrecise(p) }
 		}
 	}
 	return nil

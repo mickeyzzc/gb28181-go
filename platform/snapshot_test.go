@@ -37,3 +37,31 @@ func TestManualRecordConvenience(t *testing.T) {
 	require.NoError(t, c.StopManualRecord("34020000001320000001"))
 	require.Contains(t, sender.body, "<RecordCmd>StopRecord</RecordCmd>")
 }
+
+// A.2.3.1.11-13 controls (issue #108).
+func TestSend2022ClosureControls(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 2)
+
+	require.NoError(t, c.SendDeviceUpgradeCmd("34020000001320000001", manscdp.DeviceUpgradeCmd{
+		Firmware:     "v1.0.0",
+		FileURL:      "http://192.168.63.30/fw.bin",
+		Manufacturer: "MiBee",
+		SessionID:    "0123456789abcdef0123456789abcdef",
+	}))
+	require.Contains(t, sender.body, "<DeviceUpgrade><Firmware>v1.0.0</Firmware>")
+	require.Contains(t, sender.body, "<FileURL>http://192.168.63.30/fw.bin</FileURL>")
+	require.Contains(t, sender.body, "<SessionID>0123456789abcdef0123456789abcdef</SessionID>")
+
+	require.NoError(t, c.SendFormatSDCardCmd("34020000001320000001", 0))
+	require.Contains(t, sender.body, "<FormatSDCard>0</FormatSDCard>")
+
+	require.NoError(t, c.SendPTZPreciseCmd("34020000001320000001", manscdp.PTZPreciseCmd{
+		Pan:  float64Ptr(180.5),
+		Tilt: float64Ptr(-12.25),
+	}))
+	require.Contains(t, sender.body, "<PTZPreciseCtrl><Pan>180.5</Pan><Tilt>-12.25</Tilt></PTZPreciseCtrl>")
+
+	require.ErrorIs(t, c.SendFormatSDCardCmd("34020000001329999999", 0), ErrChannelNotFound)
+}
+
+func float64Ptr(v float64) *float64 { return &v }

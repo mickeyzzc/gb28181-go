@@ -2,6 +2,7 @@ package manscdp
 
 import (
 	"encoding/xml"
+	"strings"
 	"testing"
 )
 
@@ -147,5 +148,41 @@ func TestUploadSnapShotFinishedRoundTrip(t *testing.T) {
 		if got.SnapShotList[i] != n.SnapShotList[i] {
 			t.Fatalf("round-trip fileID[%d] mismatch", i)
 		}
+	}
+}
+
+func TestDeviceUpgradeResultRoundTrip(t *testing.T) {
+	n := BuildDeviceUpgradeResult(31, "34020000001320000001", goldenSessionID,
+		false, "v1.0.0", "02")
+	out, err := xml.Marshal(n)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := "<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>31</SN>" +
+		"<DeviceID>34020000001320000001</DeviceID><SessionID>" + goldenSessionID + "</SessionID>" +
+		"<UpgradeResult>ERROR</UpgradeResult><Firmware>v1.0.0</Firmware>" +
+		"<UpgradeFailedReason>02</UpgradeFailedReason></Notify>"
+	if string(out) != want {
+		t.Fatalf("notify XML mismatch:\n got: %s\nwant: %s", out, want)
+	}
+	_, out2, err := Decode(out)
+	if err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	got := out2.(DeviceUpgradeResult)
+	if got.UpgradeResult != "ERROR" || got.Firmware != "v1.0.0" ||
+		got.UpgradeFailedReason != "02" || got.SessionID != goldenSessionID {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+
+	// Success omits the reason.
+	ok := BuildDeviceUpgradeResult(32, "d", goldenSessionID, true, "v9.9.9", "")
+	out, err = xml.Marshal(ok)
+	if err != nil {
+		t.Fatalf("marshal ok: %v", err)
+	}
+	if !strings.Contains(string(out), "<UpgradeResult>OK</UpgradeResult>") ||
+		strings.Contains(string(out), "UpgradeFailedReason") {
+		t.Fatalf("ok notify XML: %s", out)
 	}
 }

@@ -81,6 +81,9 @@ type Server struct {
 	// snapshotExecutor runs DeviceControl(SnapShot) exchanges (nil = the
 	// control is rejected as before). Guarded by mu.
 	snapshotExecutor SnapshotExecutor
+	// deviceUpgrader runs DeviceControl(DeviceUpgrade) exchanges (nil =
+	// the historical control reject).
+	deviceUpgrader DeviceUpgrader
 	// playbackCtl routes SIP INFO PlaybackControl commands to the active
 	// playback goroutine (nil when no playback session is active). Guarded by mu.
 	playbackCtl chan<- PlaybackControl
@@ -1465,6 +1468,23 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		slog.Warn("gb28181: snapshot config not executable (no executor or non-UDP transport) — rejecting")
 		s.sendResponseMessage(BuildDeviceConfigResponseMessage(
 			strconv.Itoa(cfg.SN), cfg.DeviceID, false), fromAddr)
+		return
+	}
+
+	// DeviceControl(DeviceUpgrade) (GB/T 28181-2022 A.2.3.1.12, issue
+	// #108): with an upgrader installed the 200 above is the whole
+	// synchronous answer; the upgrade runs in a goroutine and completes
+	// asynchronously via the A.2.5.9 DeviceUpgradeResult notify. Without
+	// an upgrader the control is rejected explicitly. Non-UDP transports
+	// reject the same way (the notify leaves through the UDP socket).
+	if dc, ok := parseUpgradeControl(msg.Body); ok {
+		if up := s.upgrader(); up != nil && (s.cfg.Transport == "" || s.cfg.Transport == "udp") {
+			go s.runUpgradeExchange(ctx, dc, up)
+			return
+		}
+		slog.Warn("gb28181: device upgrade not executable (no upgrader or non-UDP transport) — rejecting")
+		s.sendResponseMessage(BuildControlRejectResponseMessage(
+			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
 		return
 	}
 

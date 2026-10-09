@@ -156,6 +156,8 @@ func decodeOnce(data []byte) (CmdType, any, error) {
 		return unmarshalAs[Catalog](body, CmdCatalog)
 	case CmdUploadSnapShotFinished:
 		return unmarshalAs[UploadSnapShotFinished](body, CmdUploadSnapShotFinished)
+	case CmdDeviceUpgradeResult:
+		return unmarshalAs[DeviceUpgradeResult](body, CmdDeviceUpgradeResult)
 	case CmdKeepalive:
 		return unmarshalAs[Keepalive](body, CmdKeepalive)
 	case CmdDeviceInfo:

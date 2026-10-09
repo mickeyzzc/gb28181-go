@@ -7,6 +7,7 @@ package platform
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
@@ -58,6 +59,14 @@ func (c *PTZController) SendDeviceControl(channelID, element, value string) erro
 			return fmt.Errorf("gb28181: IFrameCmd value must be %q, got %q", "Send", value)
 		}
 		dc.IFrameCmd = value
+	case "FormatSDCard":
+		// A.2.3.1.13: the element is an integer card number (>=1; 0 =
+		// every card) — the generic string-valued path carries it.
+		card, err := strconv.Atoi(value)
+		if err != nil || card < 0 {
+			return fmt.Errorf("gb28181: FormatSDCard must be a non-negative integer, got %q", value)
+		}
+		dc.FormatSDCard = &card
 	default:
 		return fmt.Errorf("gb28181: unsupported DeviceControl element %q", element)
 	}
@@ -131,6 +140,68 @@ func (c *PTZController) SendSnapShotCmd(channelID string, cmd manscdp.SnapShotCm
 	}
 	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
 		return fmt.Errorf("gb28181: send DeviceConfig to %s: %w", ch.DeviceID, err)
+	}
+	return nil
+}
+
+// SendDeviceUpgradeCmd issues the GB/T 28181-2022 firmware-upgrade
+// control (A.2.3.1.12, issue #108): the device downloads FileURL, applies
+// the firmware, and reports DeviceUpgradeResult (A.2.5.9) with the same
+// SessionID.
+func (c *PTZController) SendDeviceUpgradeCmd(channelID string, cmd manscdp.DeviceUpgradeCmd) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+
+	dc := manscdp.DeviceControl{
+		CmdType:       manscdp.CmdDeviceControl,
+		SN:            int(c.seq.Add(1)),
+		DeviceID:      ch.ID,
+		DeviceUpgrade: &cmd,
+	}
+	body, err := manscdp.Encode(dc)
+	if err != nil {
+		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
+	}
+	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
+		return fmt.Errorf("gb28181: send DeviceControl to %s: %w", ch.DeviceID, err)
+	}
+	return nil
+}
+
+// SendFormatSDCardCmd issues the A.2.3.1.13 storage-card format control:
+// card numbers start at 1; 0 formats every card.
+func (c *PTZController) SendFormatSDCardCmd(channelID string, card int) error {
+	return c.SendDeviceControl(channelID, "FormatSDCard", strconv.Itoa(card))
+}
+
+// SendPTZPreciseCmd issues the A.2.3.1.11 PTZ precise control: absolute
+// Pan/Tilt/Zoom angles, every field optional.
+func (c *PTZController) SendPTZPreciseCmd(channelID string, p manscdp.PTZPreciseCmd) error {
+	ch, dev, err := c.locateChannel(channelID)
+	if err != nil {
+		return err
+	}
+	if dev.Status.Load() != DeviceOnline {
+		return ErrDeviceOffline
+	}
+
+	dc := manscdp.DeviceControl{
+		CmdType:        manscdp.CmdDeviceControl,
+		SN:             int(c.seq.Add(1)),
+		DeviceID:       ch.ID,
+		PTZPreciseCtrl: &p,
+	}
+	body, err := manscdp.Encode(dc)
+	if err != nil {
+		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
+	}
+	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
+		return fmt.Errorf("gb28181: send DeviceControl to %s: %w", ch.DeviceID, err)
 	}
 	return nil
 }

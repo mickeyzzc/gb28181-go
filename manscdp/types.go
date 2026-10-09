@@ -27,10 +27,14 @@ const (
 	// completion notify (A.2.5.7): the device reports the uploaded image
 	// IDs after a DeviceControl SnapShot command.
 	CmdUploadSnapShotFinished CmdType = "UploadSnapShotFinished"
-	CmdAlarm                  CmdType = "Alarm"
-	CmdTimeSync               CmdType = "TimeSync"
-	CmdBroadcast              CmdType = "Broadcast"
-	CmdMobilePosition         CmdType = "MobilePosition"
+	// CmdDeviceUpgradeResult is the GB/T 28181-2022 firmware-upgrade
+	// completion notify (A.2.5.9): OK/ERROR plus the firmware in effect
+	// after the attempt.
+	CmdDeviceUpgradeResult CmdType = "DeviceUpgradeResult"
+	CmdAlarm               CmdType = "Alarm"
+	CmdTimeSync            CmdType = "TimeSync"
+	CmdBroadcast           CmdType = "Broadcast"
+	CmdMobilePosition      CmdType = "MobilePosition"
 	// GB/T 28181-2022 information queries (A.2.4.10-14): responses reuse
 	// these CmdType strings under a Response root (A.2.6.12-16).
 	CmdHomePositionQuery    CmdType = "HomePositionQuery"
@@ -213,9 +217,69 @@ type DeviceControl struct {
 	RecordCmd   string       `xml:"RecordCmd,omitempty"`
 	GuardCmd    string       `xml:"GuardCmd,omitempty"`
 	AlarmCmd    string       `xml:"AlarmCmd,omitempty"`
+	// FormatSDCard (A.2.3.1.13) formats storage card(s): the element is
+	// an integer card number starting at 1; 0 formats every card.
+	FormatSDCard *int `xml:"FormatSDCard,omitempty"`
+	// DeviceUpgrade carries the A.2.3.1.12 firmware-upgrade command;
+	// the completion report is the A.2.5.9 DeviceUpgradeResult notify.
+	DeviceUpgrade *DeviceUpgradeCmd `xml:"DeviceUpgrade,omitempty"`
+	// PTZPreciseCtrl (A.2.3.1.11 / A.2.1.11) sets absolute Pan/Tilt/Zoom
+	// angles; every child is optional.
+	PTZPreciseCtrl *PTZPreciseCmd `xml:"PTZPreciseCtrl,omitempty"`
 	// Attribute-form aliases (see Catalog).
 	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
 	SNAttr      int     `xml:"SN,attr,omitempty"`
+}
+
+// DeviceUpgradeCmd is the A.2.3.1.12 设备软件升级 body: every child
+// required. The host downloads FileURL, applies the firmware, and the
+// completion report (A.2.5.9) echoes SessionID.
+type DeviceUpgradeCmd struct {
+	Firmware     string `xml:"Firmware"`     // current device firmware version
+	FileURL      string `xml:"FileURL"`      // full path of the upgrade file
+	Manufacturer string `xml:"Manufacturer"` // device vendor
+	// SessionID correlates the upgrade flow; [A-Za-z0-9-], 32..128 bytes.
+	SessionID string `xml:"SessionID"`
+}
+
+// PTZPreciseCmd is the A.2.1.11 PTZPreciseCtrlType: absolute pan
+// (0..360.00), tilt (typically -30.00..90.00) and zoom (>1.00) angles;
+// every field optional (nil = keep).
+type PTZPreciseCmd struct {
+	Pan  *float64 `xml:"Pan,omitempty"`
+	Tilt *float64 `xml:"Tilt,omitempty"`
+	Zoom *float64 `xml:"Zoom,omitempty"`
+}
+
+// DeviceUpgradeResult is the A.2.5.9 设备软件升级结果通知: OK/ERROR plus
+// the firmware in effect after the attempt and, on failure, a reason
+// (01 download timeout, 02 package corrupt, 03 system error, 99 other).
+type DeviceUpgradeResult struct {
+	XMLName             xml.Name `xml:"Notify"`
+	CmdType             CmdType  `xml:"CmdType"`
+	SN                  int      `xml:"SN"`
+	DeviceID            string   `xml:"DeviceID"`
+	SessionID           string   `xml:"SessionID"`
+	UpgradeResult       string   `xml:"UpgradeResult"` // "OK" or "ERROR"
+	Firmware            string   `xml:"Firmware"`
+	UpgradeFailedReason string   `xml:"UpgradeFailedReason,omitempty"`
+}
+
+// BuildDeviceUpgradeResult assembles the device-side completion report.
+func BuildDeviceUpgradeResult(sn int, deviceID, sessionID string, ok bool, firmware, failedReason string) DeviceUpgradeResult {
+	result := "ERROR"
+	if ok {
+		result = "OK"
+	}
+	return DeviceUpgradeResult{
+		CmdType:             CmdDeviceUpgradeResult,
+		SN:                  sn,
+		DeviceID:            deviceID,
+		SessionID:           sessionID,
+		UpgradeResult:       result,
+		Firmware:            firmware,
+		UpgradeFailedReason: failedReason,
+	}
 }
 
 // SnapShotCmd is the GB/T 28181-2022 image-snapshot configuration payload
