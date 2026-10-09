@@ -11,6 +11,19 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` 2022 closure controls (#108): `DeviceUpgrade`
+  (A.2.3.1.12) lands behind a `SetDeviceUpgrader` seam shaped like the
+  snapshot executor — the host downloads/flashes, the library sends the
+  A.2.5.9 `DeviceUpgradeResult` notify correlated with the request's
+  SessionID (reason codes 01 download timeout / 02 package corrupt /
+  03 system error / 99 other; upgrader errors report 99).
+  `FormatSDCard` (A.2.3.1.13, integer element — 0 formats every card)
+  and `PTZPreciseCtrl` (A.2.3.1.11 / A.2.1.11, optional absolute
+  Pan/Tilt/Zoom doubles) join the regular `ControlCallbacks`. Platform
+  builders: `SendDeviceUpgradeCmd` / `SendFormatSDCardCmd` /
+  `SendPTZPreciseCmd`; `manscdp.Decode` parses the
+  `DeviceUpgradeResult` notify.
+
 - `feat(device)` DeviceConfig closure family (#109): five more 2022
   sub-commands decode and fire optional host callbacks —
   `VideoParamAttribute` (per-stream codec attributes, A.2.3.2.5),

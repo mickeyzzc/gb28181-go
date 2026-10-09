@@ -382,6 +382,25 @@ func BuildKeepaliveMessage(sn, deviceID, status string) SipMessage {
 // BuildUploadSnapShotFinishedMessage creates the SIP MESSAGE carrying
 // the GB/T 28181-2022 A.2.5.7 completion notify (routing headers are
 // filled by the caller, mirroring the keepalive path).
+// BuildDeviceUpgradeResultMessage creates the SIP MESSAGE carrying the
+// A.2.5.9 DeviceUpgradeResult notify (fresh routing headers are applied
+// by the caller).
+func BuildDeviceUpgradeResultMessage(sn int, deviceID, sessionID string, ok bool, firmware, failedReason string) SipMessage {
+	result := manscdp.BuildDeviceUpgradeResult(sn, deviceID, sessionID, ok, firmware, failedReason)
+	xmlData, err := xml.Marshal(result)
+	if err != nil {
+		slog.Error("Failed to marshal DeviceUpgradeResult", "error", err)
+		return SipMessage{}
+	}
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        string(xmlData),
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
+}
+
 func BuildUploadSnapShotFinishedMessage(sn int, deviceID, sessionID string, fileIDs []string) SipMessage {
 	finished := manscdp.BuildUploadSnapShotFinished(sn, deviceID, sessionID, fileIDs)
 	xmlData, err := xml.Marshal(finished)
