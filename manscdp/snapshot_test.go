@@ -6,18 +6,20 @@ import (
 )
 
 // Goldens pinned to the GB/T 28181-2022 text (A.2.1.24 snapShotCfgType,
-// A.2.5.7 UploadSnapShotFinished): the Control element is <SnapShot> with
-// children SnapNum/Interval/UploadURL/SessionID; the completion notify
-// carries SessionID and a SnapShotList of SnapShotFileID entries.
+// A.2.5.7 UploadSnapShotFinished): the snapshot rides the device-config
+// channel — a Control root whose CmdType is DeviceConfig carries the
+// <SnapShotConfig> element with children SnapNum/Interval/UploadURL/
+// SessionID; the completion notify carries SessionID and a SnapShotList
+// of SnapShotFileID entries.
 
 const goldenSessionID = "0123456789abcdef0123456789abcdef"
 
-func TestDeviceControlSnapShotGolden(t *testing.T) {
-	dc := DeviceControl{
-		CmdType:  CmdDeviceControl,
+func TestDeviceConfigSnapShotConfigGolden(t *testing.T) {
+	dc := DeviceConfig{
+		CmdType:  CmdDeviceConfig,
 		SN:       17,
 		DeviceID: "34020000001320000001",
-		SnapShot: &SnapShotCmd{
+		SnapShotConfig: &SnapShotCmd{
 			SnapNum:   3,
 			Interval:  2,
 			UploadURL: "http://192.168.63.30:9090/api/gb28181/snapshot/upload",
@@ -28,26 +30,59 @@ func TestDeviceControlSnapShotGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	want := "<Control><CmdType>DeviceControl</CmdType><SN>17</SN><DeviceID>34020000001320000001</DeviceID>" +
-		"<SnapShot><SnapNum>3</SnapNum><Interval>2</Interval>" +
+	want := "<Control><CmdType>DeviceConfig</CmdType><SN>17</SN><DeviceID>34020000001320000001</DeviceID>" +
+		"<SnapShotConfig><SnapNum>3</SnapNum><Interval>2</Interval>" +
 		"<UploadURL>http://192.168.63.30:9090/api/gb28181/snapshot/upload</UploadURL>" +
-		"<SessionID>" + goldenSessionID + "</SessionID></SnapShot></Control>"
+		"<SessionID>" + goldenSessionID + "</SessionID></SnapShotConfig></Control>"
 	if string(out) != want {
-		t.Fatalf("control XML mismatch:\n got: %s\nwant: %s", out, want)
+		t.Fatalf("config XML mismatch:\n got: %s\nwant: %s", out, want)
 	}
 
 	// Manual snapshot (single frame) omits Interval per the schema
 	// (Interval is optional).
 	manual := dc
-	manual.SnapShot = &SnapShotCmd{SnapNum: 1, UploadURL: "http://x/u", SessionID: goldenSessionID}
+	manual.SnapShotConfig = &SnapShotCmd{SnapNum: 1, UploadURL: "http://x/u", SessionID: goldenSessionID}
 	out, err = xml.Marshal(manual)
 	if err != nil {
 		t.Fatalf("marshal manual: %v", err)
 	}
-	if want := "<Control><CmdType>DeviceControl</CmdType><SN>17</SN><DeviceID>34020000001320000001</DeviceID>" +
-		"<SnapShot><SnapNum>1</SnapNum><UploadURL>http://x/u</UploadURL>" +
-		"<SessionID>" + goldenSessionID + "</SessionID></SnapShot></Control>"; string(out) != want {
-		t.Fatalf("manual control XML mismatch:\n got: %s\nwant: %s", out, want)
+	if want := "<Control><CmdType>DeviceConfig</CmdType><SN>17</SN><DeviceID>34020000001320000001</DeviceID>" +
+		"<SnapShotConfig><SnapNum>1</SnapNum><UploadURL>http://x/u</UploadURL>" +
+		"<SessionID>" + goldenSessionID + "</SessionID></SnapShotConfig></Control>"; string(out) != want {
+		t.Fatalf("manual config XML mismatch:\n got: %s\nwant: %s", out, want)
+	}
+}
+
+// TestDecodeSnapShotConfigRealCapture pins the decode of a real 2022
+// platform capture (issue #107): CmdType is DeviceConfig and the payload
+// element is SnapShotConfig — not DeviceControl/SnapShot as previously
+// modeled.
+func TestDecodeSnapShotConfigRealCapture(t *testing.T) {
+	body := "<Control><CmdType>DeviceConfig</CmdType><SN>10003</SN>" +
+		"<DeviceID>34020000001310000001</DeviceID>" +
+		"<SnapShotConfig><SnapNum>1</SnapNum><Interval>1</Interval>" +
+		"<UploadURL>http://192.168.0.110:9999/snap</UploadURL>" +
+		"<SessionID>3cffba1f5df14a47acb6594b2375c5c7</SessionID></SnapShotConfig></Control>"
+	ct, v, err := Decode([]byte(body))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ct != CmdDeviceConfig {
+		t.Fatalf("CmdType = %q, want DeviceConfig", ct)
+	}
+	cfg, ok := v.(DeviceConfig)
+	if !ok {
+		t.Fatalf("decoded type = %T", v)
+	}
+	if cfg.SN != 10003 || cfg.DeviceID != "34020000001310000001" {
+		t.Fatalf("header fields = %+v", cfg)
+	}
+	if cfg.SnapShotConfig == nil {
+		t.Fatal("SnapShotConfig = nil")
+	}
+	want := SnapShotCmd{SnapNum: 1, Interval: 1, UploadURL: "http://192.168.0.110:9999/snap", SessionID: "3cffba1f5df14a47acb6594b2375c5c7"}
+	if *cfg.SnapShotConfig != want {
+		t.Fatalf("SnapShotConfig = %+v, want %+v", *cfg.SnapShotConfig, want)
 	}
 }
 

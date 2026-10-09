@@ -39,16 +39,17 @@ func (s *Server) snapshotExec() SnapshotExecutor {
 	return s.snapshotExecutor
 }
 
-// parseSnapshotControl decodes a DeviceControl(SnapShot) body; ok=false
-// for anything else.
-func parseSnapshotControl(body string) (manscdp.DeviceControl, bool) {
+// parseSnapshotConfig decodes a DeviceConfig(SnapShotConfig) body
+// (A.2.1.24 rides the device-config channel — issue #107); ok=false for
+// anything else.
+func parseSnapshotConfig(body string) (manscdp.DeviceConfig, bool) {
 	ct, v, err := manscdp.Decode([]byte(body))
-	if err != nil || ct != manscdp.CmdDeviceControl {
-		return manscdp.DeviceControl{}, false
+	if err != nil || ct != manscdp.CmdDeviceConfig {
+		return manscdp.DeviceConfig{}, false
 	}
-	dc, ok := v.(manscdp.DeviceControl)
-	if !ok || dc.SnapShot == nil {
-		return manscdp.DeviceControl{}, false
+	dc, ok := v.(manscdp.DeviceConfig)
+	if !ok || dc.SnapShotConfig == nil {
+		return manscdp.DeviceConfig{}, false
 	}
 	return dc, true
 }
@@ -59,8 +60,8 @@ func parseSnapshotControl(body string) (manscdp.DeviceControl, bool) {
 // fresh routing headers, mirroring the keepalive path. Executor errors
 // report a failed exchange (empty SnapShotList); the returned IDs pass
 // through verbatim.
-func (s *Server) runSnapshotExchange(ctx context.Context, dc manscdp.DeviceControl, exec SnapshotExecutor) {
-	cmd := *dc.SnapShot
+func (s *Server) runSnapshotExchange(ctx context.Context, cfg manscdp.DeviceConfig, exec SnapshotExecutor) {
+	cmd := *cfg.SnapShotConfig
 
 	fileIDs, err := exec.Execute(ctx, cmd)
 	if err != nil {
@@ -81,7 +82,7 @@ func (s *Server) runSnapshotExchange(ctx context.Context, dc manscdp.DeviceContr
 		localIPAddr = localIP()
 	}
 	domain := s.cfg.SIPDomain
-	notify := BuildUploadSnapShotFinishedMessage(dc.SN, s.cfg.DeviceID, cmd.SessionID, fileIDs)
+	notify := BuildUploadSnapShotFinishedMessage(cfg.SN, s.cfg.DeviceID, cmd.SessionID, fileIDs)
 	notify.RequestURI = fmt.Sprintf("sip:%s@%s", domain, domain)
 	notify.From = fmt.Sprintf("<sip:%s@%s>", s.cfg.DeviceID, domain)
 	notify.To = fmt.Sprintf("<sip:%s@%s>", domain, domain)
