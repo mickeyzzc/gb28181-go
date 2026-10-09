@@ -57,8 +57,13 @@ type Receiver struct {
 	maxJitterPackets int    // default: 32
 	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
-	// Stage 2: PS demux
-	demuxer *PSDemuxer
+	// Stage 2: PS demux — or ES depacketization when the session's
+	// payloads are bare NAL units (GB/T 28181-2022 ES over RTP, issue
+	// #110). The mode latches on the first classified payload.
+	demuxer    *PSDemuxer
+	es         *ESDemuxer
+	esLatch    atomic.Bool
+	classified atomic.Bool // payload mode decided once per session
 
 	// OnFirstRTP fires once when the first RTP packet is received — used by
 	// the session layer to confirm a dialog without a matched SIP response
@@ -460,6 +465,9 @@ func (r *Receiver) emitAccessUnitsLocked() {
 		// hole decodes as half-frame corruption). Drop it; the stream resyncs
 		// at the next AU boundary.
 		r.demuxer.DropPartialVideo()
+		if r.es != nil {
+			r.es.DropPartial()
+		}
 		r.baseSeq = next
 		// Re-run so the buffered packets above the gap are emitted now.
 		r.emitAccessUnitsLocked()
@@ -475,6 +483,44 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// a marker-triggered drain that stopped at a sequence gap mid-burst, or a
 	// teardown flush, claimed completeness for a run the wire never finished.
 	endedOnMarker := packets[len(packets)-1].Header.Marker
+
+	// ES over RTP (issue #110): bare H.264/H.265 payloads depacketize per
+	// packet (FU headers live in each packet), so the cross-packet byte
+	// stitching below must not merge them first. The mode is decided ONCE
+	// per session, on the very first payload — PS streams open with a pack
+	// start code (00 00 01 Bx) which never looks like a NAL; re-classifying
+	// every drained run would let a mid-stream PS fragment (arbitrary
+	// leading bytes) false-positive as ES.
+	if !r.classified.Load() && len(packets[0].Payload) > 0 {
+		r.classified.Store(true)
+		if looksLikeESPacket(packets[0].Payload) {
+			r.es = NewESDemuxer()
+			r.esLatch.Store(true)
+		}
+	}
+	if r.esLatch.Load() {
+		for _, pkt := range packets {
+			if err := r.es.FeedPacket(pkt.Payload); err != nil {
+				logger().Debug("gb28181: ES depacketize error",
+					"camera_id", r.cameraID, "error", err)
+			}
+		}
+		if !endedOnMarker {
+			// Collect until the AU boundary, mirroring the PS burst model.
+			return
+		}
+		nalus := r.es.TakeAU()
+		if len(nalus) == 0 {
+			return
+		}
+		lastPkt := packets[len(packets)-1]
+		r.ptsClock.Store(int64(lastPkt.Header.Timestamp))
+		subAUs := splitAUsByFrame(nalus, r.es.Codec() == "h265")
+		for _, subAU := range subAUs {
+			r.emitAULocked(subAU, int64(lastPkt.Header.Timestamp))
+		}
+		return
+	}
 
 	// Stitch payloads across packets (cross-packet byte stitching)
 	var auPayload []byte
@@ -523,7 +569,7 @@ func (r *Receiver) emitAULocked(au [][]byte, ptsTicks int64) {
 	r.auEmitted.Add(1)
 
 	// Detect IDR frame
-	isH265 := r.demuxer.Codec() == "h265"
+	isH265 := r.Codec() == "h265"
 	isIDR := nalutil.IsIDR(au, isH265)
 	if isIDR {
 		r.lastIDRUnix.Store(time.Now().UnixNano())
@@ -626,5 +672,8 @@ func (r *Receiver) Metrics() map[string]int64 {
 
 // Codec returns the detected codec type from the PS demuxer.
 func (r *Receiver) Codec() string {
+	if r.esLatch.Load() && r.es != nil {
+		return r.es.Codec()
+	}
 	return r.demuxer.Codec()
 }

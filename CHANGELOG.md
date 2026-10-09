@@ -11,6 +11,20 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(platform)` ES over RTP receive side (#110): GB/T 28181-2022
+  allows the media channel to carry bare H.264/H.265 over RTP instead
+  of MPEG-PS. The Receiver classifies each session's first payload (PS
+  start codes win; NAL-shaped payloads latch ES) and depacketizes RFC
+  6184 (single NALU / STAP-A / FU-A) and RFC 7798 (single / AP / FU)
+  payloads into the same `[][]byte` AU shape the PS path emits —
+  FrameHub consumers and the AU/NALU callbacks do not change. The AU
+  boundary stays the RTP marker bit; the loss path drops partial FU
+  reassembly (a hole is corruption, not a smaller frame); malformed
+  aggregation entries are rejected, not misparsed. ES-only senders
+  (the "platform can't pull this device at all" hard failure) now
+  interop. The device-side ES *sending* half stays PS-default and is
+  not part of this batch (per the issue's own scoping).
+
 - `feat(device)` 2022 closure controls (#108): `DeviceUpgrade`
   (A.2.3.1.12) lands behind a `SetDeviceUpgrader` seam shaped like the
   snapshot executor — the host downloads/flashes, the library sends the
