@@ -213,17 +213,15 @@ type DeviceControl struct {
 	RecordCmd   string       `xml:"RecordCmd,omitempty"`
 	GuardCmd    string       `xml:"GuardCmd,omitempty"`
 	AlarmCmd    string       `xml:"AlarmCmd,omitempty"`
-	// SnapShot carries the GB/T 28181-2022 image-snapshot command
-	// (A.2.1.24): the device captures JPEGs and uploads them over HTTP,
-	// then reports UploadSnapShotFinished with the same SessionID.
-	SnapShot *SnapShotCmd `xml:"SnapShot,omitempty"`
 	// Attribute-form aliases (see Catalog).
 	CmdTypeAttr CmdType `xml:"CmdType,attr,omitempty"`
 	SNAttr      int     `xml:"SN,attr,omitempty"`
 }
 
-// SnapShotCmd is the GB/T 28181-2022 image-snapshot control payload
-// (A.2.1.24 snapShotCfgType).
+// SnapShotCmd is the GB/T 28181-2022 image-snapshot configuration payload
+// (A.2.1.24 snapShotCfgType). It rides the device-config channel — a
+// Control root with CmdType DeviceConfig carrying the <SnapShotConfig>
+// element (issue #107) — not DeviceControl.
 type SnapShotCmd struct {
 	// SnapNum is the number of frames to capture, 1..10; a manual
 	// snapshot is 1.
@@ -501,15 +499,17 @@ type AlarmReportCmd struct {
 // DeviceConfig carries the device-configuration command (GB/T 28181-2022
 // §9.3.3 / A.2.3.2, issue #80). The family allows one sub-command child;
 // this decodes the subset a fixed camera can act on — BasicParam,
-// FrameMirror (A.2.1.22: 0 none, 1 horizontal, 2 vertical, 3 both) and
-// AlarmReport. 校时 is NOT part of this family (2022 §9.10.2 does it via
-// the REGISTER response's SIP Date header).
+// FrameMirror (A.2.1.22: 0 none, 1 horizontal, 2 vertical, 3 both),
+// AlarmReport and SnapShotConfig (A.2.1.24, issue #107). 校时 is NOT part
+// of this family (2022 §9.10.2 does it via the REGISTER response's SIP
+// Date header).
 type DeviceConfig struct {
-	XMLName     xml.Name        `xml:"Control"`
-	CmdType     CmdType         `xml:"CmdType"`
-	SN          int             `xml:"SN"`
-	DeviceID    string          `xml:"DeviceID"`
-	BasicParam  *BasicParamCmd  `xml:"BasicParam,omitempty"`
-	FrameMirror *uint32         `xml:"FrameMirror,omitempty"`
-	AlarmReport *AlarmReportCmd `xml:"AlarmReport,omitempty"`
+	XMLName        xml.Name        `xml:"Control"`
+	CmdType        CmdType         `xml:"CmdType"`
+	SN             int             `xml:"SN"`
+	DeviceID       string          `xml:"DeviceID"`
+	BasicParam     *BasicParamCmd  `xml:"BasicParam,omitempty"`
+	FrameMirror    *uint32         `xml:"FrameMirror,omitempty"`
+	AlarmReport    *AlarmReportCmd `xml:"AlarmReport,omitempty"`
+	SnapShotConfig *SnapShotCmd    `xml:"SnapShotConfig,omitempty"`
 }

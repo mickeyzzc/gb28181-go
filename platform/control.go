@@ -104,10 +104,12 @@ func (c *PTZController) SetHomePosition(channelID string, enabled bool, resetSec
 	return nil
 }
 
-// SendSnapShotCmd issues the GB/T 28181-2022 image-snapshot control
-// (A.2.1.24): the device captures SnapNum JPEGs (Interval seconds apart)
-// and POSTs them to UploadURL, then reports UploadSnapShotFinished with
-// the same SessionID.
+// SendSnapShotCmd issues the GB/T 28181-2022 image-snapshot
+// configuration (A.2.1.24, issue #107): the device captures SnapNum JPEGs
+// (Interval seconds apart) and POSTs them to UploadURL, then reports
+// UploadSnapShotFinished with the same SessionID. The command rides the
+// device-config channel — Control root, CmdType DeviceConfig,
+// <SnapShotConfig> payload.
 func (c *PTZController) SendSnapShotCmd(channelID string, cmd manscdp.SnapShotCmd) error {
 	ch, dev, err := c.locateChannel(channelID)
 	if err != nil {
@@ -117,18 +119,18 @@ func (c *PTZController) SendSnapShotCmd(channelID string, cmd manscdp.SnapShotCm
 		return ErrDeviceOffline
 	}
 
-	dc := manscdp.DeviceControl{
-		CmdType:  manscdp.CmdDeviceControl,
-		SN:       int(c.seq.Add(1)),
-		DeviceID: ch.ID,
-		SnapShot: &cmd,
+	cfg := manscdp.DeviceConfig{
+		CmdType:        manscdp.CmdDeviceConfig,
+		SN:             int(c.seq.Add(1)),
+		DeviceID:       ch.ID,
+		SnapShotConfig: &cmd,
 	}
-	body, err := manscdp.Encode(dc)
+	body, err := manscdp.Encode(cfg)
 	if err != nil {
-		return fmt.Errorf("gb28181: encode DeviceControl: %w", err)
+		return fmt.Errorf("gb28181: encode DeviceConfig: %w", err)
 	}
 	if err := c.sender.SendMessage(ch.DeviceID, body); err != nil {
-		return fmt.Errorf("gb28181: send DeviceControl to %s: %w", ch.DeviceID, err)
+		return fmt.Errorf("gb28181: send DeviceConfig to %s: %w", ch.DeviceID, err)
 	}
 	return nil
 }

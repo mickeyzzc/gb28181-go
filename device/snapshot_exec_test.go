@@ -1,11 +1,12 @@
 package device_test
 
 // Device-side snapshot command execution (mibee-eye-raspi#28 / GB/T
-// 28181-2022 A.2.1.24 + A.2.5.7): a DeviceControl(SnapShot) MESSAGE is
-// answered 200, handed to the installed SnapshotExecutor, and completes
-// asynchronously with an UploadSnapShotFinished notify echoing the
-// SessionID. Without an executor the historical control-reject behavior
-// is preserved.
+// 28181-2022 A.2.1.24 + A.2.5.7): a DeviceConfig(SnapShotConfig) MESSAGE
+// is answered 200 plus the A.2.6.8 OK response, handed to the installed
+// SnapshotExecutor, and completes asynchronously with an
+// UploadSnapShotFinished notify echoing the SessionID. Without an
+// executor the config reject behavior (ERROR on the same channel) is
+// preserved.
 
 import (
 	"context"
@@ -136,13 +137,14 @@ func writeSnapMsg(t *testing.T, conn *net.UDPConn, msg device.SipMessage, peer *
 	}
 }
 
-// platformSnapshotControl builds the DeviceControl(SnapShot) request.
+// platformSnapshotControl builds the DeviceConfig(SnapShotConfig)
+// request, byte-shaped after the real 2022 platform capture (issue #107).
 func platformSnapshotControl(callID string) device.SipMessage {
-	body := "<Control><CmdType>DeviceControl</CmdType><SN>18</SN>" +
+	body := "<Control><CmdType>DeviceConfig</CmdType><SN>18</SN>" +
 		"<DeviceID>34020000001320000001</DeviceID>" +
-		"<SnapShot><SnapNum>3</SnapNum><Interval>2</Interval>" +
+		"<SnapShotConfig><SnapNum>3</SnapNum><Interval>2</Interval>" +
 		"<UploadURL>" + snapUploadURL + "</UploadURL>" +
-		"<SessionID>" + snapSessionID + "</SessionID></SnapShot></Control>"
+		"<SessionID>" + snapSessionID + "</SessionID></SnapShotConfig></Control>"
 	return device.SipMessage{
 		Method:      "MESSAGE",
 		RequestURI:  "sip:34020000001320000001@3402000000",
@@ -170,7 +172,17 @@ func TestSnapshotCommandExecutesAndNotifiesWithFileIDs(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (msg: %v)", ok.StatusCode, ok)
 	}
 
-	// 2) The completion notify arrives asynchronously, echoing the
+	// 2) The config accept goes back on the DeviceConfig channel
+	//    (A.2.6.8 Result=OK) before the exchange runs.
+	accept, _ := readSnapMsg(t, platConn)
+	if accept.Method != "MESSAGE" {
+		t.Fatalf("method = %q, want MESSAGE (msg: %v)", accept.Method, accept)
+	}
+	if !strings.Contains(accept.Body, `CmdType="DeviceConfig"`) || !strings.Contains(accept.Body, "<Result>OK</Result>") {
+		t.Fatalf("accept body: %s", accept.Body)
+	}
+
+	// 3) The completion notify arrives asynchronously, echoing the
 	//    SessionID and the uploaded-file IDs (child-element format, the
 	//    cross-twin golden).
 	notify, _ := readSnapMsg(t, platConn)
@@ -188,7 +200,7 @@ func TestSnapshotCommandExecutesAndNotifiesWithFileIDs(t *testing.T) {
 		t.Fatalf("SnapShotFileID count = %d, want 2 (body: %s)", got, body)
 	}
 
-	// 3) The executor saw the fully parsed command.
+	// 4) The executor saw the fully parsed command.
 	exec.mu.Lock()
 	defer exec.mu.Unlock()
 	if exec.cmd == nil {
@@ -208,6 +220,12 @@ func TestFailedExchangeNotifiesWithEmptyList(t *testing.T) {
 	ok, _ := readSnapMsg(t, platConn)
 	if ok.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", ok.StatusCode)
+	}
+
+	// The exchange is accepted first; the failure surfaces in the notify.
+	accept, _ := readSnapMsg(t, platConn)
+	if accept.Method != "MESSAGE" || !strings.Contains(accept.Body, "<Result>OK</Result>") {
+		t.Fatalf("accept msg: %v body: %s", accept, accept.Body)
 	}
 
 	notify, _ := readSnapMsg(t, platConn)
@@ -236,14 +254,14 @@ func TestWithoutExecutorTheControlIsExplicitlyRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 200", ok.StatusCode)
 	}
 
-	// Without an executor the control is explicitly rejected (fast
-	// failure for the platform — previously parse-warn + silence).
+	// Without an executor the config is explicitly rejected on the same
+	// DeviceConfig channel (fast failure for the platform).
 	reject, _ := readSnapMsg(t, platConn)
 	if reject.Method != "MESSAGE" {
 		t.Fatalf("method = %q, want MESSAGE", reject.Method)
 	}
 	body := reject.Body
-	if !strings.Contains(body, "DeviceControl") || !strings.Contains(body, "ERROR") {
+	if !strings.Contains(body, `CmdType="DeviceConfig"`) || !strings.Contains(body, "ERROR") {
 		t.Fatalf("reject body: %s", body)
 	}
 }

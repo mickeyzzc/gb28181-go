@@ -1439,22 +1439,24 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		go s.followBroadcast(ctx, b, fromAddr)
 	}
 
-	// DeviceControl(SnapShot) (GB/T 28181-2022 A.2.1.24): with an
-	// executor installed the 200 above is the whole synchronous answer;
+	// DeviceConfig(SnapShotConfig) (GB/T 28181-2022 A.2.1.24, issue #107):
+	// the snapshot rides the device-config channel. With an executor
+	// installed the A.2.6.8 OK response is the whole synchronous answer;
 	// the exchange runs in a goroutine and completes asynchronously via
-	// the A.2.5.7 notify. Without an executor the control is rejected
+	// the A.2.5.7 notify. Without an executor the config is rejected
 	// explicitly — parity with the Rust twin and a fast failure signal
-	// for the platform, where previously the body fell through
-	// parseQueryDual's parse-warn + silence. Non-UDP transports reject
-	// the same way (the notify leaves through the UDP socket).
-	if dc, ok := parseSnapshotControl(msg.Body); ok {
+	// for the platform. Non-UDP transports reject the same way (the
+	// notify leaves through the UDP socket).
+	if cfg, ok := parseSnapshotConfig(msg.Body); ok {
 		if exec := s.snapshotExec(); exec != nil && (s.cfg.Transport == "" || s.cfg.Transport == "udp") {
-			go s.runSnapshotExchange(ctx, dc, exec)
+			s.sendResponseMessage(BuildDeviceConfigResponseMessage(
+				strconv.Itoa(cfg.SN), cfg.DeviceID, true), fromAddr)
+			go s.runSnapshotExchange(ctx, cfg, exec)
 			return
 		}
-		slog.Warn("gb28181: snapshot command not executable (no executor or non-UDP transport) — rejecting")
-		s.sendResponseMessage(BuildControlRejectResponseMessage(
-			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
+		slog.Warn("gb28181: snapshot config not executable (no executor or non-UDP transport) — rejecting")
+		s.sendResponseMessage(BuildDeviceConfigResponseMessage(
+			strconv.Itoa(cfg.SN), cfg.DeviceID, false), fromAddr)
 		return
 	}
 
@@ -1463,8 +1465,9 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 	// above is the whole synchronous answer. Unrecognized or
 	// callback-less commands keep the explicit control reject — parity
 	// with the Rust twin's no-handler behavior and a fast failure signal
-	// for the platform. (SnapShot was intercepted above; HomePosition and
-	// DeviceConfig CmdTypes route through their own reject arm.)
+	// for the platform. (SnapShotConfig was intercepted above on the
+	// device-config channel; HomePosition and DeviceConfig CmdTypes route
+	// through their own reject arm.)
 	if dc, ok := parseControlSub(msg.Body); ok {
 		if cb := s.controlCbs.callbackFor(&dc); cb != nil {
 			slog.Info("gb28181: DeviceControl sub-command executed",

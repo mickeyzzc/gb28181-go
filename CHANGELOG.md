@@ -11,6 +11,18 @@ are released out of band.
 
 ## [Unreleased]
 
+- `fix(manscdp)` snapshot rides the device-config channel (#107): the
+  2022 image-snapshot command is a `Control` body with
+  `CmdType=DeviceConfig` carrying `SnapShotConfig` — not
+  `DeviceControl`/`SnapShot` as previously modeled — matching real 2022
+  platform captures (A.2.1.24). `DeviceConfig.SnapShotConfig` replaces
+  the removed `DeviceControl.SnapShot` field; the device answers with
+  the A.2.6.8 `Result=OK` response before running the exchange, and the
+  reject goes back on the same DeviceConfig channel;
+  `platform.PTZController.SendSnapShotCmd` emits the corrected body.
+  `manscdp.SnapShotCmd` and `device.SnapshotExecutor` keep their names
+  and shapes.
+
 ## [v0.11.0] — 2026-09-20
 
 The GB/T 28181-2022 device-side closure package (#80/#81): every

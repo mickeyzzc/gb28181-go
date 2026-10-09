@@ -18,8 +18,10 @@ func TestSendSnapShotCmd(t *testing.T) {
 		SessionID: "0123456789abcdef0123456789abcdef",
 	})
 	require.NoError(t, err)
-	require.Contains(t, sender.body, "<CmdType>DeviceControl</CmdType>")
-	require.Contains(t, sender.body, "<SnapShot><SnapNum>3</SnapNum><Interval>2</Interval>")
+	// The snapshot rides the device-config channel (A.2.1.24): Control
+	// root, CmdType=DeviceConfig, <SnapShotConfig> payload (issue #107).
+	require.Contains(t, sender.body, "<CmdType>DeviceConfig</CmdType>")
+	require.Contains(t, sender.body, "<SnapShotConfig><SnapNum>3</SnapNum><Interval>2</Interval>")
 	require.Contains(t, sender.body, "<UploadURL>http://192.168.63.30:9090/api/gb28181/snapshot/upload</UploadURL>")
 
 	// Offline and missing channels behave like every other control.
