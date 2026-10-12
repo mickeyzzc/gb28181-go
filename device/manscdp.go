@@ -184,6 +184,60 @@ type gb2022QueryResponse struct {
 // / SDCardStatus) with the empty-capability form: no home position, no
 // cruise tracks, no PTZ telemetry, no storage card. number echoes the
 // CruiseTrackQuery track index (ignored for the others).
+// PresetItem is one preset-list entry (A.2.4.8 answer): the preset's
+// numeric ID and its name.
+type PresetItem struct {
+	PresetID   string
+	PresetName string
+}
+
+type presetListResponse struct {
+	XMLName    xml.Name `xml:"Response"`
+	CmdType    string   `xml:"CmdType,attr"`
+	SN         string   `xml:"SN,attr"`
+	DeviceID   string   `xml:"DeviceID"`
+	SumNum     int      `xml:"SumNum"`
+	PresetList struct {
+		Items []presetItemXML `xml:"Item"`
+		Num   int             `xml:"Num,attr"`
+	} `xml:"PresetList"`
+}
+
+type presetItemXML struct {
+	PresetID   string `xml:"PresetID"`
+	PresetName string `xml:"PresetName"`
+}
+
+// BuildPresetListResponseMessage answers a PresetQuery (A.2.4.8) with the
+// A.2.6 preset list: SumNum plus PresetList Num with Item{PresetID,
+// PresetName} pairs. An empty (nil) slice is the valid no-presets answer
+// (未配置预置位时 Item 省略、Num=0) — this device carries no PTZ of its
+// own, the same stance as the 2022 five queries.
+func BuildPresetListResponseMessage(sn, deviceID string, presets []PresetItem) SipMessage {
+	resp := presetListResponse{
+		CmdType:  "PresetQuery",
+		SN:       sn,
+		DeviceID: deviceID,
+		SumNum:   len(presets),
+	}
+	for _, p := range presets {
+		resp.PresetList.Items = append(resp.PresetList.Items, presetItemXML(p))
+	}
+	resp.PresetList.Num = len(presets)
+	xmlData, err := xml.Marshal(resp)
+	if err != nil {
+		slog.Error("Failed to marshal preset-list response", "error", err)
+		return SipMessage{}
+	}
+	return SipMessage{
+		Method:      "MESSAGE",
+		ContentType: "Application/MANSCDP+xml",
+		Body:        string(xmlData),
+		UserAgent:   UserAgent,
+		Headers:     make(map[string]string),
+	}
+}
+
 func BuildGB2022QueryResponseMessage(cmdType, sn, deviceID, number string) SipMessage {
 	resp := gb2022QueryResponse{
 		CmdType:  cmdType,
@@ -680,6 +734,13 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 			ok200 := Build200OK(msg, "", "")
 			controlReject := BuildControlRejectResponseMessage(query.CmdType, query.SN, query.DeviceID)
 			return ok200, &controlReject, nil
+		case "PresetQuery":
+			// A.2.4.8 preset-list query: answer the A.2.6 wire shape. No
+			// PTZ presets of our own — the valid empty list, same stance
+			// as the 2022 five queries below.
+			ok200 := Build200OK(msg, "", "")
+			resp := BuildPresetListResponseMessage(query.SN, query.DeviceID, nil)
+			return ok200, &resp, nil
 		case "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus":
 			// GB/T 28181-2022 information queries (A.2.4.10-14): answer with
 			// the minimal valid Response (A.2.6.12-16). This device has no

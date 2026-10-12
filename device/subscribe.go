@@ -122,20 +122,24 @@ func (r *subscriptionRegistry) upsert(event SubscribeEvent, expiresSecs int64, p
 
 // active returns the live subscription (advancing its CSeq); expired
 // entries are dropped on read.
-func (r *subscriptionRegistry) active(event SubscribeEvent) (*net.UDPAddr, string, string, string, uint32, bool) {
+func (r *subscriptionRegistry) active(event SubscribeEvent) (*net.UDPAddr, string, string, string, uint32, int64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sub, ok := r.subs[event]
 	if !ok {
-		return nil, "", "", "", 0, false
+		return nil, "", "", "", 0, 0, false
 	}
 	if !time.Now().Before(sub.expiresAt) {
 		delete(r.subs, event)
-		return nil, "", "", "", 0, false
+		return nil, "", "", "", 0, 0, false
 	}
 	cseq := sub.nextCSeq
 	sub.nextCSeq++
-	return sub.peer, sub.from, sub.to, sub.callID, cseq, true
+	remaining := int64(time.Until(sub.expiresAt).Seconds())
+	if remaining < 1 {
+		remaining = 1
+	}
+	return sub.peer, sub.from, sub.to, sub.callID, cseq, remaining, true
 }
 
 func (r *subscriptionRegistry) isActive(event SubscribeEvent) bool {
@@ -255,7 +259,7 @@ func (n *DeviceNotifier) ptr(p *atomic.Pointer[string]) string {
 // sendNotify sends one NOTIFY on the subscription dialog. Direction
 // mirrors the SUBSCRIBE: our From is the device, To is the subscriber.
 func (n *DeviceNotifier) sendNotify(event SubscribeEvent, body string) bool {
-	peer, subFrom, subTo, callID, cseq, ok := n.registry.active(event)
+	peer, subFrom, subTo, callID, cseq, remainingSecs, ok := n.registry.active(event)
 	if !ok {
 		return false
 	}
@@ -281,8 +285,11 @@ func (n *DeviceNotifier) sendNotify(event SubscribeEvent, body string) bool {
 		Body:        body,
 		UserAgent:   UserAgent,
 		Headers: map[string]string{
-			"Event":              string(event),
-			"Subscription-State": "active;expires=3600",
+			"Event": string(event),
+			// The advertised expiry is the subscription's real remaining
+			// lifetime (was a hard-coded 3600), so a client watching the
+			// header knows when the subscription actually lapses.
+			"Subscription-State": fmt.Sprintf("active;expires=%d", remainingSecs),
 		},
 	}
 	if _, err := conn.WriteToUDP(msg.Serialize(), peer); err != nil {
