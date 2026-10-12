@@ -11,6 +11,17 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **Catalog/RecordInfo pagination** (A.2.6.1/A.2.6.4):
+  large answers now page across multiple MESSAGEs — every page carries
+  the TOTAL `SumNum` while the list `Num` carries the page's own count
+  (platforms accumulate by SN; pages of 10 keep one UDP datagram well
+  under the 64 KiB SIP limit, paced 50ms apart). **API**:
+  `DispatchInboundMessage` now returns `[]SipMessage` (one entry per
+  page). `BuildCatalogResponseMessagePaged` /
+  `BuildRecordInfoResponseMessagePaged` join the builder surface; the
+  original builders delegate. `DeviceList` gains the standard-required
+  `Num` attribute (A.2.6.1), matching the Rust twin's wire form.
+
 - `feat(device)` device-side completeness wave 1 (twin of gb28181-rs
   #86): five gaps surfaced by the full-coverage audit —
   - **PresetQuery response** (A.2.4.8 → the A.2.6 answer):

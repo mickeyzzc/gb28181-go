@@ -66,6 +66,7 @@ type Response struct {
 // DeviceList contains a list of device/channel items.
 type DeviceList struct {
 	XMLName xml.Name      `xml:"DeviceList"`
+	Num     int           `xml:"Num,attr"`
 	Item    []ChannelItem `xml:"Item"`
 }
 
@@ -361,13 +362,21 @@ func buildChannel(dev DeviceContext) ChannelItem {
 
 // BuildCatalogResponseMessage creates a SIP MESSAGE with Catalog response.
 func BuildCatalogResponseMessage(sn, deviceID string, items []ChannelItem) SipMessage {
-	sumNum := len(items)
+	return BuildCatalogResponseMessagePaged(sn, deviceID, items, len(items))
+}
+
+// BuildCatalogResponseMessagePaged emits ONE page of a possibly
+// multi-MESSAGE Catalog answer (A.2.6.1): SumNum carries the TOTAL
+// across all pages (the platform accumulates by SN until it holds
+// SumNum items), DeviceList Num carries this page's count.
+func BuildCatalogResponseMessagePaged(sn, deviceID string, items []ChannelItem, sumNum int) SipMessage {
 	resp := Response{
 		CmdType:  "Catalog",
 		SN:       sn,
 		DeviceID: deviceID,
 		SumNum:   &sumNum,
 		DeviceList: &DeviceList{
+			Num:  len(items),
 			Item: items,
 		},
 	}
@@ -500,7 +509,13 @@ type RecordInfoResponse struct {
 // BuildRecordInfoResponseMessage creates a SIP MESSAGE with a RecordInfo response.
 // With no items it emits the byte-stable empty response (SumNum=0, RecordList Num=0).
 func BuildRecordInfoResponseMessage(sn, deviceID string, items []RecordItem) SipMessage {
-	sumNum := len(items)
+	return BuildRecordInfoResponseMessagePaged(sn, deviceID, items, len(items))
+}
+
+// BuildRecordInfoResponseMessagePaged emits ONE page of a possibly
+// multi-MESSAGE RecordInfo answer: SumNum carries the TOTAL across all
+// pages, RecordList Num this page's count.
+func BuildRecordInfoResponseMessagePaged(sn, deviceID string, items []RecordItem, sumNum int) SipMessage {
 	resp := RecordInfoResponse{
 		CmdType:  "RecordInfo",
 		SN:       sn,
@@ -663,7 +678,17 @@ type RecordingIndex interface {
 // idx supplies recorded segments for RecordInfo queries; when nil, RecordInfo
 // returns the empty response.
 // Returns (ok200, queued_response_or_nil, error).
-func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingIndex) (SipMessage, *SipMessage, error) {
+// responsePageItems is the multi-MESSAGE page size for large Catalog /
+// RecordInfo answers (A.2.6.1): each MESSAGE carries at most this many
+// items, SumNum the total, so a large answer never overflows one UDP
+// datagram. Platforms accumulate by SN until they hold SumNum items.
+const responsePageItems = 10
+
+// DispatchInboundMessage decodes and answers an inbound MESSAGE. Large
+// Catalog/RecordInfo answers are returned as multiple pages (one
+// SipMessage each, same SN, SumNum = total) for the caller to send in
+// order.
+func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingIndex) (SipMessage, []SipMessage, error) {
 	if msg.Body == "" {
 		// No body to parse — just acknowledge
 		return SipMessage{}, nil, nil
@@ -685,8 +710,13 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 			// Return 200 OK + queue Catalog response with real channel data
 			ok200 := Build200OK(msg, "", "")
 			channel := buildChannel(dev)
-			catalogResp := BuildCatalogResponseMessage(query.SN, query.DeviceID, []ChannelItem{channel})
-			return ok200, &catalogResp, nil
+			channels := []ChannelItem{channel}
+			var pages []SipMessage
+			for start := 0; start < len(channels); start += responsePageItems {
+				end := min(start+responsePageItems, len(channels))
+				pages = append(pages, BuildCatalogResponseMessagePaged(query.SN, query.DeviceID, channels[start:end], len(channels)))
+			}
+			return ok200, pages, nil
 		case "DeviceInfo":
 			// Return 200 OK + queue DeviceInfo response from dev context
 			ok200 := Build200OK(msg, "", "")
@@ -698,7 +728,7 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 				Firmware:     dev.Firmware,
 			}
 			deviceInfoResp := BuildDeviceInfoResponseMessage(query.SN, query.DeviceID, deviceInfo)
-			return ok200, &deviceInfoResp, nil
+			return ok200, []SipMessage{deviceInfoResp}, nil
 		case "RecordInfo":
 			// Return 200 OK + queue RecordInfo response from the recording index.
 			ok200 := Build200OK(msg, "", "")
@@ -721,26 +751,34 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 					}
 				}
 			}
-			recordInfoResp := BuildRecordInfoResponseMessage(query.SN, query.DeviceID, items)
-			return ok200, &recordInfoResp, nil
+			var pages []SipMessage
+			// An empty answer is still ONE page (the valid empty list).
+			if len(items) == 0 {
+				pages = append(pages, BuildRecordInfoResponseMessagePaged(query.SN, query.DeviceID, nil, 0))
+			}
+			for start := 0; start < len(items); start += responsePageItems {
+				end := min(start+responsePageItems, len(items))
+				pages = append(pages, BuildRecordInfoResponseMessagePaged(query.SN, query.DeviceID, items[start:end], len(items)))
+			}
+			return ok200, pages, nil
 		case "DeviceStatus":
 			// Return 200 OK + queue DeviceStatus response
 			ok200 := Build200OK(msg, "", "")
 			deviceStatusResp := BuildDeviceStatusResponseMessage(query.SN, query.DeviceID)
-			return ok200, &deviceStatusResp, nil
+			return ok200, []SipMessage{deviceStatusResp}, nil
 		case "DeviceControl", "Broadcast", "DeviceConfig", "HomePosition":
 			// Return 200 OK + queue ControlReject response (control not supported)
 			slog.Warn("Control command not supported", "cmdtype", query.CmdType)
 			ok200 := Build200OK(msg, "", "")
 			controlReject := BuildControlRejectResponseMessage(query.CmdType, query.SN, query.DeviceID)
-			return ok200, &controlReject, nil
+			return ok200, []SipMessage{controlReject}, nil
 		case "PresetQuery":
 			// A.2.4.8 preset-list query: answer the A.2.6 wire shape. No
 			// PTZ presets of our own — the valid empty list, same stance
 			// as the 2022 five queries below.
 			ok200 := Build200OK(msg, "", "")
 			resp := BuildPresetListResponseMessage(query.SN, query.DeviceID, nil)
-			return ok200, &resp, nil
+			return ok200, []SipMessage{resp}, nil
 		case "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus":
 			// GB/T 28181-2022 information queries (A.2.4.10-14): answer with
 			// the minimal valid Response (A.2.6.12-16). This device has no
@@ -750,7 +788,7 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 			// warn + silence below.
 			ok200 := Build200OK(msg, "", "")
 			resp := BuildGB2022QueryResponseMessage(query.CmdType, query.SN, query.DeviceID, query.Number)
-			return ok200, &resp, nil
+			return ok200, []SipMessage{resp}, nil
 		default:
 			slog.Warn("Unknown Query CmdType", "cmdtype", query.CmdType)
 			ok200 := Build200OK(msg, "", "")

@@ -52,19 +52,19 @@ func TestDispatch_GB2022InformationQueries(t *testing.T) {
 			if ok200.StatusCode != 200 {
 				t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 			}
-			if queued == nil {
+			if len(queued) == 0 {
 				t.Fatal("Expected a queued response, got nil")
 			}
 			for _, w := range tc.want {
-				if !strings.Contains(queued.Body, w) {
-					t.Errorf("queued body missing %q:\n%s", w, queued.Body)
+				if !strings.Contains(queued[0].Body, w) {
+					t.Errorf("queued body missing %q:\n%s", w, queued[0].Body)
 				}
 			}
 			// None of the minimal answers may carry a payload block
 			// (element form, not the CmdType attribute value).
 			for _, absent := range []string{"<HomePosition", "<CruiseTrackList", "<CruisePointList", "<SDCardStatusInfo", "<Pan>"} {
-				if strings.Contains(queued.Body, absent) {
-					t.Errorf("minimal answer must not carry %q:\n%s", absent, queued.Body)
+				if strings.Contains(queued[0].Body, absent) {
+					t.Errorf("minimal answer must not carry %q:\n%s", absent, queued[0].Body)
 				}
 			}
 		})
