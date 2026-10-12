@@ -217,6 +217,14 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 				// No action needed - media is now flowing
 			case "INFO":
 				s.handleInfo(ctx, msg, tcpAddr)
+			case "CANCEL":
+				// RFC 3261 §9.2 — answer the CANCEL itself (see the UDP
+				// dispatch note).
+				slog.Info("gb28181: CANCEL received — answering 200 OK", "from", conn.RemoteAddr().String())
+				ok200 := Build200OK(msg, "", "")
+				if err := s.sendSIP(ok200.Serialize(), tcpAddr); err != nil {
+					slog.Warn("gb28181: failed to send 200 OK for CANCEL", "error", err)
+				}
 			case "SUBSCRIBE", "NOTIFY", "OPTIONS":
 				slog.Info("gb28181: received method, responding 200 OK", "method", msg.Method, "from", conn.RemoteAddr().String())
 				ok200 := Build200OK(msg, "", "")

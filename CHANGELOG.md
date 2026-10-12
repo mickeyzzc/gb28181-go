@@ -11,6 +11,29 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` device-side completeness wave 1 (twin of gb28181-rs
+  #86): five gaps surfaced by the full-coverage audit —
+  - **PresetQuery response** (A.2.4.8 → the A.2.6 answer):
+    `BuildPresetListResponseMessage` emits the wire shape `SumNum` +
+    `PresetList Num` + `Item{PresetID,PresetName}`; the dispatch answers
+    the valid empty list (no PTZ of our own — the 2022-five stance).
+  - **Platform-negotiated registration expiry**: the REGISTER 200 OK's
+    `Expires` header (Contact `;expires=` fallback, ≥60s floor) now
+    drives the refresh ticker (half the negotiated window; the ticker
+    resets when the negotiation changes).
+  - **Incoming CANCEL** (UDP + TCP dispatch): answered 200 OK per
+    RFC 3261 §9.2 — INVITEs are answered immediately so a CANCEL
+    usually races the 200; leaving it unanswered left platforms
+    waiting.
+  - **Silent-platform detection**: keepalive accounting only reacted
+    to send errors and explicit rejections — a platform that stopped
+    answering entirely never tripped re-registration. Any SIP response
+    stamps a contact clock, and `platformSilent` (heartbeat ×
+    timeout_count) triggers re-registration at the same threshold.
+  - **Subscription-State honesty**: NOTIFYs advertised a hard-coded
+    `expires=3600`; they now carry the subscription's real remaining
+    lifetime.
+
 - `docs` multicast explicitly out of scope (#111): the README states
   media distribution is unicast-only on both roles — SDP multicast
   `c=` offers are not joined and the platform never issues an IGMP

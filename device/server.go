@@ -72,6 +72,12 @@ type Server struct {
 	regMu sync.Mutex
 	// keepaliveFailures counts consecutive keepalive failures/errors.
 	keepaliveFailures atomic.Int32
+	// lastPlatformContact is the UnixNano stamp of the last received SIP
+	// response — any response proves liveness for the silence detector.
+	lastPlatformContact atomic.Int64
+	// negotiatedExpiresSecs is the platform-negotiated registration
+	// expiry from the REGISTER 200 OK (0 = not negotiated / ignored).
+	negotiatedExpiresSecs atomic.Int64
 	// testMode skips REGISTER lifecycle for testing
 	testMode bool
 	// devContext holds device identity for MANSCDP responses
@@ -314,6 +320,16 @@ func (s *Server) Start(ctx context.Context) error {
 				s.handleInvite(ctx, msg, addr)
 			case "BYE":
 				s.handleBye(ctx, msg, addr)
+			case "CANCEL":
+				// A platform cancelling a pending INVITE (RFC 3261 §9.2):
+				// INVITEs are answered immediately so a CANCEL usually
+				// races the 200 — answer 200 OK rather than leaving the
+				// platform waiting on a response.
+				slog.Info("gb28181: CANCEL received — answering 200 OK", "from", addr.String())
+				ok200 := Build200OK(msg, "", "")
+				if _, err := s.sipConn.WriteToUDP(ok200.Serialize(), addr); err != nil {
+					slog.Warn("gb28181: failed to send 200 OK for CANCEL", "error", err)
+				}
 			case "MESSAGE":
 				s.handleMessage(ctx, msg, addr)
 			case "ACK":
@@ -590,6 +606,20 @@ func (s *Server) startLifecycles(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Silence detector: the historical accounting only
+				// reacted to send errors and explicit rejections — a
+				// platform that stopped answering entirely never tripped
+				// re-registration. Any response stamps
+				// lastPlatformContact; heartbeat_timeout_count unheard
+				// intervals re-register at the same threshold.
+				if nano := s.lastPlatformContact.Load(); nano > 0 {
+					if platformSilent(time.Since(time.Unix(0, nano)), heartbeatInterval, s.cfg.HeartbeatTimeoutCount) {
+						slog.Warn("gb28181: platform silent, re-registering", "silent_for", time.Since(time.Unix(0, nano)).Round(time.Second))
+						s.metrics.KeepaliveFail()
+						s.signalReRegister()
+						s.lastPlatformContact.Store(time.Now().UnixNano())
+					}
+				}
 				if err := s.sendKeepalive(ctx); err != nil {
 					failures := s.keepaliveFailures.Add(1)
 					s.metrics.KeepaliveFail()
@@ -608,8 +638,21 @@ func (s *Server) startLifecycles(ctx context.Context) {
 	// immediate retry when the platform rejects us (401/403 keepalive —
 	// e.g. after an NVR restart that forgot our registration).
 	go func() {
-		registerInterval := time.Duration(s.cfg.RegisterIntervalSecs) * time.Second
-		ticker := time.NewTicker(registerInterval)
+		// Effective refresh cadence: half the negotiated expiry when the
+		// platform negotiated one (>= 60s), half the local config
+		// otherwise (RFC 3261 §10.2 — refresh at ~50% of the window).
+		refreshInterval := func() time.Duration {
+			base := int64(s.cfg.RegisterIntervalSecs)
+			if n := s.negotiatedExpiresSecs.Load(); n >= 60 {
+				base = n
+			}
+			if base < 2 {
+				base = 2
+			}
+			return time.Duration(base/2) * time.Second
+		}
+		currentInterval := refreshInterval()
+		ticker := time.NewTicker(currentInterval)
 		defer ticker.Stop()
 		// Log re-register failures as state transitions, not per-tick
 		// noise: the platform routinely ignores refresh REGISTERs
@@ -638,6 +681,11 @@ func (s *Server) startLifecycles(ctx context.Context) {
 				slog.Info("gb28181: re-registration recovered", "consecutive_failures", consecFails)
 			}
 			consecFails = 0
+			if next := refreshInterval(); next != currentInterval {
+				slog.Info("gb28181: registration refresh cadence updated", "interval", next)
+				ticker.Reset(next)
+				currentInterval = next
+			}
 		}
 	}()
 }
@@ -725,8 +773,66 @@ func (s *Server) signalReRegister() {
 	}
 }
 
+// platformSilent reports whether a platform unheard for `since` counts
+// as gone: at least timeoutCount heartbeat intervals without any SIP
+// response.
+func platformSilent(since, heartbeat time.Duration, timeoutCount int) bool {
+	if heartbeat <= 0 {
+		heartbeat = time.Second
+	}
+	if timeoutCount < 1 {
+		return false
+	}
+	return since >= heartbeat*time.Duration(timeoutCount)
+}
+
+// noteNegotiatedExpires records the platform-negotiated registration
+// expiry carried by a REGISTER 200 OK (RFC 3261 §10.2.4): the Expires
+// header first, the Contact header's `;expires=` parameter as fallback.
+// Values below 60s are ignored (a platform dictating seconds-scale
+// registrations would hammer the wire); the local config applies then.
+// The platform's response also proves liveness — the contact clock is
+// stamped here because the initial registration's responses bypass
+// handleResponse.
+func (s *Server) noteNegotiatedExpires(resp *SipMessage) {
+	s.lastPlatformContact.Store(time.Now().UnixNano())
+	secs := negotiatedExpiresSecs(resp.Expires, resp.Contact)
+	s.negotiatedExpiresSecs.Store(secs)
+	if secs > 0 {
+		slog.Info("gb28181: platform-negotiated registration expiry", "expires_secs", secs, "configured_secs", s.cfg.RegisterIntervalSecs)
+	}
+}
+
+// negotiatedExpiresSecs parses the negotiated expiry: the Expires header
+// value, falling back to the Contact URI's ;expires= parameter. 0 when
+// absent/unparseable/below the 60s floor.
+func negotiatedExpiresSecs(expiresHeader, contact string) int64 {
+	if v, err := strconv.ParseInt(strings.TrimSpace(expiresHeader), 10, 64); err == nil {
+		if v >= 60 {
+			return v
+		}
+		return 0
+	}
+	i := strings.Index(contact, "expires=")
+	if i < 0 {
+		return 0
+	}
+	rest := contact[i+len("expires="):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	v, err := strconv.ParseInt(rest[:end], 10, 64)
+	if err != nil || v < 60 {
+		return 0
+	}
+	return v
+}
+
 // handleResponse processes a SIP response received by the recv loop.
 func (s *Server) handleResponse(msg SipMessage) {
+	// Any response proves the platform is alive (silence detector).
+	s.lastPlatformContact.Store(time.Now().UnixNano())
 	// Route REGISTER responses to any active registration flow.
 	if strings.Contains(msg.CSeq, "REGISTER") {
 		select {
@@ -907,6 +1013,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 					return fmt.Errorf("verifying REGISTER 200 OK: %w", err)
 				}
 			}
+			s.noteNegotiatedExpires(resp)
 			slog.Info("gb28181: REGISTER successful")
 			return nil
 		}
@@ -914,6 +1021,7 @@ func (s *Server) runRegisterLifecycleInner(ctx context.Context, nextResponse reg
 	}
 
 	if resp.StatusCode == 200 {
+		s.noteNegotiatedExpires(resp)
 		slog.Info("gb28181: REGISTER successful (no auth required)")
 		return nil
 	}
