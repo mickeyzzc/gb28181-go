@@ -1574,16 +1574,17 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 	// the exchange runs in a goroutine and completes asynchronously via
 	// the A.2.5.7 notify. Without an executor the config is rejected
 	// explicitly — parity with the Rust twin and a fast failure signal
-	// for the platform. Non-UDP transports reject the same way (the
-	// notify leaves through the UDP socket).
+	// for the platform. The async A.2.5.7 notify leaves via
+	// sendToPlatform (UDP socket or the stream connection); the inbound
+	// "tcp" listener mode (no tracked platform connection) still rejects.
 	if cfg, ok := parseSnapshotConfig(msg.Body); ok {
-		if exec := s.snapshotExec(); exec != nil && (s.cfg.Transport == "" || s.cfg.Transport == "udp") {
+		if exec := s.snapshotExec(); exec != nil && asyncExchangeTransportOK(s.cfg.Transport) {
 			s.sendResponseMessage(BuildDeviceConfigResponseMessage(
 				strconv.Itoa(cfg.SN), cfg.DeviceID, true), fromAddr)
 			go s.runSnapshotExchange(ctx, cfg, exec)
 			return
 		}
-		slog.Warn("gb28181: snapshot config not executable (no executor or non-UDP transport) — rejecting")
+		slog.Warn("gb28181: snapshot config not executable (no executor or unsupported transport) — rejecting")
 		s.sendResponseMessage(BuildDeviceConfigResponseMessage(
 			strconv.Itoa(cfg.SN), cfg.DeviceID, false), fromAddr)
 		return
@@ -1592,15 +1593,14 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 	// DeviceControl(DeviceUpgrade) (GB/T 28181-2022 A.2.3.1.12, issue
 	// #108): with an upgrader installed the 200 above is the whole
 	// synchronous answer; the upgrade runs in a goroutine and completes
-	// asynchronously via the A.2.5.9 DeviceUpgradeResult notify. Without
-	// an upgrader the control is rejected explicitly. Non-UDP transports
-	// reject the same way (the notify leaves through the UDP socket).
+	// asynchronously via the A.2.5.9 DeviceUpgradeResult notify (via
+	// sendToPlatform — any transport but the inbound "tcp" listener).
 	if dc, ok := parseUpgradeControl(msg.Body); ok {
-		if up := s.upgrader(); up != nil && (s.cfg.Transport == "" || s.cfg.Transport == "udp") {
+		if up := s.upgrader(); up != nil && asyncExchangeTransportOK(s.cfg.Transport) {
 			go s.runUpgradeExchange(ctx, dc, up)
 			return
 		}
-		slog.Warn("gb28181: device upgrade not executable (no upgrader or non-UDP transport) — rejecting")
+		slog.Warn("gb28181: device upgrade not executable (no upgrader or unsupported transport) — rejecting")
 		s.sendResponseMessage(BuildControlRejectResponseMessage(
 			"DeviceControl", strconv.Itoa(dc.SN), dc.DeviceID), fromAddr)
 		return

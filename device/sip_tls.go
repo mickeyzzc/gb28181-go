@@ -41,6 +41,19 @@ func buildTLSConfig(cfg Config) (*tls.Config, error) {
 	return tlsCfg, nil
 }
 
+// asyncExchangeTransportOK reports whether the async A.2.5.x exchange
+// notifies (snapshot/upgrade) have a send path: the shared UDP socket
+// on udp, the dialed connection on the stream transports. The inbound
+// "tcp" listener mode tracks no platform connection, so it rejects.
+func asyncExchangeTransportOK(transport string) bool {
+	switch transport {
+	case "", "udp", "tcp-out", "tls":
+		return true
+	default:
+		return false
+	}
+}
+
 // isStreamTransport reports whether the server runs the outbound
 // stream-client model (device dials the platform, full REGISTER/keepalive
 // lifecycle over the connection).

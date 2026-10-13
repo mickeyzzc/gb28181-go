@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **async snapshot/upgrade exchanges on the stream
+  transports**: the A.2.5.7 / A.2.5.9 completion notifies leave via
+  `sendToPlatform` — the dialed connection on `tcp-out`/`tls`, the UDP
+  socket as before on `udp`. Only the inbound `"tcp"` listener mode
+  (no tracked platform connection) still rejects.
+
 - `feat(device)` **outbound plain-TCP transport (`transport: "tcp-out"`)**:
   the device dials the platform and runs the full REGISTER/keepalive
   lifecycle over the connection — the same stream-client model as SIPS
