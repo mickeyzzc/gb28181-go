@@ -232,3 +232,37 @@ func TestTCPSubscriptionNotifyRidesConnection(t *testing.T) {
 }
 
 func ptrStr(v string) *string { return &v }
+
+// ExtraChannels (A.2.1): the device entry rides first, extras follow,
+// and 13 items page across 2 MESSAGEs with SumNum=13.
+func TestDispatch_CatalogExtraChannelsPage(t *testing.T) {
+	dev := testDeviceContext()
+	for i := range 12 {
+		dev.ExtraChannels = append(dev.ExtraChannels, ChannelItem{
+			DeviceID: fmt.Sprintf("3402000000132001%03d", i),
+			Name:     fmt.Sprintf("cam-%d", i),
+		})
+	}
+	msg := buildInboundMessage(`<Query><CmdType>Catalog</CmdType><SN>21</SN><DeviceID>34020000001320000001</DeviceID></Query>`)
+	_, pages, err := DispatchInboundMessage(msg, dev, nil)
+	if err != nil {
+		t.Fatalf("DispatchInboundMessage failed: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages for 13 items, got %d", len(pages))
+	}
+	for i, page := range pages {
+		if !strings.Contains(page.Body, "<SumNum>13</SumNum>") {
+			t.Errorf("page %d: SumNum must carry the total:\n%s", i, page.Body)
+		}
+	}
+	if !strings.Contains(pages[0].Body, "cam-8") || strings.Contains(pages[0].Body, "cam-10") {
+		t.Errorf("page 1 items mismatch:\n%s", pages[0].Body)
+	}
+	if !strings.Contains(pages[1].Body, "cam-11") {
+		t.Errorf("page 2 items mismatch:\n%s", pages[1].Body)
+	}
+	if !strings.Contains(pages[0].Body, "<ParentID>"+dev.DeviceID+"</ParentID>") {
+		t.Errorf("extras must link to the device as parent:\n%s", pages[0].Body)
+	}
+}

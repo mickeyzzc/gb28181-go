@@ -335,6 +335,11 @@ type DeviceContext struct {
 	Firmware     string
 	LocalIP      string
 	LocalPort    int
+	// ExtraChannels lists additional catalog channels (A.2.1): the
+	// device's own entry rides first, these follow; large lists page
+	// across MESSAGEs automatically. The device ID is used as each
+	// channel's ParentID.
+	ExtraChannels []ChannelItem
 	// OnBroadcast fires when a voice-broadcast notification (语音广播,
 	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
 	// SourceID → TargetID and follows with a talk INVITE. Preparing the
@@ -344,6 +349,26 @@ type DeviceContext struct {
 }
 
 // buildChannel creates a ChannelItem from DeviceContext.
+// dispatchExtraChannels returns the context's extra catalog channels
+// with the parent linkage and status defaulted like the device's own
+// entry (A.2.1).
+func dispatchExtraChannels(dev DeviceContext) []ChannelItem {
+	if len(dev.ExtraChannels) == 0 {
+		return nil
+	}
+	out := make([]ChannelItem, 0, len(dev.ExtraChannels))
+	for _, c := range dev.ExtraChannels {
+		if c.ParentID == "" {
+			c.ParentID = dev.DeviceID
+		}
+		if c.Status == "" {
+			c.Status = "ON"
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func buildChannel(dev DeviceContext) ChannelItem {
 	return ChannelItem{
 		DeviceID:     dev.ChannelID,
@@ -707,10 +732,13 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 	if query, ok := parseQueryDual(msg.Body); ok {
 		switch query.CmdType {
 		case "Catalog":
-			// Return 200 OK + queue Catalog response with real channel data
+			// Return 200 OK + queue Catalog response with real channel data:
+			// the device's own entry first, then the configured extra
+			// channels (A.2.1); large lists page across MESSAGEs.
 			ok200 := Build200OK(msg, "", "")
 			channel := buildChannel(dev)
 			channels := []ChannelItem{channel}
+			channels = append(channels, dispatchExtraChannels(dev)...)
 			var pages []SipMessage
 			for start := 0; start < len(channels); start += responsePageItems {
 				end := min(start+responsePageItems, len(channels))

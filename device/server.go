@@ -218,14 +218,15 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Initialize device context for MANSCDP responses
 	s.devCtx = DeviceContext{
-		DeviceID:     s.cfg.DeviceID,
-		ChannelID:    s.cfg.ChannelID,
-		Name:         s.deviceCfg.Name,
-		Manufacturer: s.deviceCfg.Manufacturer,
-		Model:        s.deviceCfg.Model,
-		Firmware:     s.deviceCfg.Firmware,
-		LocalIP:      localIP(),
-		LocalPort:    s.cfg.LocalSIPPort,
+		DeviceID:      s.cfg.DeviceID,
+		ChannelID:     s.cfg.ChannelID,
+		Name:          s.deviceCfg.Name,
+		Manufacturer:  s.deviceCfg.Manufacturer,
+		Model:         s.deviceCfg.Model,
+		Firmware:      s.deviceCfg.Firmware,
+		LocalIP:       localIP(),
+		LocalPort:     s.cfg.LocalSIPPort,
+		ExtraChannels: s.cfg.ExtraChannels,
 
 		OnBroadcast: s.onBroadcast,
 	}
