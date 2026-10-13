@@ -225,7 +225,11 @@ func readSIPStream(ctx context.Context, reader *bufio.Reader, conn net.Conn, s *
 				if err := s.sendSIP(ok200.Serialize(), tcpAddr); err != nil {
 					slog.Warn("gb28181: failed to send 200 OK for CANCEL", "error", err)
 				}
-			case "SUBSCRIBE", "NOTIFY", "OPTIONS":
+			case "SUBSCRIBE":
+				// Booked like the UDP path: the subscription's NOTIFYs
+				// ride THIS connection (routed via the connection table).
+				s.handleSubscribe(msg, tcpAddr)
+			case "NOTIFY", "OPTIONS":
 				slog.Info("gb28181: received method, responding 200 OK", "method", msg.Method, "from", conn.RemoteAddr().String())
 				ok200 := Build200OK(msg, "", "")
 				if err := s.sendSIP(ok200.Serialize(), tcpAddr); err != nil {

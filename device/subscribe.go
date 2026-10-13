@@ -82,7 +82,7 @@ type PositionSource interface {
 
 type subscription struct {
 	expiresAt time.Time
-	peer      *net.UDPAddr
+	peer      net.Addr
 	// The SUBSCRIBE's From (platform) — becomes the NOTIFY's To.
 	from string
 	// The SUBSCRIBE's To (this device) — becomes the NOTIFY's From.
@@ -104,7 +104,7 @@ func newSubscriptionRegistry() *subscriptionRegistry {
 	return &subscriptionRegistry{subs: make(map[SubscribeEvent]*subscription)}
 }
 
-func (r *subscriptionRegistry) upsert(event SubscribeEvent, expiresSecs int64, peer *net.UDPAddr, from, to, callID string, cseqBase uint32) {
+func (r *subscriptionRegistry) upsert(event SubscribeEvent, expiresSecs int64, peer net.Addr, from, to, callID string, cseqBase uint32) {
 	if expiresSecs < 1 {
 		expiresSecs = 1
 	}
@@ -122,7 +122,7 @@ func (r *subscriptionRegistry) upsert(event SubscribeEvent, expiresSecs int64, p
 
 // active returns the live subscription (advancing its CSeq); expired
 // entries are dropped on read.
-func (r *subscriptionRegistry) active(event SubscribeEvent) (*net.UDPAddr, string, string, string, uint32, int64, bool) {
+func (r *subscriptionRegistry) active(event SubscribeEvent) (net.Addr, string, string, string, uint32, int64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sub, ok := r.subs[event]
@@ -171,10 +171,22 @@ type DeviceNotifier struct {
 	domain    atomic.Pointer[string]
 	localIP   atomic.Pointer[string]
 	localPort atomic.Pointer[uint16]
+	// tcpSend routes NOTIFYs of TCP-dialog subscriptions through the
+	// server's connection table (nil = UDP-only notifier).
+	tcpSend atomic.Pointer[func([]byte, *net.TCPAddr) error]
 }
 
 func newDeviceNotifier() *DeviceNotifier {
 	return &DeviceNotifier{registry: newSubscriptionRegistry()}
+}
+
+// BindTCP installs the TCP/TLS send path for NOTIFYs booked on a
+// TCP-dialog subscription: the write goes through the server's
+// connection table (same routing as every other TCP answer). Called
+// once at server start; UDP-bound subscriptions keep using the UDP
+// socket.
+func (n *DeviceNotifier) BindTCP(send func([]byte, *net.TCPAddr) error) {
+	n.tcpSend.Store(&send)
 }
 
 // bind attaches the sending context; called from the UDP listener setup
@@ -263,10 +275,24 @@ func (n *DeviceNotifier) sendNotify(event SubscribeEvent, body string) bool {
 	if !ok {
 		return false
 	}
+	// TCP/TLS-dialog subscription: the NOTIFY rides the connection the
+	// SUBSCRIBE arrived on (routed via the server's connection table).
+	var tcpPeer *net.TCPAddr
+	if tp, isTCP := peer.(*net.TCPAddr); isTCP {
+		tcpPeer = tp
+		if fn := n.tcpSend.Load(); fn == nil {
+			slog.Warn("gb28181: TCP subscription without a TCP send path — NOTIFY dropped", "event", event)
+			return false
+		}
+	}
 	conn := n.conn.Load()
 	deviceID, domain, localIP := n.ptr(&n.deviceID), n.ptr(&n.domain), n.ptr(&n.localIP)
 	localPort := n.localPort.Load()
-	if conn == nil || deviceID == "" || domain == "" || localIP == "" || localPort == nil {
+	if tcpPeer == nil && conn == nil {
+		// Neither transport is bound.
+		return false
+	}
+	if deviceID == "" || domain == "" || localIP == "" || localPort == nil {
 		return false
 	}
 
@@ -292,11 +318,25 @@ func (n *DeviceNotifier) sendNotify(event SubscribeEvent, body string) bool {
 			"Subscription-State": fmt.Sprintf("active;expires=%d", remainingSecs),
 		},
 	}
-	if _, err := conn.WriteToUDP(msg.Serialize(), peer); err != nil {
-		slog.Warn("gb28181: NOTIFY send failed", "event", event, "error", err)
+	if tcpPeer != nil {
+		if fn := n.tcpSend.Load(); fn != nil {
+			if err := (*fn)(msg.Serialize(), tcpPeer); err != nil {
+				slog.Warn("gb28181: NOTIFY send failed", "event", event, "error", err)
+				return false
+			}
+			return true
+		}
 		return false
 	}
-	return true
+	if udpPeer, isUDP := peer.(*net.UDPAddr); isUDP {
+		if _, err := conn.WriteToUDP(msg.Serialize(), udpPeer); err != nil {
+			slog.Warn("gb28181: NOTIFY send failed", "event", event, "error", err)
+			return false
+		}
+		return true
+	}
+	slog.Warn("gb28181: NOTIFY peer of unknown transport", "event", event, "peer", peer.String())
+	return false
 }
 
 // parseSubscribeInterval extracts the MobilePosition report cadence
@@ -344,14 +384,25 @@ func (s *Server) handleSubscribe(msg SipMessage, addr net.Addr) {
 	}
 
 	if event, ok := ParseSubscribeEvent(eventStr); ok {
-		if udpPeer, okPeer := addr.(*net.UDPAddr); okPeer {
+		// Both transports book: a UDP peer carries the shared UDP socket
+		// on NOTIFYs, a TCP/TLS peer the connection it arrived on.
+		if _, okPeer := addr.(*net.UDPAddr); okPeer {
+		} else if _, okPeer := addr.(*net.TCPAddr); okPeer {
+		} else {
+			slog.Warn("gb28181: SUBSCRIBE from unknown transport — answered, not booked", "addr", addr.String())
+			ok200 := Build200OK(msg, "", "")
+			ok200.Expires = strings.TrimSpace(msg.Expires)
+			_ = s.sendSIP(ok200.Serialize(), addr)
+			return
+		}
+		{
 			cseqBase := uint32(1)
 			if fields := strings.Fields(msg.CSeq); len(fields) > 0 {
 				if n, err := strconv.ParseUint(fields[0], 10, 32); err == nil {
 					cseqBase = uint32(n)
 				}
 			}
-			s.notifier.registry.upsert(event, expires, udpPeer, msg.From, msg.To, msg.CallID, cseqBase)
+			s.notifier.registry.upsert(event, expires, addr, msg.From, msg.To, msg.CallID, cseqBase)
 			slog.Info("gb28181: SUBSCRIBE booked", "event", eventStr, "expires", expires, "from", addr.String())
 
 			if event == EventMobilePosition {
@@ -373,10 +424,8 @@ func (s *Server) handleSubscribe(msg SipMessage, addr net.Addr) {
 
 	ok200 := Build200OK(msg, "", "")
 	ok200.Expires = strings.TrimSpace(msg.Expires)
-	if udpAddr, ok := addr.(*net.UDPAddr); ok {
-		if _, err := s.sipConn.WriteToUDP(ok200.Serialize(), udpAddr); err != nil {
-			slog.Warn("gb28181: failed to send SUBSCRIBE 200 OK", "error", err)
-		}
+	if err := s.sendSIP(ok200.Serialize(), addr); err != nil {
+		slog.Warn("gb28181: failed to send SUBSCRIBE 200 OK", "error", err)
 	}
 }
 

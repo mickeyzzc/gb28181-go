@@ -145,6 +145,9 @@ func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 	}
 	// Upstream law defaults to PCMA — see the upstreamLaw field note.
 	s.upstreamLaw.Store(int32(AudioPCMA))
+	// NOTIFYs of TCP/TLS-dialog subscriptions ride the server's
+	// connection table (same routing as every other TCP answer).
+	s.notifier.BindTCP(func(data []byte, addr *net.TCPAddr) error { return s.sendToTCP(data, addr) })
 	return s
 }
 

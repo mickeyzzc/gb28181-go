@@ -11,6 +11,15 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **subscriptions and NOTIFYs over TCP/TLS dialogs**
+  (audit follow-up): a SUBSCRIBE arriving on a TCP/TLS connection now
+  books (previously answered a bare 200 without booking) — the
+  registry peer generalizes to `net.Addr`, and the subscription's
+  NOTIFYs ride the connection through the server's connection table
+  (`DeviceNotifier.BindTCP`). UDP subscriptions keep the shared UDP
+  socket; unknown-transport peers are answered but not booked. The
+  SUBSCRIBE 200 OK also routes via `sendSIP` (both transports).
+
 - `feat(device)` **MediaStatus INFO over TCP/TLS dialogs** (§9.4.2,
   issue #60 follow-up): the playback/download completion INFO rides the
   dialog's own transport — the shared UDP socket for UDP dialogs (as
