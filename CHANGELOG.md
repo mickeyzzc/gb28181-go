@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **passive TCP media** (Annex C.2, issue #14 follow-up):
+  an `a=setup:active` offer (the platform dials the device's media
+  port) is answered `a=setup:passive` with a real listening port
+  instead of 488 — the live and playback paths accept the platform's
+  dial before streaming ($-framing unchanged); teardown closes the
+  listener so a pending accept aborts. `buildDeviceSDP` gains the
+  setup role argument.
+
 - `feat(device)` **async snapshot/upgrade exchanges on the stream
   transports**: the A.2.5.7 / A.2.5.9 completion notifies leave via
   `sendToPlatform` — the dialed connection on `tcp-out`/`tls`, the UDP
