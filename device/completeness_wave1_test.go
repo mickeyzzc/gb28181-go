@@ -2,6 +2,7 @@ package device
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +141,47 @@ func TestBuildCatalogResponse_NumAttr(t *testing.T) {
 	msg := BuildCatalogResponseMessage("5", "dev", nil)
 	if !strings.Contains(msg.Body, `<DeviceList Num="0">`) {
 		t.Errorf("empty catalog missing DeviceList Num:\n%s", msg.Body)
+	}
+}
+
+// sendMediaEndTCPDialog: a TCP-dialog mediaEndNotify routes the §9.4.2
+// INFO through the server's connection table (issue #60 follow-up).
+func TestSendMediaEndTCPDialog(t *testing.T) {
+	s := &Server{}
+	addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 15060}
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	s.tcpConns.Store(addr.String(), server)
+
+	end := &mediaEndNotify{
+		tcpAddr: addr,
+		msg: SipMessage{
+			Method:      "INFO",
+			RequestURI:  "sip:34020000001320000001@3402000000",
+			CallID:      "pb-1",
+			CSeq:        "2 INFO",
+			ContentType: "Application/MANSRTSP",
+			Body:        "MediaStatus: Play Finished\r\n",
+			Headers:     make(map[string]string),
+		},
+	}
+	done := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 4096)
+		n, _ := client.Read(buf)
+		done <- buf[:n]
+	}()
+	if err := s.sendMediaEnd(end); err != nil {
+		t.Fatalf("sendMediaEnd: %v", err)
+	}
+	select {
+	case got := <-done:
+		text := string(got)
+		if !strings.Contains(text, "INFO sip:") || !strings.Contains(text, "MediaStatus: Play Finished") {
+			t.Fatalf("unexpected INFO on the dialog connection:\n%s", text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the INFO on the connection")
 	}
 }

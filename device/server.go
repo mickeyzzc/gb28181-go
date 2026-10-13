@@ -1399,26 +1399,27 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		mediaCtx, mediaCancel := context.WithCancel(ctx)
 		ctlCh := make(chan PlaybackControl, 4)
 		// §9.4.2 (issue #82): capture the dialog snapshot for the
-		// completion INFO. UDP SIP only — over TCP/TLS the dialog's
-		// write half stays with the connection handler (follow-up).
+		// completion INFO. The INFO rides the dialog's own transport —
+		// the shared UDP socket for UDP dialogs, the connection itself
+		// for TCP/TLS dialogs (issue #60 follow-up).
 		var endNotify *mediaEndNotify
-		if (s.cfg.Transport == "" || s.cfg.Transport == "udp") && s.sipConn != nil {
-			if udpPeer, ok := fromAddr.(*net.UDPAddr); ok {
-				cseqNum := strings.TrimSpace(strings.SplitN(msg.CSeq, " ", 2)[0])
-				if n, err := strconv.Atoi(cseqNum); err == nil {
-					cseqNum = strconv.Itoa(n + 1)
-				}
-				localIPAddr := localIP()
-				contact := fmt.Sprintf("<sip:%s@%s:%d>", s.cfg.DeviceID, localIPAddr, s.cfg.LocalSIPPort)
-				endNotify = &mediaEndNotify{
-					conn: s.sipConn,
-					addr: udpPeer,
-					msg: BuildMediaStatusInfo(
-						msg.RequestURI, msg.From, msg.To, msg.CallID,
-						cseqNum+" INFO", contact,
-						sessionType == "Download"),
-				}
+		cseqNum := strings.TrimSpace(strings.SplitN(msg.CSeq, " ", 2)[0])
+		if n, err := strconv.Atoi(cseqNum); err == nil {
+			cseqNum = strconv.Itoa(n + 1)
+		}
+		localIPAddr := localIP()
+		contact := fmt.Sprintf("<sip:%s@%s:%d>", s.cfg.DeviceID, localIPAddr, s.cfg.LocalSIPPort)
+		info := BuildMediaStatusInfo(
+			msg.RequestURI, msg.From, msg.To, msg.CallID,
+			cseqNum+" INFO", contact,
+			sessionType == "Download")
+		switch peer := fromAddr.(type) {
+		case *net.UDPAddr:
+			if (s.cfg.Transport == "" || s.cfg.Transport == "udp") && s.sipConn != nil {
+				endNotify = &mediaEndNotify{conn: s.sipConn, addr: peer, msg: info}
 			}
+		case *net.TCPAddr:
+			endNotify = &mediaEndNotify{tcpAddr: peer, msg: info}
 		}
 		s.mu.Lock()
 		s.mediaCancel = mediaCancel

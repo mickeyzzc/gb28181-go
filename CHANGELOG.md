@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **MediaStatus INFO over TCP/TLS dialogs** (§9.4.2,
+  issue #60 follow-up): the playback/download completion INFO rides the
+  dialog's own transport — the shared UDP socket for UDP dialogs (as
+  before), the INVITE's connection from the server's connection table
+  for TCP/TLS dialogs (previously never sent, flagged as a follow-up).
+  `mediaEndNotify` carries the dialog transport; the send is
+  `sendMediaEnd` (unit-tested over a live connection).
+
 - `feat(device)` **Catalog/RecordInfo pagination** (A.2.6.1/A.2.6.4):
   large answers now page across multiple MESSAGEs — every page carries
   the TOTAL `SumNum` while the list `Num` carries the page's own count
