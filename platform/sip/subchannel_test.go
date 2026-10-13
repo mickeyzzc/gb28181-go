@@ -207,6 +207,16 @@ func TestProbeSubChannel_TimeoutSilent(t *testing.T) {
 	// Memoized: re-running the probe path issues no second INVITE.
 	srv.maybeProbeSubChannels(testDeviceID)
 	time.Sleep(300 * time.Millisecond)
+	// Drain any late INVITE straggler (a gosip retransmit tail slipping
+	// past the answerer-gone wait on loaded runners — flake 2026-10-13)
+	// before arming the Never window. The memoization bug this test
+	// guards fires on every maybeProbeSubChannels call, far beyond this
+	// bounded drain.
+	for range 3 {
+		if req := client.nextRequest(100 * time.Millisecond); req == nil {
+			break
+		}
+	}
 	require.Never(t, func() bool {
 		if req := client.nextRequest(50 * time.Millisecond); req != nil && string(req.Method()) == "INVITE" {
 			return true
