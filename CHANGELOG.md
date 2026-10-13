@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **multi-channel catalog** (A.2.1):
+  `Config.ExtraChannels` / `DeviceContext.ExtraChannels`
+  (`[]ChannelItem`) lists additional channels after the device's own
+  entry — the device ID becomes each channel's ParentID, `ON` the
+  status default; large lists page across MESSAGEs automatically.
+
 - `feat(device)` **passive TCP media** (Annex C.2, issue #14 follow-up):
   an `a=setup:active` offer (the platform dials the device's media
   port) is answered `a=setup:passive` with a real listening port
