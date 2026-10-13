@@ -227,18 +227,18 @@ func TestDispatch_CatalogQuery(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued response, got nil")
 	}
 
 	// Verify queued response is a Catalog response MESSAGE
-	if queued.Method != "MESSAGE" {
-		t.Errorf("Expected queued method MESSAGE, got %s", queued.Method)
+	if queued[0].Method != "MESSAGE" {
+		t.Errorf("Expected queued method MESSAGE, got %s", queued[0].Method)
 	}
-	if !strings.Contains(queued.Body, `CmdType="Catalog"`) {
+	if !strings.Contains(queued[0].Body, `CmdType="Catalog"`) {
 		t.Error("Queued response should be Catalog")
 	}
-	if !strings.Contains(queued.Body, `SN="789"`) {
+	if !strings.Contains(queued[0].Body, `SN="789"`) {
 		t.Error("Queued response should echo SN")
 	}
 }
@@ -349,18 +349,18 @@ func TestDispatch_DeviceInfoQuery(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued response, got nil")
 	}
 
 	// Verify queued response is a DeviceInfo response MESSAGE
-	if queued.Method != "MESSAGE" {
-		t.Errorf("Expected queued method MESSAGE, got %s", queued.Method)
+	if queued[0].Method != "MESSAGE" {
+		t.Errorf("Expected queued method MESSAGE, got %s", queued[0].Method)
 	}
-	if !strings.Contains(queued.Body, `CmdType="DeviceInfo"`) {
+	if !strings.Contains(queued[0].Body, `CmdType="DeviceInfo"`) {
 		t.Error("Queued response should be DeviceInfo")
 	}
-	if !strings.Contains(queued.Body, "<DeviceID>34020000012000000001</DeviceID>") {
+	if !strings.Contains(queued[0].Body, "<DeviceID>34020000012000000001</DeviceID>") {
 		t.Error("Queued response should contain DeviceID")
 	}
 }
@@ -555,13 +555,13 @@ func TestDispatch_RecordInfo_ReturnsEmptyList(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued RecordInfo response, got nil")
 	}
-	if !strings.Contains(queued.Body, "RecordInfo") {
+	if !strings.Contains(queued[0].Body, "RecordInfo") {
 		t.Error("Queued response should contain RecordInfo")
 	}
-	if !strings.Contains(queued.Body, "SumNum") {
+	if !strings.Contains(queued[0].Body, "SumNum") {
 		t.Error("Queued response should contain SumNum")
 	}
 }
@@ -577,11 +577,11 @@ func TestDispatch_DeviceStatus_Fields(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued DeviceStatus response, got nil")
 	}
 	for _, field := range []string{"Online", "Status", "Encode", "Record", "DeviceTime"} {
-		if !strings.Contains(queued.Body, field) {
+		if !strings.Contains(queued[0].Body, field) {
 			t.Errorf("Queued response should contain %s", field)
 		}
 	}
@@ -598,13 +598,13 @@ func TestDispatch_DeviceControl_Rejected(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued control reject response, got nil")
 	}
-	if !strings.Contains(queued.Body, "Result>ERROR<") {
+	if !strings.Contains(queued[0].Body, "Result>ERROR<") {
 		t.Error("Queued response should contain Result>ERROR<")
 	}
-	if !strings.Contains(queued.Body, `CmdType="DeviceControl"`) {
+	if !strings.Contains(queued[0].Body, `CmdType="DeviceControl"`) {
 		t.Error("Queued response should echo DeviceControl CmdType")
 	}
 }
@@ -621,13 +621,13 @@ func TestDispatch_Catalog_ReturnsRealChannel(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued Catalog response, got nil")
 	}
-	if !strings.Contains(queued.Body, dev.ChannelID) {
+	if !strings.Contains(queued[0].Body, dev.ChannelID) {
 		t.Error("Queued response should contain the channel ID from DeviceContext")
 	}
-	if !strings.Contains(queued.Body, "SumNum>1<") {
+	if !strings.Contains(queued[0].Body, "SumNum>1<") {
 		t.Error("Queued response should contain SumNum>1< (1 channel)")
 	}
 }
@@ -643,10 +643,10 @@ func TestDispatch_DualFormat_Catalog_ChildElement(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued Catalog response, got nil")
 	}
-	if !strings.Contains(queued.Body, "Catalog") {
+	if !strings.Contains(queued[0].Body, "Catalog") {
 		t.Error("Queued response should contain Catalog")
 	}
 }
@@ -858,12 +858,12 @@ func TestDispatch_RecordInfo_WithIndex(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued RecordInfo response, got nil")
 	}
 
 	var resp RecordInfoResponse
-	if err := xml.Unmarshal([]byte(queued.Body), &resp); err != nil {
+	if err := xml.Unmarshal([]byte(queued[0].Body), &resp); err != nil {
 		t.Fatalf("Failed to unmarshal RecordInfo response: %v", err)
 	}
 	if resp.SumNum == nil || *resp.SumNum != 1 {
@@ -910,11 +910,11 @@ func TestDispatch_RecordInfo_NilIndex(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued RecordInfo response, got nil")
 	}
 	var resp RecordInfoResponse
-	if err := xml.Unmarshal([]byte(queued.Body), &resp); err != nil {
+	if err := xml.Unmarshal([]byte(queued[0].Body), &resp); err != nil {
 		t.Fatalf("Failed to unmarshal RecordInfo response: %v", err)
 	}
 	if resp.SumNum == nil || *resp.SumNum != 0 {
@@ -943,11 +943,11 @@ func TestDispatch_RecordInfo_MissingTimeFields(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("Expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("Expected queued RecordInfo response, got nil")
 	}
 	var resp RecordInfoResponse
-	if err := xml.Unmarshal([]byte(queued.Body), &resp); err != nil {
+	if err := xml.Unmarshal([]byte(queued[0].Body), &resp); err != nil {
 		t.Fatalf("Failed to unmarshal RecordInfo response: %v", err)
 	}
 	if resp.SumNum == nil || *resp.SumNum != 0 {

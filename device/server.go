@@ -1539,7 +1539,7 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		return
 	}
 
-	ok200, queuedResp, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
+	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
 	if err != nil {
 		slog.Warn("gb28181: failed to dispatch MESSAGE", "error", err)
 		return
@@ -1638,8 +1638,18 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 	}
 
 	// Send queued response if any
-	if queuedResp != nil {
-		s.sendResponseMessage(*queuedResp, fromAddr)
+	// Large Catalog/RecordInfo answers arrive as multiple pages (same
+	// SN, SumNum = total); pace them slightly so a UDP burst does not
+	// drop the tail pages — the platform accumulates by SN.
+	for i, page := range queuedPages {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		s.sendResponseMessage(page, fromAddr)
 	}
 }
 

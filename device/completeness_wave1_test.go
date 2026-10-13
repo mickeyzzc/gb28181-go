@@ -1,6 +1,7 @@
 package device
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestDispatch_PresetQuery(t *testing.T) {
 	if ok200.StatusCode != 200 {
 		t.Errorf("expected 200 OK, got status %d", ok200.StatusCode)
 	}
-	if queued == nil {
+	if len(queued) == 0 {
 		t.Fatal("expected a queued response, got nil")
 	}
 	for _, w := range []string{
@@ -28,8 +29,8 @@ func TestDispatch_PresetQuery(t *testing.T) {
 		"<SumNum>0</SumNum>",
 		`<PresetList Num="0">`,
 	} {
-		if !strings.Contains(queued.Body, w) {
-			t.Errorf("queued body missing %q:\n%s", w, queued.Body)
+		if !strings.Contains(queued[0].Body, w) {
+			t.Errorf("queued body missing %q:\n%s", w, queued[0].Body)
 		}
 	}
 }
@@ -89,5 +90,55 @@ func TestPlatformSilent(t *testing.T) {
 	}
 	if platformSilent(5*time.Second, heartbeat, 0) {
 		t.Error("timeout count 0 must never trip")
+	}
+}
+
+// TestDispatch_RecordInfoPagination: 25 matching segments page into 3
+// MESSAGEs — every page carries the TOTAL SumNum (the platform
+// accumulates by SN), RecordList Num the page's own count.
+func TestDispatch_RecordInfoPagination(t *testing.T) {
+	var segments []SegmentMeta
+	base := time.Date(2026, 10, 13, 0, 0, 0, 0, time.Local).UnixMilli()
+	for i := range 25 {
+		segments = append(segments, SegmentMeta{
+			File:    fmt.Sprintf("2026/10/13/%02d-00-00.h264", i),
+			StartMS: base + int64(i)*60_000,
+			EndMS:   base + int64(i)*60_000 + 30_000,
+		})
+	}
+	idx := &fakeRecordingIndex{segments: segments}
+	body := `<Query><CmdType>RecordInfo</CmdType><SN>77</SN><DeviceID>dev</DeviceID>` +
+		`<StartTime>2026-10-13T00:00:00</StartTime><EndTime>2026-10-13T23:59:59</EndTime></Query>`
+	ok200, pages, err := DispatchInboundMessage(buildInboundMessage(body), testDeviceContext(), idx)
+	if err != nil {
+		t.Fatalf("DispatchInboundMessage failed: %v", err)
+	}
+	if ok200.StatusCode != 200 {
+		t.Errorf("expected 200 OK, got %d", ok200.StatusCode)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("expected 3 pages for 25 segments at page size 10, got %d", len(pages))
+	}
+	wantNums := []string{`Num="10"`, `Num="10"`, `Num="5"`}
+	for i, page := range pages {
+		if !strings.Contains(page.Body, "<SumNum>25</SumNum>") {
+			t.Errorf("page %d: SumNum must carry the total:\n%s", i, page.Body)
+		}
+		if !strings.Contains(page.Body, "<RecordList "+wantNums[i]+">") {
+			t.Errorf("page %d: RecordList %s missing:\n%s", i, wantNums[i], page.Body)
+		}
+		if !strings.Contains(page.Body, fmt.Sprintf("%02d-00-00.h264", i*10)) {
+			t.Errorf("page %d: first item mismatch (expected segment %d):\n%s", i, i*10, page.Body)
+		}
+	}
+}
+
+// TestBuildCatalogResponse_NumAttr: DeviceList now carries the
+// standard-required Num attribute (A.2.6.1), matching the Rust twin's
+// wire form.
+func TestBuildCatalogResponse_NumAttr(t *testing.T) {
+	msg := BuildCatalogResponseMessage("5", "dev", nil)
+	if !strings.Contains(msg.Body, `<DeviceList Num="0">`) {
+		t.Errorf("empty catalog missing DeviceList Num:\n%s", msg.Body)
 	}
 }
