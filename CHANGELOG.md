@@ -11,6 +11,11 @@ are released out of band.
 
 ## [Unreleased]
 
+- `docs` README transport notes refreshed after the TCP-parity waves:
+  the device row now states that SUBSCRIBE/NOTIFY dialogs and paged
+  catalog/record answers ride any transport, and the §9.4.2 completion
+  INFO rides the dialog's own transport (both languages).
+
 - `feat(device)` **subscriptions and NOTIFYs over TCP/TLS dialogs**
   (audit follow-up): a SUBSCRIBE arriving on a TCP/TLS connection now
   books (previously answered a bare 200 without booking) — the
