@@ -271,6 +271,32 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 	case MediaTCPActive:
 		// Nothing to dial yet — ConnectActive (after the 200 OK) does it.
 	default: // UDP
+		// Multicast media (issue #111 follow-up): a group address in the
+		// INVITE's c= line means many viewers may watch one stream — the
+		// receiver joins the IGMP group instead of a plain bind.
+		if group := net.ParseIP(serverIP); group != nil && group.IsMulticast() {
+			conn, err := net.ListenMulticastUDP("udp", nil, &net.UDPAddr{IP: group, Port: int(port)})
+			if err != nil {
+				sm.portManager.Recycle(port)
+				return nil, fmt.Errorf("gb28181: failed to join multicast group %s:%d: %w", serverIP, port, err)
+			}
+			setUDPReadBuffer(conn)
+			sess.conn = conn
+			ctx, cancel := context.WithCancel(context.Background())
+			if err := receiver.Start(ctx, conn); err != nil {
+				conn.Close()
+				sm.portManager.Recycle(port)
+				cancel()
+				return nil, fmt.Errorf("gb28181: failed to start multicast receiver: %w", err)
+			}
+			sess.cancel = cancel
+			sm.mu.Lock()
+			sm.sessions[channel.ID] = sess
+			sm.mu.Unlock()
+			slog.Info("gb28181: multicast media session", "group", serverIP, "port", port, "channel", channel.ID)
+			sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc)
+			return sdpAnswer, nil
+		}
 		addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", serverIP, port))
 		if err != nil {
 			sm.portManager.Recycle(port)

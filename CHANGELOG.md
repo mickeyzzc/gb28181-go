@@ -11,6 +11,13 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat` **multicast media** (issue #111 follow-up): the platform half
+  joins the IGMP group (`ListenMulticastUDP`) when the INVITE's media
+  address is a group — one stream reaches every joined viewer; the
+  device half sends to group addresses and gained a `multicast_ttl`
+  config knob (unix `IP_MULTICAST_TTL`; windows no-op, OS default).
+  Previously documented unicast-only.
+
 - `feat(device)` **inbound SIPS listener** (`transport: "tls-listen"`):
   the platform dials the device over TLS — the device's own certificate
   (`tls_cert_file` + `tls_key_file`, required) identifies it;

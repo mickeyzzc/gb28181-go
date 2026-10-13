@@ -1384,6 +1384,17 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	s.mediaConn = mediaConn
 	s.mu.Unlock()
 
+	// Multicast media: raise IP_MULTICAST_TTL past the LAN default when
+	// configured (the OS default of 1 stays within one subnet).
+	mediaIP, _, _ := net.SplitHostPort(mediaAddr)
+	if rtpIP := net.ParseIP(mediaIP); rtpIP != nil && rtpIP.IsMulticast() && s.cfg.MulticastTTL > 0 {
+		if err := setMulticastTTL(mediaConn, s.cfg.MulticastTTL); err != nil {
+			slog.Warn("gb28181: failed to set multicast TTL", "ttl", s.cfg.MulticastTTL, "error", err)
+		} else {
+			slog.Info("gb28181: multicast media TTL set", "ttl", s.cfg.MulticastTTL)
+		}
+	}
+
 	// Build device SDP answer — use the real source IP toward the platform,
 	// not an interface scan (wrong on multihomed hosts).
 	localIPAddr, err := getLocalIP(ctx, fromAddr.String())
