@@ -11,6 +11,17 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.12.0] — 2026-10-14
+
+The transport-parity package, twin of gb28181-rs v0.13.0 — TCP and
+SIPS signaling with the full outbound lifecycle (dial → REGISTER →
+keepalive → redial), subscriptions and async exchanges over streams,
+passive TCP media, multi-MESSAGE pagination, the multi-channel
+catalog and five-query host seams, multicast in both roles (platform
+IGMP join, device TTL knob), and platform-side ES-over-RTP receive
+(RFC 6184/7798). Includes the breaking `DispatchInboundMessage`
+paged signature and the gosip upstream data-race fix.
+
 - `feat` **multicast media** (issue #111 follow-up): the platform half
   joins the IGMP group (`ListenMulticastUDP`) when the INVITE's media
   address is a group — one stream reaches every joined viewer; the
