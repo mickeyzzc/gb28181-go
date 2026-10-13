@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -173,5 +176,90 @@ func TestDialStream_TCPOut_ConnectsAndRedials(t *testing.T) {
 	s.mu.Unlock()
 	if _, ok := s.tcpConns.Load(remote2); !ok {
 		t.Fatal("re-dialed stream connection not registered")
+	}
+}
+
+// The inbound SIPS listener handshakes with the device's certificate
+// and dispatches framed SIP through the shared reader.
+func TestTLSListenerHandshakeAndDispatch(t *testing.T) {
+	// Mint the device pair with the existing self-signed helper.
+	dir := t.TempDir()
+	caPath, keyPathOrig := writeTestCert(t, dir)
+	certPath := caPath // the self-signed cert serves as the device identity
+	keyPath := keyPathOrig
+
+	s := &Server{}
+	s.cfg = Config{
+		Enabled:      true,
+		Transport:    "tls-listen",
+		TLSCertFile:  certPath,
+		TLSKeyFile:   keyPath,
+		LocalSIPPort: 0,
+		SIPDomain:    "3402000000",
+		DeviceID:     "34020000001320000001",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		if err := s.startTLSListener(ctx); err != nil {
+			t.Logf("listener: %v", err)
+		}
+	}()
+
+	// Wait for the listener to bind: retry dial until success.
+	var conn net.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		port := 0
+		s.mu.Lock()
+		if s.tcpListener != nil {
+			port = s.tcpListener.Addr().(*net.TCPAddr).Port
+		}
+		s.mu.Unlock()
+		if port == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("listener never bound")
+			}
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		c, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // self-signed test cert
+		})
+		if err == nil {
+			conn = c
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("TLS dial: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer conn.Close()
+
+	// Send a framed MESSAGE (DeviceInfo query) through the TLS stream.
+	body := "<Query><CmdType>DeviceInfo</CmdType><SN>1</SN><DeviceID>34020000001320000001</DeviceID></Query>"
+	frame := fmt.Sprintf("MESSAGE sip:34020000001320000001@3402000000 SIP/2.0\r\nVia: SIP/2.0/TLS 127.0.0.1:9;branch=z9hG4bKtl1\r\nFrom: <sip:34020000002000000001@3402000000>;tag=p\r\nTo: <sip:34020000001320000001@3402000000>\r\nCall-ID: tls-li-1\r\nCSeq: 1 MESSAGE\r\nContent-Type: Application/MANSCDP+xml\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	if _, err := conn.Write([]byte(frame)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	buf := make([]byte, 4096)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read answer: %v", err)
+	}
+	resp := string(buf[:n])
+	if !strings.Contains(resp, "200 OK") {
+		t.Fatalf("expected 200 OK first:\n%s", resp)
+	}
+	n, err = conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read device info: %v", err)
+	}
+	resp = string(buf[:n])
+	if !strings.Contains(resp, "<CmdType>DeviceInfo</CmdType>") && !strings.Contains(resp, `CmdType="DeviceInfo"`) {
+		t.Fatalf("expected DeviceInfo answer:\n%s", resp)
 	}
 }

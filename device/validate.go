@@ -17,9 +17,9 @@ import (
 func (c Config) Validate() error {
 	transport := strings.ToLower(c.Transport)
 	switch transport {
-	case "", "udp", "tcp", "tcp-out", "tls":
+	case "", "udp", "tcp", "tcp-out", "tls", "tls-listen":
 	default:
-		return fmt.Errorf("device.Config.Transport %q must be udp, tcp, tcp-out, or tls", c.Transport)
+		return fmt.Errorf("device.Config.Transport %q must be udp, tcp, tcp-out, tls, or tls-listen", c.Transport)
 	}
 	if c.LocalSIPPort < 0 || c.LocalSIPPort > 65535 {
 		return fmt.Errorf("device.Config.LocalSIPPort %d out of range 0-65535 (0 = kernel-assigned)", c.LocalSIPPort)
@@ -28,8 +28,12 @@ func (c Config) Validate() error {
 	// TLS material pairs with Transport "tls" only; the reverse (tls
 	// without any trust anchor) trusts nothing or everything by accident.
 	hasTLSMaterial := c.TLSCAFile != "" || c.TLSCertFile != "" || c.TLSKeyFile != ""
-	if transport != "tls" && hasTLSMaterial {
+	if transport != "tls" && transport != "tls-listen" && hasTLSMaterial {
 		return fmt.Errorf("device.Config TLS files require Transport %q, got %q", "tls", c.Transport)
+	}
+
+	if transport == "tls-listen" && (c.TLSCertFile == "" || c.TLSKeyFile == "") {
+		return fmt.Errorf("device.Config Transport tls-listen requires tls_cert_file + tls_key_file")
 	}
 
 	if !c.Enabled {

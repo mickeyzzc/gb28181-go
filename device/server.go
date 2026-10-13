@@ -244,6 +244,12 @@ func (s *Server) Start(ctx context.Context) error {
 		return s.startTCPListener(ctx)
 	}
 
+	// Inbound SIPS listener (platform dials the device over TLS; the
+	// device's own certificate identifies it).
+	if s.cfg.Transport == "tls-listen" {
+		return s.startTLSListener(ctx)
+	}
+
 	// Stream transports (outbound): dial the platform — TLS (SIPS,
 	// GB/T 28181-2022 A-level) or plain TCP ("tcp-out") — and run the
 	// full REGISTER/keepalive lifecycle over the connection.

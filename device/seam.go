@@ -67,7 +67,7 @@ type Config struct {
 	// across MESSAGEs automatically.
 	ExtraChannels []ChannelItem `yaml:"extra_channels,omitempty"`
 
-	Transport string `yaml:"transport"` // SIP transport: udp (default), tcp (inbound listener), tcp-out (device dials the platform, full lifecycle), or tls (SIPS outbound, GB/T 28181-2022 A-level)
+	Transport string `yaml:"transport"` // SIP transport: udp (default), tcp (inbound listener), tcp-out (device dials the platform, full lifecycle), tls (SIPS outbound, GB/T 28181-2022 A-level), or tls-listen (inbound SIPS: the platform dials the device; requires the TLS pair)
 
 	// IncomingNotePolicy sets the failure behavior of device-side Note
 	// verification for platform→device requests (issue #52). Only active
