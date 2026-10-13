@@ -17,9 +17,9 @@ import (
 func (c Config) Validate() error {
 	transport := strings.ToLower(c.Transport)
 	switch transport {
-	case "", "udp", "tcp", "tls":
+	case "", "udp", "tcp", "tcp-out", "tls":
 	default:
-		return fmt.Errorf("device.Config.Transport %q must be udp, tcp, or tls", c.Transport)
+		return fmt.Errorf("device.Config.Transport %q must be udp, tcp, tcp-out, or tls", c.Transport)
 	}
 	if c.LocalSIPPort < 0 || c.LocalSIPPort > 65535 {
 		return fmt.Errorf("device.Config.LocalSIPPort %d out of range 0-65535 (0 = kernel-assigned)", c.LocalSIPPort)
