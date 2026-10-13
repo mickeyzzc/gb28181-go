@@ -340,6 +340,10 @@ type DeviceContext struct {
 	// across MESSAGEs automatically. The device ID is used as each
 	// channel's ParentID.
 	ExtraChannels []ChannelItem
+	// InfoQueries supplies host data for the 2022 five information
+	// queries (A.2.6.12-16); nil keeps the minimal answers. Installed via
+	// Server.SetInfoQueryProvider.
+	InfoQueries InfoQueryProvider
 	// OnBroadcast fires when a voice-broadcast notification (语音广播,
 	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
 	// SourceID → TargetID and follows with a talk INVITE. Preparing the
@@ -808,13 +812,19 @@ func DispatchInboundMessage(msg SipMessage, dev DeviceContext, idx RecordingInde
 			resp := BuildPresetListResponseMessage(query.SN, query.DeviceID, nil)
 			return ok200, []SipMessage{resp}, nil
 		case "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus":
-			// GB/T 28181-2022 information queries (A.2.4.10-14): answer with
-			// the minimal valid Response (A.2.6.12-16). This device has no
-			// PTZ hardware, cruise tracks, or storage card, so every
-			// optional block is omitted and required SumNum fields are
-			// zero — previously these fell through the unknown-CmdType
-			// warn + silence below.
+			// GB/T 28181-2022 information queries (A.2.4.10-14): answer
+			// with provider data when the host installed one
+			// (SetInfoQueryProvider), the minimal valid Response
+			// (A.2.6.12-16) otherwise.
 			ok200 := Build200OK(msg, "", "")
+			if dev.InfoQueries != nil {
+				number := 0
+				if n, err := strconv.Atoi(query.Number); err == nil {
+					number = n
+				}
+				resp := BuildInfoQueryResponseMessage(query.CmdType, query.SN, query.DeviceID, number, dev.InfoQueries)
+				return ok200, []SipMessage{resp}, nil
+			}
 			resp := BuildGB2022QueryResponseMessage(query.CmdType, query.SN, query.DeviceID, query.Number)
 			return ok200, []SipMessage{resp}, nil
 		default:
