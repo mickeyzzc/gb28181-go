@@ -44,6 +44,9 @@ type Server struct {
 	// streamRemote is the outbound stream connection's remote-address
 	// key (transport "tls" / "tcp-out")
 	streamRemote string
+	// infoQueries supplies the 2022 five information-query answers when
+	// installed (SetInfoQueryProvider).
+	infoQueries InfoQueryProvider
 	// mediaTCPListener is the passive TCP media listener of the current
 	// INVITE session (a=setup:active offer — the platform dials us);
 	// closed on teardown so a pending accept aborts.

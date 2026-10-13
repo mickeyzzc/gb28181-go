@@ -266,3 +266,78 @@ func TestDispatch_CatalogExtraChannelsPage(t *testing.T) {
 		t.Errorf("extras must link to the device as parent:\n%s", pages[0].Body)
 	}
 }
+
+// A full InfoQueryProvider drives all five answers (A.2.6.12-16).
+type fullInfoQueries struct{}
+
+func (fullInfoQueries) HomePosition() *HomePositionInfo {
+	return &HomePositionInfo{Enabled: 1, ResetTimeSec: 15, PresetIndex: 3}
+}
+
+func (fullInfoQueries) CruiseTrackList() []CruiseTrackInfo {
+	return []CruiseTrackInfo{{0, "day"}, {1, "night"}}
+}
+
+func (fullInfoQueries) CruiseTrack(int) *CruiseTrackDetail {
+	return &CruiseTrackDetail{Number: 0, Name: "day", Points: []CruisePointInfo{
+		{PresetIndex: 1, StayTimeSecs: 10, Speed: 8},
+		{PresetIndex: 2, StayTimeSecs: 20, Speed: 12},
+	}}
+}
+
+func (fullInfoQueries) PtzPosition() *PtzPositionInfo {
+	pan, tilt, zoom, hfa, mvd := 45.5, -10.0, 3.2, 52.0, 120.0
+	return &PtzPositionInfo{Pan: &pan, Tilt: &tilt, Zoom: &zoom, HorizontalFieldAngle: &hfa, MaxViewDistance: &mvd}
+}
+
+func (fullInfoQueries) SdCardStatus() []SdCardInfo {
+	return []SdCardInfo{{ID: 0, HddName: "card0", Status: "ok", CapacityMB: 65536, FreeSpaceMB: 32768}}
+}
+
+func TestDispatch_InfoQueryProviderAnswers(t *testing.T) {
+	dev := testDeviceContext()
+	dev.InfoQueries = fullInfoQueries{}
+	ask := func(body string) SipMessage {
+		msg := buildInboundMessage(body)
+		_, pages, err := DispatchInboundMessage(msg, dev, nil)
+		if err != nil {
+			t.Fatalf("dispatch %s: %v", body, err)
+		}
+		if len(pages) != 1 {
+			t.Fatalf("expected one page, got %d", len(pages))
+		}
+		return pages[0]
+	}
+
+	resp := ask(`<Query><CmdType>HomePositionQuery</CmdType><SN>41</SN><DeviceID>dev</DeviceID></Query>`)
+	for _, w := range []string{"<Enabled>1</Enabled>", "<ResetTime>15</ResetTime>", "<PresetIndex>3</PresetIndex>"} {
+		if !strings.Contains(resp.Body, w) {
+			t.Errorf("HomePosition missing %q:\n%s", w, resp.Body)
+		}
+	}
+
+	resp = ask(`<Query><CmdType>CruiseTrackListQuery</CmdType><SN>42</SN><DeviceID>dev</DeviceID></Query>`)
+	if !strings.Contains(resp.Body, "<SumNum>2</SumNum>") || !strings.Contains(resp.Body, "<Name>night</Name>") {
+		t.Errorf("CruiseTrackList mismatch:\n%s", resp.Body)
+	}
+
+	resp = ask(`<Query><CmdType>CruiseTrackQuery</CmdType><SN>43</SN><DeviceID>dev</DeviceID><Number>0</Number></Query>`)
+	if !strings.Contains(resp.Body, "<PresetIndex>1</PresetIndex><StayTime>10</StayTime><Speed>8</Speed>") {
+		t.Errorf("CruiseTrack mismatch:\n%s", resp.Body)
+	}
+
+	resp = ask(`<Query><CmdType>PTZPosition</CmdType><SN>44</SN><DeviceID>dev</DeviceID></Query>`)
+	for _, w := range []string{"<Pan>45.5</Pan>", "<HorizontalFieldAngle>52</HorizontalFieldAngle>"} {
+		if !strings.Contains(resp.Body, w) {
+			t.Errorf("PTZPosition missing %q:\n%s", w, resp.Body)
+		}
+	}
+	if strings.Contains(resp.Body, "VerticalFieldAngle") {
+		t.Errorf("nil fields must be omitted:\n%s", resp.Body)
+	}
+
+	resp = ask(`<Query><CmdType>SDCardStatus</CmdType><SN>45</SN><DeviceID>dev</DeviceID></Query>`)
+	if !strings.Contains(resp.Body, "<Capacity>65536</Capacity><FreeSpace>32768</FreeSpace>") {
+		t.Errorf("SDCardStatus mismatch:\n%s", resp.Body)
+	}
+}

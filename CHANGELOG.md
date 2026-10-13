@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **host data for the 2022 five information queries**
+  (A.2.4.10-14 → A.2.6.12-16): a new `InfoQueryProvider` seam
+  (`SetInfoQueryProvider`; types in `infoquery.go`) fills the answers
+  with real hardware state — HomePosition, CruiseTrackList,
+  CruiseTrack (CruisePointList), PTZPosition (nil fields omitted) and
+  SDCardStatus (≤ 8 items). Without a provider the answers stay the
+  minimal valid form.
+
 - `feat(device)` **multi-channel catalog** (A.2.1):
   `Config.ExtraChannels` / `DeviceContext.ExtraChannels`
   (`[]ChannelItem`) lists additional channels after the device's own
