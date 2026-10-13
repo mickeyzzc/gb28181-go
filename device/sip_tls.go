@@ -54,6 +54,58 @@ func asyncExchangeTransportOK(transport string) bool {
 	}
 }
 
+// startTLSListener starts the inbound SIPS listener (platform dials the
+// device over TLS). Server certificate from the configured TLS pair —
+// the device's own identity cert, the same convention as the client
+// pair. Connections flow through the shared framed reader (all seams).
+func (s *Server) startTLSListener(ctx context.Context) error {
+	if s.cfg.TLSCertFile == "" || s.cfg.TLSKeyFile == "" {
+		return fmt.Errorf("device.Config Transport tls-listen requires tls_cert_file + tls_key_file (the device's own certificate)")
+	}
+	cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	if err != nil {
+		return fmt.Errorf("loading TLS server certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{ //nolint:gosec // GB convention: self-signed device certs; platform trust is app-level
+		Certificates: []tls.Certificate{cert},
+	}
+	addr := fmt.Sprintf(":%d", s.cfg.LocalSIPPort)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("binding SIPS listener on %s: %w", addr, err)
+	}
+	s.mu.Lock()
+	s.tcpListener = listener
+	s.mu.Unlock()
+	slog.Info("gb28181: SIPS listener started", "port", s.cfg.LocalSIPPort)
+
+	go func() {
+		<-ctx.Done()
+		slog.Info("gb28181: closing SIPS listener")
+		listener.Close()
+	}()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				slog.Warn("gb28181: SIPS accept error", "error", err)
+				continue
+			}
+		}
+		tlsConn := tls.Server(conn, tlsCfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			slog.Warn("gb28181: SIPS handshake failed", "remote", conn.RemoteAddr().String(), "error", err)
+			_ = conn.Close()
+			continue
+		}
+		go handleStreamConnection(ctx, tlsConn, s)
+	}
+}
+
 // isStreamTransport reports whether the server runs the outbound
 // stream-client model (device dials the platform, full REGISTER/keepalive
 // lifecycle over the connection).
@@ -169,6 +221,7 @@ func (s *Server) ensureStreamConn(ctx context.Context) {
 func handleStreamConnection(ctx context.Context, conn net.Conn, s *Server) {
 	defer conn.Close()
 	remote := conn.RemoteAddr().String()
+	s.tcpConns.Store(remote, conn)
 	defer s.tcpConns.Delete(remote)
 	slog.Info("gb28181: stream read loop started", "remote", remote)
 

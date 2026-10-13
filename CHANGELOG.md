@@ -11,6 +11,13 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **inbound SIPS listener** (`transport: "tls-listen"`):
+  the platform dials the device over TLS — the device's own certificate
+  (`tls_cert_file` + `tls_key_file`, required) identifies it;
+  connections flow through the shared framed reader with every host
+  seam and are registered in the connection table so answers route
+  back. Complements the outbound SIPS client (`"tls"`).
+
 - `feat(device)` **host data for the 2022 five information queries**
   (A.2.4.10-14 → A.2.6.12-16): a new `InfoQueryProvider` seam
   (`SetInfoQueryProvider`; types in `infoquery.go`) fills the answers
