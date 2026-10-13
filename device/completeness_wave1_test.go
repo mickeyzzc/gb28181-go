@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -185,3 +186,49 @@ func TestSendMediaEndTCPDialog(t *testing.T) {
 		t.Fatal("timed out waiting for the INFO on the connection")
 	}
 }
+
+// TCP-dialog subscriptions book and their NOTIFYs ride the connection
+// table's write half (the notifier's TCP hook).
+func TestTCPSubscriptionNotifyRidesConnection(t *testing.T) {
+	n := newDeviceNotifier()
+	var mu sync.Mutex
+	var got []byte
+	n.deviceID.Store(ptrStr("34020000001320000001"))
+	n.domain.Store(ptrStr("3402000000"))
+	n.localIP.Store(ptrStr("192.168.62.104"))
+	port := uint16(5060)
+	n.localPort.Store(&port)
+
+	tcpPeer := &net.TCPAddr{IP: net.ParseIP("192.168.63.30"), Port: 5060}
+	ready := make(chan struct{}, 4)
+	n.BindTCP(func(data []byte, addr *net.TCPAddr) error {
+		if addr.String() != tcpPeer.String() {
+			t.Errorf("NOTIFY routed to %s, want %s", addr, tcpPeer)
+		}
+		mu.Lock()
+		got = append(got, data...)
+		mu.Unlock()
+		ready <- struct{}{}
+		return nil
+	})
+
+	n.registry.upsert(EventAlarm, 120, tcpPeer,
+		"<sip:34020000002000000001@3402000000>", "<sip:34020000001320000001@3402000000>", "sub-tcp", 1)
+	if !n.Subscribed(EventAlarm) {
+		t.Fatal("TCP subscription must book")
+	}
+	if !n.SendAlarm("2", "5", "2026-10-13T12:00:00", "1", "motion") {
+		t.Fatal("SendAlarm failed with a live TCP subscription")
+	}
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("NOTIFY never reached the TCP hook")
+	}
+	if !strings.Contains(string(got), "Event: Alarm") &&
+		!strings.Contains(string(got), "NOTIFY") {
+		t.Fatalf("unexpected NOTIFY bytes:\n%s", string(got))
+	}
+}
+
+func ptrStr(v string) *string { return &v }
