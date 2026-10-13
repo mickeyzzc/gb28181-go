@@ -63,9 +63,23 @@ func parseSDPTimeRange(body string) (startMs, endMs int64) {
 // INVITE dialog so the platform stops the fetch promptly. nil (TCP SIP,
 // or pre-#82 callers) keeps the historical silent end.
 type mediaEndNotify struct {
-	conn *net.UDPConn // SIP UDP socket the INFO leaves through
-	addr *net.UDPAddr // the INVITE's source — same path back
-	msg  SipMessage   // prebuilt in-dialog INFO request
+	conn *net.UDPConn // SIP UDP socket the INFO leaves through (UDP dialogs)
+	addr *net.UDPAddr // the INVITE's source — same path back (UDP dialogs)
+	// TCP/TLS dialogs: the INVITE's connection carries the INFO back
+	// (looked up in the server's connection table by address).
+	tcpAddr *net.TCPAddr
+	msg     SipMessage // prebuilt in-dialog INFO request
+}
+
+// send writes the §9.4.2 INFO on the dialog's own transport: the shared
+// UDP socket for UDP dialogs, the dialog's connection for TCP/TLS.
+func (s *Server) sendMediaEnd(end *mediaEndNotify) error {
+	data := end.msg.Serialize()
+	if end.tcpAddr != nil {
+		return s.sendToTCP(data, end.tcpAddr)
+	}
+	_, err := end.conn.WriteToUDP(data, end.addr)
+	return err
 }
 
 func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify) {
@@ -286,7 +300,7 @@ func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, m
 	// the in-dialog MediaStatus INFO. A cancelled context is BYE-side
 	// teardown — the platform already ended the dialog; stay silent.
 	if endNotify != nil && mediaCtx.Err() == nil {
-		if _, err := endNotify.conn.WriteToUDP(endNotify.msg.Serialize(), endNotify.addr); err != nil {
+		if err := s.sendMediaEnd(endNotify); err != nil {
 			slog.Warn("gb28181: MediaStatus INFO send failed", "error", err)
 		} else {
 			slog.Info("gb28181: MediaStatus INFO sent", "session", sessionType)
