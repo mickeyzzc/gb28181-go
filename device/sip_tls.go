@@ -41,50 +41,85 @@ func buildTLSConfig(cfg Config) (*tls.Config, error) {
 	return tlsCfg, nil
 }
 
-// startTLSClient dials the platform over SIPS (TLS over TCP), registers the
-// connection for bidirectional SIP (the platform's INVITE/BYE arrive on the
-// same connection), and runs the REGISTER lifecycle over it. A dropped
-// connection is re-dialed by the next re-registration cycle.
-func (s *Server) startTLSClient(ctx context.Context) error {
-	tlsCfg, err := buildTLSConfig(s.cfg)
-	if err != nil {
-		return err
-	}
+// isStreamTransport reports whether the server runs the outbound
+// stream-client model (device dials the platform, full REGISTER/keepalive
+// lifecycle over the connection).
+func isStreamTransport(transport string) bool {
+	return transport == "tls" || transport == "tcp-out"
+}
+
+// dialStream dials the platform for the stream transports — TLS (SIPS) or
+// plain TCP — registers the connection for bidirectional SIP (the
+// platform's INVITE/BYE/SUBSCRIBE arrive on the same connection), and
+// starts its read goroutine. Safe to call again after a drop: the fresh
+// connection replaces the stale streamRemote key.
+func (s *Server) dialStream(ctx context.Context) error {
 	addr := net.JoinHostPort(s.cfg.PlatformSIPAddress, strconv.Itoa(s.cfg.PlatformSIPPort))
-	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return fmt.Errorf("dialing SIPS %s: %w", addr, err)
-	}
-	// tls.Dial used to infer ServerName from the address; tls.Client does
-	// not — keep that behavior so configs without an explicit ServerName
-	// (or with InsecureSkipVerify) keep handshaking exactly as before.
-	if tlsCfg.ServerName == "" {
-		inferred := tlsCfg.Clone()
-		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
-			inferred.ServerName = host
+	var conn net.Conn
+	if s.cfg.Transport == "tls" {
+		tlsCfg, err := buildTLSConfig(s.cfg)
+		if err != nil {
+			return err
 		}
-		tlsCfg = inferred
+		raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("dialing SIPS %s: %w", addr, err)
+		}
+		// tls.Dial used to infer ServerName from the address; tls.Client
+		// does not — keep that behavior so configs without an explicit
+		// ServerName (or with InsecureSkipVerify) keep handshaking exactly
+		// as before.
+		if tlsCfg.ServerName == "" {
+			inferred := tlsCfg.Clone()
+			if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+				inferred.ServerName = host
+			}
+			tlsCfg = inferred
+		}
+		tlsConn := tls.Client(raw, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
+			return fmt.Errorf("SIPS handshake with %s: %w", addr, err)
+		}
+		conn = tlsConn
+	} else {
+		var err error
+		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("dialing %s: %w", addr, err)
+		}
 	}
-	conn := tls.Client(raw, tlsCfg) //nolint:gosec // config comes from buildTLSConfig
-	if err := conn.HandshakeContext(ctx); err != nil {
-		_ = raw.Close()
-		return fmt.Errorf("SIPS handshake with %s: %w", addr, err)
-	}
+
 	remote := conn.RemoteAddr().String()
-	s.tcpConns.Store(remote, conn)
 	s.mu.Lock()
-	s.tlsRemote = remote
+	// A previous stream may still hold a slot under the same remote key
+	// (redial after a half-dead connection): drop it so sends route to
+	// the fresh connection.
+	if old, loaded := s.tcpConns.LoadAndDelete(remote); loaded {
+		_ = old.(net.Conn).Close()
+	}
+	s.tcpConns.Store(remote, conn)
+	s.streamRemote = remote
 	s.mu.Unlock()
-	slog.Info("gb28181: SIPS connection established", "remote", remote)
+	slog.Info("gb28181: stream connection established", "transport", s.cfg.Transport, "remote", remote)
 
 	// Inbound SIP over the same connection (responses feed the REGISTER
 	// flow via handleResponse → regRespCh; requests dispatch normally).
-	go handleTLSConnection(ctx, conn, s)
+	go handleStreamConnection(ctx, conn, s)
 	go func() {
 		<-ctx.Done()
 		_ = conn.Close()
 	}()
+	return nil
+}
 
+// startStreamClient dials the platform (SIPS or plain TCP) and runs the
+// full REGISTER/keepalive lifecycle over the connection. A dropped
+// connection is re-dialed by the re-registration cycle (ensureStreamConn).
+func (s *Server) startStreamClient(ctx context.Context) error {
+	if err := s.dialStream(ctx); err != nil {
+		return err
+	}
 	if !s.testMode {
 		if err := s.runRegisterLifecycleWith(ctx, s.channelResponseSource()); err != nil {
 			slog.Warn("gb28181: initial REGISTER failed, entering listen-only mode", "error", err)
@@ -93,14 +128,36 @@ func (s *Server) startTLSClient(ctx context.Context) error {
 	return nil
 }
 
-// handleTLSConnection adapts the TLS connection to the shared Content-Length
-// framed SIP reader (same wire discipline as TCP).
-func handleTLSConnection(ctx context.Context, conn *tls.Conn, s *Server) {
+// ensureStreamConn re-dials the platform when the stream connection has
+// dropped (the read goroutine removes it from tcpConns on exit). Called
+// before every re-registration attempt for the stream transports, so a
+// platform restart (or network blip) heals on the next cycle instead of
+// failing sends forever.
+func (s *Server) ensureStreamConn(ctx context.Context) {
+	if !isStreamTransport(s.cfg.Transport) {
+		return
+	}
+	s.mu.Lock()
+	remote := s.streamRemote
+	s.mu.Unlock()
+	if remote != "" {
+		if _, ok := s.tcpConns.Load(remote); ok {
+			return
+		}
+	}
+	slog.Info("gb28181: stream connection lost — re-dialing", "transport", s.cfg.Transport)
+	if err := s.dialStream(ctx); err != nil {
+		slog.Warn("gb28181: stream re-dial failed", "error", err)
+	}
+}
+
+// handleStreamConnection adapts the stream connection (TLS or plain TCP)
+// to the shared Content-Length framed SIP reader.
+func handleStreamConnection(ctx context.Context, conn net.Conn, s *Server) {
 	defer conn.Close()
 	remote := conn.RemoteAddr().String()
-	s.tcpConns.Store(remote, conn)
 	defer s.tcpConns.Delete(remote)
-	slog.Info("gb28181: TLS connection established", "remote", remote)
+	slog.Info("gb28181: stream read loop started", "remote", remote)
 
 	reader := bufio.NewReader(conn)
 	readSIPStream(ctx, reader, conn, s)

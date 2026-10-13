@@ -41,9 +41,10 @@ type Server struct {
 	tcpListener net.Listener
 	// tcpConns tracks active TCP/TLS SIP connections keyed by remote address
 	tcpConns sync.Map
-	// tlsRemote is the SIPS connection's remote-address key (transport="tls")
-	tlsRemote string
-	mu        sync.Mutex
+	// streamRemote is the outbound stream connection's remote-address
+	// key (transport "tls" / "tcp-out")
+	streamRemote string
+	mu           sync.Mutex
 	// protoVerMu guards platformProtoVer (REGISTER X-GB-Ver, Annex I).
 	protoVerMu       sync.Mutex
 	platformProtoVer string
@@ -229,16 +230,17 @@ func (s *Server) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 
-	// TCP transport: listen for inbound SIP connections. The platform
+	// TCP transport, inbound: listen for SIP connections. The platform
 	// connects to us and drives the dialog (no outbound REGISTER lifecycle).
 	if s.cfg.Transport == "tcp" {
 		return s.startTCPListener(ctx)
 	}
 
-	// SIPS transport (GB/T 28181-2022 A-level): dial the platform over TLS
-	// and run the full REGISTER/keepalive lifecycle over the connection.
-	if s.cfg.Transport == "tls" {
-		if err := s.startTLSClient(ctx); err != nil {
+	// Stream transports (outbound): dial the platform — TLS (SIPS,
+	// GB/T 28181-2022 A-level) or plain TCP ("tcp-out") — and run the
+	// full REGISTER/keepalive lifecycle over the connection.
+	if isStreamTransport(s.cfg.Transport) {
+		if err := s.startStreamClient(ctx); err != nil {
 			return err
 		}
 		s.startLifecycles(ctx)
@@ -671,6 +673,10 @@ func (s *Server) startLifecycles(ctx context.Context) {
 			case <-s.reRegisterCh:
 				slog.Info("gb28181: re-registration triggered (keepalive rejected or failures)")
 			}
+			// Stream transports: heal a dropped platform connection
+			// before attempting the re-REGISTER (sends would fail
+			// otherwise, forever).
+			s.ensureStreamConn(ctx)
 			if err := s.reregister(ctx); err != nil {
 				consecFails++
 				// First failure, then roughly once per half hour at the
@@ -890,9 +896,9 @@ func (s *Server) sendToPlatform(msg SipMessage, platformAddr *net.UDPAddr) error
 			msg.Headers["Note"] = note
 		}
 	}
-	if s.cfg.Transport == "tls" {
+	if isStreamTransport(s.cfg.Transport) {
 		s.mu.Lock()
-		remote := s.tlsRemote
+		remote := s.streamRemote
 		s.mu.Unlock()
 		if conn, ok := s.tcpConns.Load(remote); ok {
 			_, err := conn.(net.Conn).Write(msg.Serialize())
@@ -910,7 +916,7 @@ func (s *Server) viaTransportLabel() string {
 	switch s.cfg.Transport {
 	case "tls":
 		return "TLS"
-	case "tcp":
+	case "tcp", "tcp-out":
 		return "TCP"
 	default:
 		return "UDP"

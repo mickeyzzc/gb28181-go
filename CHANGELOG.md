@@ -11,6 +11,19 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **outbound plain-TCP transport (`transport: "tcp-out"`)**:
+  the device dials the platform and runs the full REGISTER/keepalive
+  lifecycle over the connection — the same stream-client model as SIPS
+  (`"tls"`), minus the handshake; the platform's INVITE/BYE/SUBSCRIBE
+  arrive on the same connection. `"tcp"` keeps its inbound-listener
+  meaning.
+- `fix(device)` **stream transports heal a dropped connection** (tls and
+  tcp-out): the read loop's connection-table cleanup used to strand
+  every send on "no SIPS connection" forever — the re-registration
+  cycle now re-dials first (`ensureStreamConn`), so a platform restart
+  or network blip heals on the next cycle. (The startTLSClient comment
+  always claimed this; the code never did.)
+
 - `docs` README transport notes refreshed after the TCP-parity waves:
   the device row now states that SUBSCRIBE/NOTIFY dialogs and paged
   catalog/record answers ride any transport, and the §9.4.2 completion

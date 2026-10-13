@@ -2,12 +2,14 @@ package device
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,10 +96,82 @@ func TestViaTransportLabel(t *testing.T) {
 	s := &Server{}
 	for _, tc := range []struct {
 		transport, want string
-	}{{"udp", "UDP"}, {"", "UDP"}, {"tcp", "TCP"}, {"tls", "TLS"}} {
+	}{{"udp", "UDP"}, {"", "UDP"}, {"tcp", "TCP"}, {"tcp-out", "TCP"}, {"tls", "TLS"}} {
 		s.cfg.Transport = tc.transport
 		if got := s.viaTransportLabel(); got != tc.want {
 			t.Errorf("transport %q: got %q, want %q", tc.transport, got, tc.want)
 		}
+	}
+}
+
+// The outbound stream transports dial the platform and heal a dropped
+// connection on the next re-registration cycle (ensureStreamConn).
+func TestDialStream_TCPOut_ConnectsAndRedials(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	s := &Server{}
+	s.cfg = Config{
+		Enabled:            true,
+		Transport:          "tcp-out",
+		PlatformSIPAddress: "127.0.0.1",
+		PlatformSIPPort:    port,
+		DeviceID:           "34020000001320000001",
+		SIPDomain:          "3402000000",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	accept := func() net.Conn {
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		return conn
+	}
+
+	// 1) Initial dial connects and registers the stream.
+	if err := s.dialStream(ctx); err != nil {
+		t.Fatalf("dialStream: %v", err)
+	}
+	platformSide := accept()
+	s.mu.Lock()
+	remote := s.streamRemote
+	s.mu.Unlock()
+	if remote == "" {
+		t.Fatal("streamRemote not recorded")
+	}
+	if _, ok := s.tcpConns.Load(remote); !ok {
+		t.Fatal("stream connection not registered in tcpConns")
+	}
+
+	// 2) The platform drops the connection: the read loop removes the
+	// entry on exit.
+	_ = platformSide.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := s.tcpConns.Load(remote); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dropped stream connection still registered after 2s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 3) The re-registration cycle re-dials and the fresh connection
+	// takes over the slot.
+	s.ensureStreamConn(ctx)
+	platformSide2 := accept()
+	defer platformSide2.Close()
+	s.mu.Lock()
+	remote2 := s.streamRemote
+	s.mu.Unlock()
+	if _, ok := s.tcpConns.Load(remote2); !ok {
+		t.Fatal("re-dialed stream connection not registered")
 	}
 }
