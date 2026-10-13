@@ -62,6 +62,11 @@ type Config struct {
 	RegisterIntervalSecs  int    `yaml:"register_interval_secs"`  // SIP REGISTER interval (seconds)
 	HeartbeatIntervalSecs int    `yaml:"heartbeat_interval_secs"` // SIP keepalive heartbeat interval (seconds)
 	HeartbeatTimeoutCount int    `yaml:"heartbeat_timeout_count"` // Missed heartbeats before declaring timeout
+	// MulticastTTL sets IP_MULTICAST_TTL on the media socket when the
+	// INVITE's media address is a multicast group (0 = OS default; the
+	// LAN default of 1 stays within one subnet).
+	MulticastTTL int `yaml:"multicast_ttl,omitempty"`
+
 	// ExtraChannels lists additional catalog channels (A.2.1): the
 	// device's own entry rides first, these follow — large lists page
 	// across MESSAGEs automatically.

@@ -341,3 +341,15 @@ func TestDispatch_InfoQueryProviderAnswers(t *testing.T) {
 		t.Errorf("SDCardStatus mismatch:\n%s", resp.Body)
 	}
 }
+
+// The multicast TTL helper applies to a real socket (unix; windows no-op).
+func TestSetMulticastTTL(t *testing.T) {
+	conn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := setMulticastTTL(conn, 4); err != nil {
+		t.Fatalf("setMulticastTTL: %v", err)
+	}
+}
