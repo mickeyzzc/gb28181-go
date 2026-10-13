@@ -3,6 +3,7 @@ package device
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -273,14 +274,37 @@ func ioReadFullBuf(rd *bufio.Reader, buf []byte) (int, error) {
 }
 
 // setup:active offers (platform dials the device) are refused with 488.
-func TestInviteTCPSetupActiveReturns488(t *testing.T) {
+func TestInviteTCPSetupActiveAnswersPassive(t *testing.T) {
 	_, sipPort, _ := startTestServer(t)
 
 	sdpBody := "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Play\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
 		"m=video 9 TCP/RTP/AVP 96\r\na=setup:active\r\ny=2000000001\r\n"
 
 	resp := sendInviteForSDP(t, sipPort, sdpBody)
-	if !strings.Contains(resp, "488") {
-		t.Fatalf("want 488, got: %.120s", resp)
+	if !strings.Contains(resp, "200") {
+		t.Fatalf("want 200 OK (passive answer), got: %.120s", resp)
 	}
+	if !strings.Contains(resp, "a=setup:passive") {
+		t.Fatalf("answer setup role must be passive: %.200s", resp)
+	}
+	if !strings.Contains(resp, "TCP/RTP/AVP 96") {
+		t.Fatalf("answer m= line stays TCP: %.200s", resp)
+	}
+	// The advertised m= port is a real listening port: the platform dials it.
+	port := 0
+	for _, line := range strings.FieldsFunc(resp, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		if strings.HasPrefix(line, "m=video ") {
+			if fields := strings.Fields(line); len(fields) >= 2 {
+				port, _ = strconv.Atoi(fields[1])
+			}
+		}
+	}
+	if port == 0 || port == 9 {
+		t.Fatalf("must advertise the listener's port, got %d: %.200s", port, resp)
+	}
+	dial, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("platform dials the passive media listener: %v", err)
+	}
+	_ = dial.Close()
 }

@@ -44,7 +44,11 @@ type Server struct {
 	// streamRemote is the outbound stream connection's remote-address
 	// key (transport "tls" / "tcp-out")
 	streamRemote string
-	mu           sync.Mutex
+	// mediaTCPListener is the passive TCP media listener of the current
+	// INVITE session (a=setup:active offer — the platform dials us);
+	// closed on teardown so a pending accept aborts.
+	mediaTCPListener *net.TCPListener
+	mu               sync.Mutex
 	// protoVerMu guards platformProtoVer (REGISTER X-GB-Ver, Annex I).
 	protoVerMu       sync.Mutex
 	platformProtoVer string
@@ -565,10 +569,16 @@ func normalizeSessionType(v string) string {
 
 // buildDeviceSDP builds the device SDP answer for INVITE 200 OK.
 // sessionType is echoed in the s= line (Play|Playback|Download).
-// For TCP transport it emits TCP/RTP/AVP with a=setup:active (device actively
-// connects to the platform media port) and a=connection:new per GB/T 28181.
-func buildDeviceSDP(deviceID, localIP string, mediaPort int, ssrc uint32, transport, sessionType string) string {
+// For TCP transport it emits TCP/RTP/AVP with a=connection:new per
+// GB/T 28181; the setup role mirrors the offer — "active" (the device
+// dials the platform's media port, the setup:passive/actpass offer) or
+// "passive" (the device listens, the setup:active offer — issue #14
+// follow-up).
+func buildDeviceSDP(deviceID, localIP string, mediaPort int, ssrc uint32, transport, sessionType, setupRole string) string {
 	if transport == "tcp" {
+		if setupRole == "" {
+			setupRole = "active"
+		}
 		// TCP/RTP/AVP per GB/T 28181 with $-framing
 		return fmt.Sprintf(`v=0
 o=%s 0 0 IN IP4 %s
@@ -576,12 +586,12 @@ s=%s
 c=IN IP4 %s
 t=0 0
 m=video %d TCP/RTP/AVP 96
-a=setup:active
+a=setup:%s
 a=connection:new
 a=sendonly
 a=rtpmap:96 PS/90000
 y=%d`,
-			deviceID, localIP, sessionType, localIP, mediaPort, ssrc)
+			deviceID, localIP, sessionType, localIP, mediaPort, setupRole, ssrc)
 	}
 	// UDP RTP/AVP (default)
 	return fmt.Sprintf(`v=0
@@ -1257,6 +1267,10 @@ func (s *Server) teardownMediaLocked() {
 		s.mediaTCPConn.Close()
 		s.mediaTCPConn = nil
 	}
+	if s.mediaTCPListener != nil {
+		_ = s.mediaTCPListener.Close()
+		s.mediaTCPListener = nil
+	}
 	s.playbackCtl = nil
 }
 
@@ -1330,24 +1344,21 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	s.teardownMediaLocked()
 	s.mu.Unlock()
 
-	// TCP media where the platform dials the device (a=setup:active in the
-	// offer) is not supported — this device has no media listener. Refuse
-	// with 488 instead of answering a mismatched transport (issue #14).
+	// a=setup:active offer (the platform dials the device): bind a passive
+	// media listener now — its port rides the answer, the media goroutine
+	// accepts the platform's dial before streaming (issue #14 follow-up).
+	var mediaListener *net.TCPListener
 	if mediaTransport == mediaTCPListen {
-		slog.Warn("gb28181: TCP media with setup:active unsupported — 488")
-		reject := SipMessage{
-			StatusCode: 488,
-			Via:        msg.Via,
-			From:       msg.From,
-			To:         msg.To,
-			CallID:     msg.CallID,
-			CSeq:       msg.CSeq,
-			Headers:    make(map[string]string),
+		ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", ":0")
+		if err != nil {
+			slog.Warn("gb28181: failed to bind passive TCP media listener", "error", err)
+			return
 		}
-		if err := s.sendSIP(reject.Serialize(), fromAddr); err != nil {
-			slog.Warn("gb28181: failed to send 488", "error", err)
-		}
-		return
+		mediaListener = ln.(*net.TCPListener)
+		s.mu.Lock()
+		s.mediaTCPListener = mediaListener
+		s.mu.Unlock()
+		slog.Info("gb28181: passive TCP media listener bound", "port", mediaListener.Addr().(*net.TCPAddr).Port)
 	}
 
 	// Bind local media UDP on ephemeral port
@@ -1374,10 +1385,18 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// offered via TCP/RTP/AVP in the SDP regardless of the SIP signaling
 	// transport (issue #14).
 	answerTransport := "udp"
-	if mediaTransport == mediaTCPConnect {
+	if mediaTransport == mediaTCPConnect || mediaTransport == mediaTCPListen {
 		answerTransport = "tcp"
 	}
-	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, localMediaPort, ssrc, answerTransport, sessionType)
+	// The advertised m= port is the passive listener's when the platform
+	// dials us; the setup role mirrors the offer.
+	answerPort := localMediaPort
+	answerSetup := "active"
+	if mediaTransport == mediaTCPListen {
+		answerPort = mediaListener.Addr().(*net.TCPAddr).Port
+		answerSetup = "passive"
+	}
+	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, answerPort, ssrc, answerTransport, sessionType, answerSetup)
 
 	// Send 200 OK with SDP answer
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
@@ -1386,10 +1405,13 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		return
 	}
 
-	// For TCP media (offer said TCP/RTP/AVP with setup:passive/actpass),
-	// actively connect to the platform's media port — the device is the
-	// active side per GB/T 28181 Annex C / RFC 4145 (issue #14).
+	// Resolve the TCP media endpoint: dial the platform's port for
+	// setup:passive/actpass offers (the device is the active side per
+	// GB/T 28181 Annex C / RFC 4145), or hand the passive listener to the
+	// media goroutine for a setup:active offer — it accepts the
+	// platform's dial before streaming.
 	var mediaTCPConn *net.TCPConn
+	var acceptTCP func(context.Context) *net.TCPConn // non-nil only for the passive answer
 	if mediaTransport == mediaTCPConnect {
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", mediaAddr)
 		if err != nil {
@@ -1401,6 +1423,34 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		s.mu.Lock()
 		s.mediaTCPConn = mediaTCPConn
 		s.mu.Unlock()
+	} else if mediaTransport == mediaTCPListen {
+		ln := mediaListener
+		acceptTCP = func(ctx context.Context) *net.TCPConn {
+			acceptCh := make(chan *net.TCPConn, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					errCh <- err
+					return
+				}
+				acceptCh <- conn.(*net.TCPConn)
+			}()
+			select {
+			case conn := <-acceptCh:
+				slog.Info("gb28181: platform connected to passive TCP media port", "local", conn.LocalAddr().String())
+				s.mu.Lock()
+				s.mediaTCPConn = conn
+				s.mu.Unlock()
+				return conn
+			case err := <-errCh:
+				slog.Info("gb28181: passive TCP media accept ended", "error", err)
+				return nil
+			case <-ctx.Done():
+				_ = ln.Close()
+				return nil
+			}
+		}
 	}
 
 	if sessionType != "Play" {
@@ -1438,7 +1488,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: playback media goroutine started", "session", sessionType, "remote", rtpDest.String(), "transport", s.cfg.Transport, "segments", len(playbackSegs))
 		go func() {
 			defer mediaCancel()
-			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
+			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
 		}()
 		return
 	}
@@ -1460,10 +1510,20 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// Spawn goroutine draining AU + PS mux + RTP push
 	go func() {
 		defer mediaCancel()
+		// Passive answer: wait for the platform's dial before streaming;
+		// acceptTCP returns nil on cancellation (the goroutine exits at
+		// the ctx select below).
+		tcpConn := mediaTCPConn
+		if tcpConn == nil && mediaTransport == mediaTCPListen {
+			tcpConn = acceptTCP(mediaCtx)
+			if tcpConn == nil {
+				return
+			}
+		}
 		pusher := NewRtpPusher(mediaConn, rtpDest)
 		pusher.SetMetricsHooks(s.metrics)
-		if mediaTCPConn != nil {
-			pusher.SetTCPConn(mediaTCPConn)
+		if tcpConn != nil {
+			pusher.SetTCPConn(tcpConn)
 		}
 		slog.Info("gb28181: media goroutine started", "remote", rtpDest.String(), "transport", s.cfg.Transport)
 

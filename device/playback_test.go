@@ -193,7 +193,7 @@ func TestBuildDeviceSDP_EchoesSessionType(t *testing.T) {
 		port     = 40000
 		ssrc     = uint32(100000001)
 	)
-	udpPlay := buildDeviceSDP(deviceID, localIP, port, ssrc, "udp", "Play")
+	udpPlay := buildDeviceSDP(deviceID, localIP, port, ssrc, "udp", "Play", "active")
 	wantUDP := `v=0
 o=34020000001320000001 0 0 IN IP4 192.168.1.50
 s=Play
@@ -208,7 +208,7 @@ y=100000001`
 	}
 
 	for _, st := range []string{"Playback", "Download"} {
-		got := buildDeviceSDP(deviceID, localIP, port, ssrc, "udp", st)
+		got := buildDeviceSDP(deviceID, localIP, port, ssrc, "udp", st, "active")
 		if !containsSubstring(got, "s="+st) {
 			t.Errorf("UDP SDP missing s=%s:\n%s", st, got)
 		}
@@ -217,12 +217,12 @@ y=100000001`
 		}
 	}
 
-	tcpPlay := buildDeviceSDP(deviceID, localIP, port, ssrc, "tcp", "Play")
+	tcpPlay := buildDeviceSDP(deviceID, localIP, port, ssrc, "tcp", "Play", "active")
 	if !containsSubstring(tcpPlay, "s=Play") || !containsSubstring(tcpPlay, "TCP/RTP/AVP") {
 		t.Errorf("TCP s=Play SDP malformed:\n%s", tcpPlay)
 	}
 	for _, st := range []string{"Playback", "Download"} {
-		got := buildDeviceSDP(deviceID, localIP, port, ssrc, "tcp", st)
+		got := buildDeviceSDP(deviceID, localIP, port, ssrc, "tcp", st, "active")
 		if !containsSubstring(got, "s="+st) {
 			t.Errorf("TCP SDP missing s=%s:\n%s", st, got)
 		}

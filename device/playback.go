@@ -82,7 +82,16 @@ func (s *Server) sendMediaEnd(end *mediaEndNotify) error {
 	return err
 }
 
-func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify) {
+func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, acceptTCP func(context.Context) *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify) {
+	// Passive answer (a=setup:active offer): wait for the platform's dial
+	// before streaming; acceptTCP returns nil on cancellation.
+	if mediaTCPConn == nil && acceptTCP != nil {
+		if conn := acceptTCP(mediaCtx); conn != nil {
+			mediaTCPConn = conn
+		} else {
+			return
+		}
+	}
 	pusher := NewRtpPusher(mediaConn, rtpDest)
 	pusher.SetMetricsHooks(s.metrics)
 	if mediaTCPConn != nil {
