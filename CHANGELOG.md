@@ -11,6 +11,15 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.13.0] — 2026-10-16
+
+The audio-channel package (#135, MiBeeNvr #962 prerequisite): network
+pickups enroll as audio-only channels (Table E.1 type code 136 — the
+standard's own marker in the channel ID), the platform's live INVITE
+negotiates a lone m=audio line (G.711 A-law, PT 8), the receiver takes
+bare G.711 RTP or PS-muxed audio, and the Annex C audio stream-type
+map completes (G.722.1/G.723.1/G.729).
+
 - `feat(platform)` **audio-only channels — network pickups** (issue
   #135, MiBeeNvr #962 prerequisite): a voice-input channel (Table E.1
   type code 136, digits 11-13 of the 20-digit ID) enrolls like a camera
