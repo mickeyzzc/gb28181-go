@@ -652,6 +652,9 @@ type fakeEnroller struct {
 	// naluWriter, when non-nil, is returned by GB28181NALUWriter (live
 	// InviteChannel tests).
 	naluWriter func(au [][]byte, ptsTicks int64, isIDR bool)
+	// audioWriter, when non-nil, is returned by GB28181AudioWriter
+	// (audio-only channel tests, #135).
+	audioWriter func(codec string, data []byte, cfg []byte, ptsTicks int64, samples int)
 }
 
 func (f *fakeEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
@@ -674,7 +677,7 @@ func (f *fakeEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (str
 
 func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { return f.naluWriter }
 func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
-	return nil
+	return f.audioWriter
 }
 func (f *fakeEnroller) OnGB28181Invite(string) {}
 func (f *fakeEnroller) OnGB28181Bye(string)    {}

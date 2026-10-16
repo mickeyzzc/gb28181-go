@@ -35,9 +35,9 @@ const (
 	streamTypeAAC   = 0x0F // AAC audio stream (ADTS framing)
 	streamTypeG711A = 0x90 // G.711 A-law
 	streamTypeG711U = 0x91 // G.711 μ-law
-	streamTypeG722  = 0x92 // G.722
-	streamTypeG723  = 0x93 // G.723
-	streamTypeG729  = 0x99 // G.729
+	streamTypeG722  = 0x92 // G.722.1 (Annex C.2.4)
+	streamTypeG723  = 0x93 // G.723.1 (Annex C.2.4)
+	streamTypeG729  = 0x99 // G.729 (Annex C.2.4)
 	streamTypeSVACA = 0x9B // SVAC audio
 )
 
@@ -51,7 +51,7 @@ const (
 
 // AudioFrame is one demuxed audio frame from the PS stream.
 type AudioFrame struct {
-	Codec    string // "g711a" | "g711u" | "aac"
+	Codec    string // "g711a" | "g711u" | "aac" | "g7221" | "g7231" | "g729" | "svac"
 	Data     []byte // codec payload (ADTS headers stripped for AAC)
 	Config   []byte // AAC only: AudioSpecificConfig derived from ADTS (nil when payload is raw)
 	PTSTicks int64  // 90kHz, translated into the RTP timestamp domain
@@ -71,6 +71,12 @@ func audioStreamCodec(streamType byte) string {
 		return AudioCodecG711A
 	case streamTypeG711U:
 		return AudioCodecG711U
+	case streamTypeG722:
+		return "g7221"
+	case streamTypeG723:
+		return "g7231"
+	case streamTypeG729:
+		return "g729"
 	case streamTypeAAC:
 		return AudioCodecAAC
 	case streamTypeSVAC2, streamTypeSVACA:
