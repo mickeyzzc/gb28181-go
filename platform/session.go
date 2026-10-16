@@ -217,8 +217,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 	ssrc := manscdp.SSRC(false, sm.serverID, int(sm.ssrcSeq.Add(1)))
 
 	transport := sm.MediaTransport()
-	// Build SDP answer (GB28181 minimal format)
-	sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc)
+	// Build SDP offer (GB28181 minimal format) — audio-only channels get
+	// the lone m=audio form (#135).
+	sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly)
 
 	// Use the provided AU callback (from the recorder) instead of creating
 	// an orphaned hub. When onAU is nil (tests), fall back to a local hub.
@@ -228,6 +229,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 		hub.SetCameraID(channel.ID)
 	}
 	receiver := NewReceiver(channel.ID, hub, sm.portManager)
+	// Audio-only sessions expect bare G.711 RTP (PT 8); PS-muxed audio
+	// still routes through the PS demuxer's audio path.
+	receiver.SetAudioOnly(channel.AudioOnly)
 	sm.mu.Lock()
 	firstRTP := sm.firstRTPHook
 	sm.mu.Unlock()
@@ -294,7 +298,7 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 			sm.sessions[channel.ID] = sess
 			sm.mu.Unlock()
 			slog.Info("gb28181: multicast media session", "group", serverIP, "port", port, "channel", channel.ID)
-			sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc)
+			sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly)
 			return sdpAnswer, nil
 		}
 		addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", serverIP, port))
@@ -334,24 +338,32 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 }
 
 // buildLiveSDP assembles the live-view SDP for the requested transport.
-func buildLiveSDP(serverIP string, port uint16, transport, ssrc string) []byte {
+func buildLiveSDP(serverIP string, port uint16, transport, ssrc string, audioOnly bool) []byte {
+	// Audio-only channels (voice-input devices, Table E.1 type 136) have no
+	// video track: the INVITE negotiates a lone m=audio line with G.711
+	// A-law, PT 8 (issue #135). Devices answer bare RTP G.711 on it; some
+	// still send PS — the receiver tolerates both.
+	media, pt, rtpmap := "video", "96", "96 PS/90000"
+	if audioOnly {
+		media, pt, rtpmap = "audio", "8", "8 PCMA/8000"
+	}
 	var mLine, setup string
 	switch transport {
 	case MediaTCPPassive:
-		mLine = fmt.Sprintf("m=video %d TCP/RTP/AVP 96\r\n", port)
+		mLine = fmt.Sprintf("m=%s %d TCP/RTP/AVP %s\r\n", media, port, pt)
 		setup = "a=setup:passive\r\na=connection:new\r\n"
 	case MediaTCPActive:
 		// Offerer is active: port 9 (discard) — the answerer's 200 OK SDP
 		// carries the address the NVR dials.
-		mLine = "m=video 9 TCP/RTP/AVP 96\r\n"
+		mLine = fmt.Sprintf("m=%s 9 TCP/RTP/AVP %s\r\n", media, pt)
 		setup = "a=setup:active\r\na=connection:new\r\n"
 	default:
-		mLine = fmt.Sprintf("m=video %d RTP/AVP 96\r\n", port)
+		mLine = fmt.Sprintf("m=%s %d RTP/AVP %s\r\n", media, port, pt)
 	}
 	return []byte(fmt.Sprintf(
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n%s"+
-			"a=recvonly\r\na=rtpmap:96 PS/90000\r\n%sy=%s\r\n",
-		serverIP, serverIP, mLine, setup, ssrc,
+			"a=recvonly\r\na=rtpmap:%s\r\n%sy=%s\r\n",
+		serverIP, serverIP, mLine, rtpmap, setup, ssrc,
 	))
 }
 

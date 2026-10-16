@@ -247,6 +247,10 @@ func (m *DeviceManager) RegisterChannel(devID string, ch *Channel) {
 	dev := d.(*Device)
 	ch.DeviceID = devID
 	ch.Device = dev
+	// Table E.1 taxonomy derives from the ID itself — a type-136 channel
+	// (语音输入设备/network pickup) is audio-only by definition (#135).
+	ch.TypeCode = ChannelTypeCode(ch.ID)
+	ch.AudioOnly = ch.TypeCode == ChannelTypeAudioInput
 	dev.channels.Store(ch.ID, ch)
 }
 

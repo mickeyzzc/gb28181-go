@@ -64,6 +64,11 @@ type Receiver struct {
 	es         *ESDemuxer
 	esLatch    atomic.Bool
 	classified atomic.Bool // payload mode decided once per session
+	// audioOnlyHint arms bare-audio mode for voice-input channels (#135):
+	// the first payload that is neither PS nor NAL-shaped is treated as
+	// bare G.711 (PT 8) instead of garbage PS.
+	audioOnlyHint atomic.Bool
+	bareAudio     atomic.Bool
 
 	// OnFirstRTP fires once when the first RTP packet is received — used by
 	// the session layer to confirm a dialog without a matched SIP response
@@ -202,6 +207,43 @@ func (r *Receiver) Running() bool {
 }
 
 // HasReceivedRTP reports whether at least one RTP packet arrived.
+// SetAudioOnly arms bare-audio expectations for voice-input channels
+// (Table E.1 type 136, issue #135): payloads that are neither PS nor
+// NAL-shaped classify as bare G.711 RTP. Call before the first packet.
+func (r *Receiver) SetAudioOnly(v bool) { r.audioOnlyHint.Store(v) }
+
+// AudioOnly reports whether this receiver serves an audio-only session —
+// the keyframe watchdog exempts such sessions (no IDR ever arrives).
+func (r *Receiver) AudioOnly() bool {
+	return r.audioOnlyHint.Load() || r.bareAudio.Load()
+}
+
+// looksLikePSPacket reports whether the payload opens with an MPEG program
+// stream start code (00 00 01 + PS pack/system/map/PES stream id).
+func looksLikePSPacket(p []byte) bool {
+	return len(p) >= 4 && p[0] == 0 && p[1] == 0 && p[2] == 1 && p[3] >= 0xB9
+}
+
+// emitBareAudio delivers one bare G.711 RTP payload as an audio frame.
+// The m=audio clock is 8 kHz and G.711 carries one sample per byte, so the
+// RTP timestamp doubles as the sample count offset.
+func (r *Receiver) emitBareAudio(pkt *rtp.Packet) {
+	codec := "g711a"
+	if pkt.Header.PayloadType == 0 {
+		codec = "g711u"
+	}
+	frame := AudioFrame{
+		Codec:    codec,
+		Data:     pkt.Payload,
+		PTSTicks: int64(pkt.Header.Timestamp),
+		Samples:  len(pkt.Payload),
+	}
+	if r.AudioCallback == nil {
+		return
+	}
+	r.AudioCallback(frame)
+}
+
 func (r *Receiver) HasReceivedRTP() bool {
 	return r.rtpPacketsReceived.Load() > 0
 }
@@ -493,10 +535,25 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// leading bytes) false-positive as ES.
 	if !r.classified.Load() && len(packets[0].Payload) > 0 {
 		r.classified.Store(true)
-		if looksLikeESPacket(packets[0].Payload) {
+		switch {
+		case looksLikeESPacket(packets[0].Payload):
 			r.es = NewESDemuxer()
 			r.esLatch.Store(true)
+		case r.audioOnlyHint.Load() && !looksLikePSPacket(packets[0].Payload):
+			// Audio-only session whose payloads are not PS: bare G.711
+			// RTP (the m=audio-only INVITE form, #135). PS-muxed audio
+			// still falls through to the PS demuxer's audio path.
+			r.bareAudio.Store(true)
 		}
+	}
+	if r.bareAudio.Load() {
+		for _, pkt := range packets {
+			if len(pkt.Payload) == 0 {
+				continue
+			}
+			r.emitBareAudio(pkt)
+		}
+		return
 	}
 	if r.esLatch.Load() {
 		for _, pkt := range packets {

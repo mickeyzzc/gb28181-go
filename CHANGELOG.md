@@ -11,6 +11,20 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(platform)` **audio-only channels — network pickups** (issue
+  #135, MiBeeNvr #962 prerequisite): a voice-input channel (Table E.1
+  type code 136, digits 11-13 of the 20-digit ID) enrolls like a camera
+  channel but carries no video track — the standard's own type code is
+  the marker, no extra catalog field. `ChannelTypeCode`/`IsAudioInputChannel`
+  expose the taxonomy; `RegisterChannel` derives `Channel.TypeCode` and
+  `Channel.AudioOnly` from the ID. The live INVITE for such channels
+  negotiates a lone `m=audio` line (G.711 A-law, PT 8) across UDP and
+  both TCP setups; the receiver classifies non-PS payloads on
+  audio-only sessions as bare G.711 RTP (PT 0 → `g711u` frames) while
+  PS-muxed audio keeps the demuxer path; the keyframe watchdog exempts
+  audio-only sessions (no IDR ever arrives) and the recorder-deferral
+  gate keys on the audio writer instead of the NALU one.
+
 ## [v0.12.0] — 2026-10-14
 
 The transport-parity package, twin of gb28181-rs v0.13.0 — TCP and

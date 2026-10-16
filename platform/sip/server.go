@@ -665,7 +665,13 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 	// catalog-driven INVITE in before camera-manager startup finishes. Defer
 	// instead: the recorder-start auto-INVITE establishes the session (and
 	// recycles any wedged one) once the recorder exists.
-	if cameraID != "" && onAU == nil {
+	// Audio-only channels (#135) bind the audio writer, not the NALU one —
+	// an audio recorder alone is a live consumer.
+	bound := onAU != nil
+	if ch.AudioOnly {
+		bound = onAudio != nil
+	}
+	if cameraID != "" && !bound {
 		return fmt.Errorf("gb28181: recorder for camera %q not running — deferring INVITE for channel %s", cameraID, channelID)
 	}
 
@@ -814,14 +820,22 @@ func (s *Server) watchSession(deviceID, channelID string) {
 		}
 		var why string
 		sincePkt := rcv.SinceLastPacket()
-		sinceIDR, hasIDR := rcv.SinceLastIDR()
+		var sinceIDR time.Duration
 		switch {
 		case sincePkt > streamStaleAfter:
 			why = "stream stalled"
-		case !hasIDR || sinceIDR > idrStaleAfter:
-			why = "no keyframe"
-		default:
+		case rcv.AudioOnly():
+			// Voice-input channels never produce a keyframe — the stall
+			// check above is their only liveness gate (#135).
 			continue
+		default:
+			idrAge, hasIDR := rcv.SinceLastIDR()
+			sinceIDR = idrAge
+			if !hasIDR || idrAge > idrStaleAfter {
+				why = "no keyframe"
+			} else {
+				continue
+			}
 		}
 		slog.Warn("gb28181: recycling stale session",
 			"channel", channelID, "device", deviceID, "reason", why,

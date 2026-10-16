@@ -746,3 +746,24 @@ func TestInviteDownload(t *testing.T) {
 	require.NoError(t, sm.ByePlayback(channel.ID))
 	require.Nil(t, sm.GetPlaybackReceiver(channel.ID))
 }
+
+func TestBuildLiveSDPAudioOnlyForm(t *testing.T) {
+	sdp := string(buildLiveSDP("10.0.0.1", 30000, "udp", "0000000001", true))
+	if !strings.Contains(sdp, "m=audio 30000 RTP/AVP 8") ||
+		!strings.Contains(sdp, "a=rtpmap:8 PCMA/8000") ||
+		strings.Contains(sdp, "m=video") {
+		t.Fatalf("audio-only SDP form wrong:\n%s", sdp)
+	}
+	if !strings.Contains(sdp, "y=0000000001") {
+		t.Fatalf("SSRC line missing:\n%s", sdp)
+	}
+	video := string(buildLiveSDP("10.0.0.1", 30000, "udp", "0000000001", false))
+	if !strings.Contains(video, "m=video 30000 RTP/AVP 96") ||
+		!strings.Contains(video, "a=rtpmap:96 PS/90000") {
+		t.Fatalf("video SDP form regressed:\n%s", video)
+	}
+	tcp := string(buildLiveSDP("10.0.0.1", 30000, MediaTCPPassive, "0000000001", true))
+	if !strings.Contains(tcp, "m=audio 30000 TCP/RTP/AVP 8") {
+		t.Fatalf("audio-only TCP SDP form wrong:\n%s", tcp)
+	}
+}
