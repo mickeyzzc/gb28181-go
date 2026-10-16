@@ -24,6 +24,11 @@ are released out of band.
   PS-muxed audio keeps the demuxer path; the keyframe watchdog exempts
   audio-only sessions (no IDR ever arrives) and the recorder-deferral
   gate keys on the audio writer instead of the NALU one.
+- `feat(platform)` **PS audio stream types complete** (Annex C.2.4): the
+  demuxer's codec map gains G.722.1 (0x92), G.723.1 (0x93) and G.729
+  (0x99) — the three Annex C audio entries that previously demuxed to
+  an unlabeled codec and were dropped. `AudioFrame.Codec` widens to
+  `g7221`/`g7231`/`g729` alongside `g711a`/`g711u`/`aac`/`svac`.
 
 ## [v0.12.0] — 2026-10-14
 

@@ -219,5 +219,16 @@ func TestAudioStreamCodecSVAC(t *testing.T) {
 	// the opaque "svac" passthrough codec.
 	require.Equal(t, "svac", audioStreamCodec(0x81))
 	require.Equal(t, "svac", audioStreamCodec(0x9B))
-	require.Equal(t, "", audioStreamCodec(0x92), "G.722 stays undemuxable")
+}
+
+func TestAudioStreamCodecAnnexCSet(t *testing.T) {
+	// Annex C.2.4 audio stream types — every entry the standard defines
+	// resolves to a labeled codec (unknown types stay "").
+	require.Equal(t, AudioCodecG711A, audioStreamCodec(0x90))
+	require.Equal(t, AudioCodecG711U, audioStreamCodec(0x91))
+	require.Equal(t, "g7221", audioStreamCodec(0x92))
+	require.Equal(t, "g7231", audioStreamCodec(0x93))
+	require.Equal(t, "g729", audioStreamCodec(0x99))
+	require.Equal(t, AudioCodecAAC, audioStreamCodec(0x0F))
+	require.Equal(t, "", audioStreamCodec(0x42), "unknown stream type stays unlabeled")
 }
