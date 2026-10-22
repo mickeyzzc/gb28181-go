@@ -54,6 +54,7 @@ type talkSession struct {
 	uplinkPackets int64
 	uplinkBytes   int64
 	uplinkSSRC    uint32
+	uplinkCB      func(channelID string, payload []byte) // captured from Server.OnTalkUplink at session start
 	lastMetric    time.Time
 }
 
@@ -185,7 +186,8 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 	s.talkMu.Lock()
 	s.talks[channelID] = t
 	s.talkMu.Unlock()
-	go t.uplinkReadLoop(s)
+	t.uplinkCB = s.OnTalkUplink // captured once — the read loop never touches the Server field
+	go t.uplinkReadLoop()
 	slog.Info("gb28181: talk session established",
 		"channel", channelID, "device", deviceID, "target", t.target, "ssrc", ssrcStr)
 	return nil
@@ -291,7 +293,7 @@ func (s *Server) TalkStatusFor(cameraID string) platform.TalkStatus {
 // cadence (wire-verified); nothing consumed it before #141. Malformed or
 // non-PCMA frames are dropped silently so a chatty peer cannot wedge the
 // session.
-func (t *talkSession) uplinkReadLoop(s *Server) {
+func (t *talkSession) uplinkReadLoop() {
 	buf := make([]byte, 1500)
 	for {
 		n, _, err := t.conn.ReadFromUDP(buf)
@@ -311,7 +313,7 @@ func (t *talkSession) uplinkReadLoop(s *Server) {
 		t.uplinkBytes += int64(len(payload))
 		t.uplinkSSRC = ssrc
 		t.mu.Unlock()
-		if cb := s.OnTalkUplink; cb != nil {
+		if cb := t.uplinkCB; cb != nil {
 			cb(t.channelID, append([]byte(nil), payload...))
 		}
 	}

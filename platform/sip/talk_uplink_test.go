@@ -38,13 +38,7 @@ func TestTalkUplinkReceive(t *testing.T) {
 	client := newSIPClient(t, cfg.SIPListen)
 	media := talkMediaSocket(t)
 
-	startTalkDialog(t, srv, dm, client, media)
-
-	srv.talkMu.Lock()
-	ts := srv.talks[fakeChannelID]
-	srv.talkMu.Unlock()
-	require.NotNil(t, ts, "talk session must exist after handshake")
-
+	// Wire before the session starts — StartTalk captures the hook once.
 	var mu sync.Mutex
 	var payloads [][]byte
 	var channels []string
@@ -54,6 +48,13 @@ func TestTalkUplinkReceive(t *testing.T) {
 		channels = append(channels, channelID)
 		payloads = append(payloads, append([]byte(nil), payload...))
 	}
+
+	startTalkDialog(t, srv, dm, client, media)
+
+	srv.talkMu.Lock()
+	ts := srv.talks[fakeChannelID]
+	srv.talkMu.Unlock()
+	require.NotNil(t, ts, "talk session must exist after handshake")
 
 	sendUplinkRTP(t, media, ts, 0x11111111, 1, 0xD5)
 	sendUplinkRTP(t, media, ts, 0x11111111, 2, 0x55)
