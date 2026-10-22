@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"sync"
@@ -799,4 +800,57 @@ func TestReceiverMaxJitterBufferSize(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return auCount.Load() >= 1
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// TestReceiverAudioOnlyQuietStart (#142): an audio-only session whose first
+// payload is A-law silence (0x55…) must classify as bare G.711 — not as an
+// H.264 elementary stream. 0x55 reads as NAL type 21, and the old ordering
+// (looksLikeESPacket first) latched the ES demuxer, so quiet-start sessions
+// emitted nothing at all for their whole lifetime.
+func TestReceiverAudioOnlyQuietStart(t *testing.T) {
+	hub := NewFrameHub()
+	pm := NewPortManager(20020, 20030)
+	rec := NewReceiver("test-mic", hub, pm)
+	rec.SetAudioOnly(true)
+
+	var frames atomic.Int64
+	var codecSeen atomic.Pointer[string]
+	rec.AudioCallback = func(f AudioFrame) {
+		c := f.Codec
+		codecSeen.Store(&c)
+		frames.Add(1)
+	}
+
+	serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	defer serverConn.Close()
+	clientConn, err := net.DialUDP("udp", nil, serverConn.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer clientConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, rec.Start(ctx, serverConn))
+	defer rec.Stop()
+
+	// PT 8 (PCMA): the helper marshals PayloadType 0 → µ-law mapping in
+	// emitBareAudio, so set the header explicitly for the A-law assertion.
+	silence := bytes.Repeat([]byte{0x55}, 160)
+	pktA := &rtp.Packet{Header: rtp.Header{SequenceNumber: 0, Timestamp: 0, Marker: true, PayloadType: 8}, Payload: silence}
+	pktB := &rtp.Packet{Header: rtp.Header{SequenceNumber: 1, Timestamp: 160, Marker: true, PayloadType: 8}, Payload: silence}
+	bufA, err := pktA.Marshal()
+	require.NoError(t, err)
+	bufB, err := pktB.Marshal()
+	require.NoError(t, err)
+	_, err = clientConn.Write(bufA)
+	require.NoError(t, err)
+	_, err = clientConn.Write(bufB)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return frames.Load() >= 2 }, 2*time.Second, 10*time.Millisecond,
+		"bare audio frames must be emitted despite the ES-looking first byte")
+	c := codecSeen.Load()
+	require.NotNil(t, c)
+	require.Equal(t, "g711a", *c)
+	require.Zero(t, rec.Metrics()["au_emitted"], "bare audio never goes through the AU path")
 }

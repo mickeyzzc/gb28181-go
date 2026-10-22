@@ -536,14 +536,19 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	if !r.classified.Load() && len(packets[0].Payload) > 0 {
 		r.classified.Store(true)
 		switch {
-		case looksLikeESPacket(packets[0].Payload):
-			r.es = NewESDemuxer()
-			r.esLatch.Store(true)
 		case r.audioOnlyHint.Load() && !looksLikePSPacket(packets[0].Payload):
 			// Audio-only session whose payloads are not PS: bare G.711
 			// RTP (the m=audio-only INVITE form, #135). PS-muxed audio
 			// still falls through to the PS demuxer's audio path.
+			// The hint MUST outrank looksLikeESPacket: an audio-only
+			// session can never be an elementary VIDEO stream, and A-law
+			// silence 0x55 reads as H.264 NAL type 21 — quiet-start
+			// sessions latched into the ES demuxer and emitted nothing
+			// for their whole lifetime (#142).
 			r.bareAudio.Store(true)
+		case looksLikeESPacket(packets[0].Payload):
+			r.es = NewESDemuxer()
+			r.esLatch.Store(true)
 		}
 	}
 	if r.bareAudio.Load() {
