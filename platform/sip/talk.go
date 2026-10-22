@@ -45,10 +45,16 @@ type talkSession struct {
 
 	dialog *inviteDialog
 
-	closed     bool
-	packets    int64
-	bytesSent  int64
-	lastMetric time.Time
+	closed    bool
+	packets   int64
+	bytesSent int64
+	// Uplink legs of the a=sendrecv offer: devices with talkback upstream
+	// send return PCMA to the advertised port (wire-verified as symmetric
+	// RTP at the send cadence). #141.
+	uplinkPackets int64
+	uplinkBytes   int64
+	uplinkSSRC    uint32
+	lastMetric    time.Time
 }
 
 // StartTalk establishes a voice intercom with a channel: audio-only INVITE
@@ -179,6 +185,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 	s.talkMu.Lock()
 	s.talks[channelID] = t
 	s.talkMu.Unlock()
+	go t.uplinkReadLoop(s)
 	slog.Info("gb28181: talk session established",
 		"channel", channelID, "device", deviceID, "target", t.target, "ssrc", ssrcStr)
 	return nil
@@ -245,10 +252,12 @@ func (s *Server) StopTalk(channelID string) error {
 	t.closed = true
 	conn, dlg := t.conn, t.dialog
 	pk, by := t.packets, t.bytesSent
+	upk, upby := t.uplinkPackets, t.uplinkBytes
 	t.mu.Unlock()
 	conn.Close()
 	slog.Info("gb28181: talk session stopped",
-		"channel", channelID, "packets", pk, "audio_bytes", by)
+		"channel", channelID, "packets", pk, "audio_bytes", by,
+		"uplink_packets", upk, "uplink_audio_bytes", upby)
 	return s.sendByeForTalk(dlg.req, dlg.resp)
 }
 
@@ -262,15 +271,63 @@ func (s *Server) TalkStatusFor(cameraID string) platform.TalkStatus {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			return platform.TalkStatus{
-				Active:    true,
-				CameraID:  t.cameraID,
-				ChannelID: t.channelID,
-				Packets:   t.packets,
-				BytesSent: t.bytesSent,
+				Active:        true,
+				CameraID:      t.cameraID,
+				ChannelID:     t.channelID,
+				Packets:       t.packets,
+				BytesSent:     t.bytesSent,
+				UplinkPackets: t.uplinkPackets,
+				UplinkBytes:   t.uplinkBytes,
+				UplinkSSRC:    t.uplinkSSRC,
 			}
 		}
 	}
 	return platform.TalkStatus{Active: false}
+}
+
+// uplinkReadLoop drains return-audio RTP from the talk socket until it
+// closes (StopTalk / device BYE). Devices with talkback upstream stream
+// PCMA back to the port the offer advertised — symmetric RTP at the send
+// cadence (wire-verified); nothing consumed it before #141. Malformed or
+// non-PCMA frames are dropped silently so a chatty peer cannot wedge the
+// session.
+func (t *talkSession) uplinkReadLoop(s *Server) {
+	buf := make([]byte, 1500)
+	for {
+		n, _, err := t.conn.ReadFromUDP(buf)
+		if err != nil {
+			return // socket closed — the normal teardown path
+		}
+		payload, ssrc, ok := parseTalkUplinkRTP(buf[:n])
+		if !ok {
+			continue
+		}
+		t.mu.Lock()
+		if t.closed {
+			t.mu.Unlock()
+			return
+		}
+		t.uplinkPackets++
+		t.uplinkBytes += int64(len(payload))
+		t.uplinkSSRC = ssrc
+		t.mu.Unlock()
+		if cb := s.OnTalkUplink; cb != nil {
+			cb(t.channelID, append([]byte(nil), payload...))
+		}
+	}
+}
+
+// parseTalkUplinkRTP validates one return-audio packet: plain RTP v2,
+// PT 8 (PCMA), no padding/extension/CSRC — the shape the GB28181 talk
+// profile sends on the wire. Returns the payload and SSRC.
+func parseTalkUplinkRTP(pkt []byte) (payload []byte, ssrc uint32, ok bool) {
+	if len(pkt) < 13 || pkt[0]>>6 != 2 || pkt[0]&0x3F != 0 {
+		return nil, 0, false
+	}
+	if pkt[1]&0x7F != talkRTPPayloadType {
+		return nil, 0, false
+	}
+	return pkt[12:], binary.BigEndian.Uint32(pkt[8:12]), true
 }
 
 // stopTalkOnBye ends a talk session whose BYE arrived from the device

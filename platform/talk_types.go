@@ -5,14 +5,19 @@ package platform
 
 import "time"
 
-// TalkStatus reports an active voice-intercom session's state.
+// TalkStatus reports an active voice-intercom session's state. The
+// Uplink* counters cover the return-audio leg of the sendrecv offer
+// (device mic → platform); they stay zero on sendonly peers.
 type TalkStatus struct {
-	Active    bool   `json:"active"`
-	CameraID  string `json:"camera_id,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
-	Packets   int64  `json:"packets"`
-	BytesSent int64  `json:"bytes_sent"`
-	StartedAt string `json:"started_at,omitempty"`
+	Active        bool   `json:"active"`
+	CameraID      string `json:"camera_id,omitempty"`
+	ChannelID     string `json:"channel_id,omitempty"`
+	Packets       int64  `json:"packets"`
+	BytesSent     int64  `json:"bytes_sent"`
+	UplinkPackets int64  `json:"uplink_packets"`
+	UplinkBytes   int64  `json:"uplink_bytes"`
+	UplinkSSRC    uint32 `json:"uplink_ssrc,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
 }
 
 // GBPosition is one mobile-position report (SUBSCRIBE MobilePosition).

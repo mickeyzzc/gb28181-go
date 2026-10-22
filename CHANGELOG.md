@@ -11,6 +11,15 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(platform)`: voice-intercom uplink receive leg (#141) — the § 9.4
+  sendrecv offer advertises the talk socket and upstream-capable devices
+  stream return PCMA to it; a per-session read loop now drains the socket
+  (plain RTP/PCMA validation, SSRC changes tolerated, garbage dropped
+  silently), payloads surface via `Server.OnTalkUplink` (fresh copies,
+  non-blocking callback), and `TalkStatus` grows `uplink_packets` /
+  `uplink_bytes` / `uplink_ssrc` so integrators can prove the return leg
+  without wiring a callback. Full-duplex intercom panels build on this.
+
 ## [v0.13.0] — 2026-10-16
 
 The audio-channel package (#135, MiBeeNvr #962 prerequisite): network
