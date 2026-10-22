@@ -135,6 +135,11 @@ type Server struct {
 	onInvite    func(deviceID, channelID string) // Hook for SessionManager
 	onBye       func(deviceID, channelID string) // Hook for SessionManager
 	camEnroller CameraEnroller                   // Auto-create camera on first REGISTER
+	// OnTalkUplink, when non-nil, receives the G.711A payload of every
+	// validated return-audio RTP packet on an active voice intercom — the
+	// sendrecv uplink leg. Wire before serving (read lock-free, like
+	// onInvite); the payload is a fresh copy, the callback must not block.
+	OnTalkUplink func(channelID string, payload []byte)
 
 	dialogs map[string]*inviteDialog // channelID -> active INVITE dialog
 
