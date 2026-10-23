@@ -97,6 +97,19 @@ type Receiver struct {
 	ptsClock           atomic.Int64 // last emitted PTS (90kHz)
 	lastIDRUnix        atomic.Int64 // last IDR AU time (unix nano)
 	lastPktUnix        atomic.Int64 // last received RTP packet time (unix nano)
+	// Emission observability (#142 follow-up): produced-output counters and
+	// the last-production clock. audioEmitted counts demuxed audio frames
+	// from BOTH the bare-G.711 and the PS paths (au_emitted above only ever
+	// counted the PS/ES AU path — a bare-audio session legitimately read 0,
+	// which misdirected field forensics). lastEmissionUnix is seeded by the
+	// first packet so a session that never produces anything is
+	// stall-detectable, not invisible.
+	audioEmitted     atomic.Int64
+	lastEmissionUnix atomic.Int64
+
+	// Payload classification ("ps" | "es" | "bare-audio"), decided once per
+	// session from the first drained payload; "" until then.
+	classification atomic.Value
 
 	// SSRC isolation: the first received packet's SSRC is latched as this
 	// dialog's source; packets from any other SSRC are dropped. A recycled
@@ -188,7 +201,9 @@ func (r *Receiver) Stop() error {
 		"packets_dropped", r.rtpPacketsDropped.Load(),
 		"gap_skipped_packets", r.gapSkippedPackets(),
 		"foreign_ssrc_dropped", r.foreignDrops.Load(),
-		"au_emitted", r.auEmitted.Load())
+		"au_emitted", r.auEmitted.Load(),
+		"audio_frames_emitted", r.audioEmitted.Load(),
+		"classification", r.Classification())
 	return nil
 }
 
@@ -238,6 +253,8 @@ func (r *Receiver) emitBareAudio(pkt *rtp.Packet) {
 		PTSTicks: int64(pkt.Header.Timestamp),
 		Samples:  len(pkt.Payload),
 	}
+	r.audioEmitted.Add(1)
+	r.lastEmissionUnix.Store(time.Now().UnixNano())
 	if r.AudioCallback == nil {
 		return
 	}
@@ -268,6 +285,40 @@ func (r *Receiver) SinceLastIDR() (time.Duration, bool) {
 		return 0, false
 	}
 	return time.Since(time.Unix(0, ns)), true
+}
+
+// SinceLastEmission returns how long ago the last AU or audio frame was
+// produced (0 when nothing has been produced yet).
+func (r *Receiver) SinceLastEmission() time.Duration {
+	ns := r.lastEmissionUnix.Load()
+	if ns == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, ns))
+}
+
+// Classification returns the once-per-session payload classification:
+// "ps", "es", or "bare-audio" — "" before the first payload was drained.
+func (r *Receiver) Classification() string {
+	if v, ok := r.classification.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// Stalled reports the wedged-demuxer signature (#142): RTP is still
+// arriving, but nothing has been produced for longer than stallFor. A
+// session without recent traffic is never stalled (that is a stopped
+// source — the session layer's own concern), and a session that never
+// received RTP is not stalled either.
+func (r *Receiver) Stalled(stallFor time.Duration) bool {
+	if !r.running.Load() || r.rtpPacketsReceived.Load() == 0 {
+		return false
+	}
+	if r.SinceLastPacket() > stallFor {
+		return false
+	}
+	return r.SinceLastEmission() > stallFor
 }
 
 // readLoop reads RTP packets from the network, reassembles access units,
@@ -308,8 +359,14 @@ func (r *Receiver) readLoop(ctx context.Context) {
 
 		r.rtpPacketsReceived.Add(1)
 		r.lastPktUnix.Store(time.Now().UnixNano())
-		if r.rtpPacketsReceived.Load() == 1 && r.OnFirstRTP != nil {
-			r.OnFirstRTP()
+		if r.rtpPacketsReceived.Load() == 1 {
+			// Seed the emission clock: a wedged demuxer that never produces
+			// anything must still age out (Stalled), not read "never
+			// emitted" forever.
+			r.lastEmissionUnix.Store(time.Now().UnixNano())
+			if r.OnFirstRTP != nil {
+				r.OnFirstRTP()
+			}
 		}
 
 		// Parse RTP packet. pion/rtp aliases buf — the payload slice points
@@ -535,6 +592,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// leading bytes) false-positive as ES.
 	if !r.classified.Load() && len(packets[0].Payload) > 0 {
 		r.classified.Store(true)
+		classification := "ps"
 		switch {
 		case r.audioOnlyHint.Load() && !looksLikePSPacket(packets[0].Payload):
 			// Audio-only session whose payloads are not PS: bare G.711
@@ -546,10 +604,15 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			// sessions latched into the ES demuxer and emitted nothing
 			// for their whole lifetime (#142).
 			r.bareAudio.Store(true)
+			classification = "bare-audio"
 		case looksLikeESPacket(packets[0].Payload):
 			r.es = NewESDemuxer()
 			r.esLatch.Store(true)
+			classification = "es"
 		}
+		r.classification.Store(classification)
+		logger().Info("gb28181: RTP payload classified",
+			"camera_id", r.cameraID, "mode", classification)
 	}
 	if r.bareAudio.Load() {
 		for _, pkt := range packets {
@@ -629,6 +692,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 // registered callbacks. Must be called with jitterBufferMu held.
 func (r *Receiver) emitAULocked(au [][]byte, ptsTicks int64) {
 	r.auEmitted.Add(1)
+	r.lastEmissionUnix.Store(time.Now().UnixNano())
 
 	// Detect IDR frame
 	isH265 := r.Codec() == "h265"
@@ -657,11 +721,15 @@ func (r *Receiver) emitAULocked(au [][]byte, ptsTicks int64) {
 // called with jitterBufferMu held (audio demux state lives under the same
 // lock as video reassembly).
 func (r *Receiver) dispatchAudioLocked() {
-	if r.AudioCallback == nil {
-		r.demuxer.DrainAudio() // discard — no consumer
-		return
+	frames := r.demuxer.DrainAudio()
+	if len(frames) > 0 {
+		r.audioEmitted.Add(int64(len(frames)))
+		r.lastEmissionUnix.Store(time.Now().UnixNano())
 	}
-	for _, frame := range r.demuxer.DrainAudio() {
+	if r.AudioCallback == nil {
+		return // frames already drained and counted as production
+	}
+	for _, frame := range frames {
 		r.AudioCallback(frame)
 	}
 }
@@ -725,10 +793,11 @@ func (r *Receiver) flushJitterBuffer() {
 // Metrics returns receiver metrics.
 func (r *Receiver) Metrics() map[string]int64 {
 	return map[string]int64{
-		"packets_received":    r.rtpPacketsReceived.Load(),
-		"packets_dropped":     r.rtpPacketsDropped.Load(),
-		"gap_skipped_packets": int64(r.gapSkippedPackets()),
-		"au_emitted":          r.auEmitted.Load(),
+		"packets_received":     r.rtpPacketsReceived.Load(),
+		"packets_dropped":      r.rtpPacketsDropped.Load(),
+		"gap_skipped_packets":  int64(r.gapSkippedPackets()),
+		"au_emitted":           r.auEmitted.Load(),
+		"audio_frames_emitted": r.audioEmitted.Load(),
 	}
 }
 
