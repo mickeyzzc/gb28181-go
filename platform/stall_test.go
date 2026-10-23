@@ -12,13 +12,18 @@ import (
 )
 
 // startUDPReceiver spins a receiver over a local UDP pair and returns the
-// client side plus a stop func.
-func startUDPReceiver(t *testing.T, cameraID string, audioOnly bool) (*Receiver, net.Conn) {
+// client side. onAudio (optional) installs the AudioCallback BEFORE Start —
+// the field is read on the receiver goroutine and must not be assigned
+// after the read loop is live (CI -race contract).
+func startUDPReceiver(t *testing.T, cameraID string, audioOnly bool, onAudio func(AudioFrame)) (*Receiver, net.Conn) {
 	t.Helper()
 	hub := NewFrameHub()
 	pm := NewPortManager(20100, 20110)
 	rec := NewReceiver(cameraID, hub, pm)
 	rec.SetAudioOnly(audioOnly)
+	if onAudio != nil {
+		rec.AudioCallback = onAudio
+	}
 
 	serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	require.NoError(t, err)
@@ -75,21 +80,21 @@ func feedLoop(t *testing.T, conn net.Conn, payload []byte, pt uint8, interval ti
 func TestReceiverStalledSignature(t *testing.T) {
 	stallFor := 250 * time.Millisecond
 
-	stalled, c1 := startUDPReceiver(t, "cam-stalled", false)
+	stalled, c1 := startUDPReceiver(t, "cam-stalled", false, nil)
 	// 9-byte fragment: PS pack start code but shorter than the 14-byte pack
 	// header — the PS demuxer buffers it forever, emitting nothing.
 	frag := []byte{0x00, 0x00, 0x01, 0xBA, 0, 0, 0, 0, 0}
 	feedLoop(t, c1, frag, 96, 10*time.Millisecond)
 
-	healthy, c2 := startUDPReceiver(t, "cam-healthy", true)
+	var emitted atomic.Int64
+	healthy, c2 := startUDPReceiver(t, "cam-healthy", true, func(AudioFrame) { emitted.Add(1) })
 	silence := make([]byte, 160)
 	for i := range silence {
 		silence[i] = 0x55
 	}
 	feedLoop(t, c2, silence, 8, 10*time.Millisecond)
 
-	var emitted atomic.Int64
-	healthy.AudioCallback = func(AudioFrame) { emitted.Add(1) }
+	// (emitted counter + callback installed pre-Start inside startUDPReceiver)
 
 	require.Eventually(t, func() bool {
 		return stalled.Metrics()["packets_received"] > 20
@@ -121,17 +126,16 @@ func TestSessionStallWatchdog(t *testing.T) {
 	sm.SetByeSender(func(string) error { byes.Add(1); return nil })
 
 	// Wedged receiver: incomplete PS fragments, never emitting.
-	rcv, client := startUDPReceiver(t, "cam-wedged", false)
+	rcv, client := startUDPReceiver(t, "cam-wedged", false, nil)
 	frag := []byte{0x00, 0x00, 0x01, 0xBA, 0, 0, 0, 0, 0}
 	feedLoop(t, client, frag, 96, 10*time.Millisecond)
 
 	// Healthy receiver: bare audio emitting normally.
-	healthy, client2 := startUDPReceiver(t, "cam-fine", true)
+	healthy, client2 := startUDPReceiver(t, "cam-fine", true, func(AudioFrame) {})
 	silence := make([]byte, 160)
 	for i := range silence {
 		silence[i] = 0x55
 	}
-	healthy.AudioCallback = func(AudioFrame) {}
 	feedLoop(t, client2, silence, 8, 10*time.Millisecond)
 
 	p1, err := pm.Get()
