@@ -92,6 +92,19 @@ type SessionManager struct {
 	// receiver gets its first RTP packet — evidence the dialog works even
 	// without a transaction-matched 200 OK.
 	firstRTPHook func(channelID string)
+
+	// Stall watchdog (#142 follow-up): a receiver whose RTP keeps arriving
+	// while its demuxer produces nothing is wedged (the misclassification
+	// family — and any future demuxer regression of the same shape). The
+	// supervisor recycles such sessions (SIP BYE + teardown) so the device's
+	// next re-REGISTER triggers the regular auto-INVITE with a fresh
+	// receiver, instead of the stall persisting for the session's whole
+	// lifetime. Disabled until SetStallWatchdog arms it.
+	stallInterval  time.Duration
+	stallThreshold time.Duration
+	onStallRecycle func(channelID string)
+	stallStop      chan struct{}
+	stallRecycles  atomic.Int64
 }
 
 // NewSessionManager creates a SessionManager.
@@ -727,6 +740,142 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 }
 
 // GetReceiver returns the receiver for the given channelID, or nil if no active session.
+// SetStallWatchdog arms (or re-parameterizes — later calls just update the
+// values, so config reloads are safe) the stall supervisor: every
+// checkEvery, live sessions whose RTP is still arriving but whose receiver
+// produced no AU or audio frame for longer than stallFor are recycled —
+// SIP BYE first (same ordering contract as Invite's idempotency recycle),
+// then teardown, then the optional onRecycle hook (wire it to an immediate
+// re-INVITE; without it, the device's next re-REGISTER re-invites). Both
+// durations must be positive; the call is a no-op otherwise.
+func (sm *SessionManager) SetStallWatchdog(checkEvery, stallFor time.Duration, onRecycle func(channelID string)) {
+	if checkEvery <= 0 || stallFor <= 0 {
+		return
+	}
+	sm.mu.Lock()
+	sm.stallInterval = checkEvery
+	sm.stallThreshold = stallFor
+	sm.onStallRecycle = onRecycle
+	stop := sm.stallStop
+	if stop != nil {
+		sm.mu.Unlock()
+		return // already armed
+	}
+	stop = make(chan struct{})
+	sm.stallStop = stop
+	sm.mu.Unlock()
+	go sm.stallLoop(stop)
+}
+
+func (sm *SessionManager) stallLoop(stop <-chan struct{}) {
+	for {
+		sm.mu.Lock()
+		interval := sm.stallInterval
+		sm.mu.Unlock()
+		if interval <= 0 {
+			interval = time.Minute // re-parameterize race guard
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(interval):
+			sm.recycleStalled()
+		}
+	}
+}
+
+// recycleStalled implements one watchdog pass. The map entries are removed
+// under the lock BEFORE the BYE/teardown so a concurrent Invite cannot
+// interleave with a half-torn-down session (mirrors Invite's own recycle
+// ordering).
+func (sm *SessionManager) recycleStalled() {
+	sm.mu.Lock()
+	threshold := sm.stallThreshold
+	var ids []string
+	var sesss []*session
+	for id, sess := range sm.sessions {
+		if sess.receiver != nil && sess.receiver.Stalled(threshold) {
+			ids = append(ids, id)
+			sesss = append(sesss, sess)
+		}
+	}
+	if len(ids) == 0 {
+		sm.mu.Unlock()
+		return
+	}
+	for _, id := range ids {
+		delete(sm.sessions, id)
+	}
+	sender := sm.byeSender
+	onRecycle := sm.onStallRecycle
+	sm.mu.Unlock()
+
+	for i, id := range ids {
+		rcv := sesss[i].receiver
+		m := rcv.Metrics()
+		slog.Warn("gb28181: stall watchdog recycling session — RTP arriving but nothing emitted",
+			"channel_id", id,
+			"classification", rcv.Classification(),
+			"packets_received", m["packets_received"],
+			"audio_frames_emitted", m["audio_frames_emitted"],
+			"au_emitted", m["au_emitted"],
+			"silent_for", rcv.SinceLastEmission().Round(time.Second))
+		sm.stallRecycles.Add(1)
+		if sender != nil {
+			if err := sender(id); err != nil {
+				slog.Warn("gb28181: SIP BYE for stalled session failed", "channel_id", id, "error", err)
+			}
+		}
+		// resetStatus=true: the channel returns to idle so the next
+		// re-REGISTER's auto-INVITE sees a free channel.
+		sm.teardown(sesss[i], true)
+		if onRecycle != nil {
+			onRecycle(id)
+		}
+	}
+}
+
+// StallRecycles returns how many sessions the watchdog has recycled.
+func (sm *SessionManager) StallRecycles() int64 {
+	return sm.stallRecycles.Load()
+}
+
+// SessionStatus is the observability snapshot of one live session: what the
+// receiver classified the payload as, what it produced, and whether the
+// armed stall watchdog considers it wedged.
+type SessionStatus struct {
+	ChannelID       string `json:"channel_id"`
+	Classification  string `json:"classification"`
+	PacketsReceived int64  `json:"packets_received"`
+	AUEmitted       int64  `json:"au_emitted"`
+	AudioFrames     int64  `json:"audio_frames_emitted"`
+	Stalled         bool   `json:"stalled"`
+}
+
+// Statuses snapshots every live session for observability surfaces
+// (/api/streams). Stalled is evaluated against the armed threshold and is
+// always false when the watchdog is not armed.
+func (sm *SessionManager) Statuses() []SessionStatus {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	out := make([]SessionStatus, 0, len(sm.sessions))
+	for id, sess := range sm.sessions {
+		if sess.receiver == nil {
+			continue
+		}
+		m := sess.receiver.Metrics()
+		out = append(out, SessionStatus{
+			ChannelID:       id,
+			Classification:  sess.receiver.Classification(),
+			PacketsReceived: m["packets_received"],
+			AUEmitted:       m["au_emitted"],
+			AudioFrames:     m["audio_frames_emitted"],
+			Stalled:         sm.stallThreshold > 0 && sess.receiver.Stalled(sm.stallThreshold),
+		})
+	}
+	return out
+}
+
 func (sm *SessionManager) GetReceiver(channelID string) *Receiver {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -809,6 +958,10 @@ func (sm *SessionManager) StopAll() {
 	}
 	sm.sessions = make(map[string]*session)
 	sm.playbackSessions = make(map[string]*session)
+	if sm.stallStop != nil {
+		close(sm.stallStop)
+		sm.stallStop = nil
+	}
 	sm.mu.Unlock()
 
 	for channelID, sess := range sessions {
