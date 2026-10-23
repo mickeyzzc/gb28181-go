@@ -77,7 +77,7 @@ func FuzzParseChallenge(f *testing.F) {
 }
 
 func FuzzParseSDP(f *testing.F) {
-	f.Add("v=0\r\no=34020000001320000002 0 0 IN IP4 192.168.1.100\r\ns=Play\r\nc=IN IP4 192.168.63.30\r\nt=0 0\r\nm=audio 30000 RTP/AVP 8\r\ny=200006001\r\n")
+	f.Add("v=0\r\no=34020000001320000002 0 0 IN IP4 192.168.1.100\r\ns=Play\r\nc=IN IP4 192.168.1.30\r\nt=0 0\r\nm=audio 30000 RTP/AVP 8\r\ny=200006001\r\n")
 	f.Add("v=0\r\no=1 0 0 IN IP4 10.0.0.1\r\ns=Playback\r\nt=1695000000 1695003600\r\nm=video 0 RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 H264/90000\r\n")
 	f.Add("not sdp at all")
 	f.Add("")

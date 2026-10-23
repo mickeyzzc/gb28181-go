@@ -43,7 +43,7 @@ func upgradeMessage(callID string) device.SipMessage {
 	body := "<Control><CmdType>DeviceControl</CmdType><SN>21</SN>" +
 		"<DeviceID>34020000001320000001</DeviceID>" +
 		"<DeviceUpgrade><Firmware>v1.0.0</Firmware>" +
-		"<FileURL>http://192.168.63.30/firmware.bin</FileURL>" +
+		"<FileURL>http://192.168.1.30/firmware.bin</FileURL>" +
 		"<Manufacturer>MiBee</Manufacturer>" +
 		"<SessionID>" + upgradeSession + "</SessionID></DeviceUpgrade></Control>"
 	return device.SipMessage{
@@ -87,7 +87,7 @@ func TestDeviceUpgradeExecutesAndNotifiesResult(t *testing.T) {
 
 	upg.mu.Lock()
 	defer upg.mu.Unlock()
-	if upg.cmd == nil || upg.cmd.FileURL != "http://192.168.63.30/firmware.bin" ||
+	if upg.cmd == nil || upg.cmd.FileURL != "http://192.168.1.30/firmware.bin" ||
 		upg.cmd.Firmware != "v1.0.0" || upg.cmd.Manufacturer != "MiBee" ||
 		upg.cmd.SessionID != upgradeSession {
 		t.Fatalf("upgrader saw %+v", upg.cmd)

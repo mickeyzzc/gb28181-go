@@ -195,11 +195,11 @@ func TestTCPSubscriptionNotifyRidesConnection(t *testing.T) {
 	var got []byte
 	n.deviceID.Store(ptrStr("34020000001320000001"))
 	n.domain.Store(ptrStr("3402000000"))
-	n.localIP.Store(ptrStr("192.168.62.104"))
+	n.localIP.Store(ptrStr("192.168.1.104"))
 	port := uint16(5060)
 	n.localPort.Store(&port)
 
-	tcpPeer := &net.TCPAddr{IP: net.ParseIP("192.168.63.30"), Port: 5060}
+	tcpPeer := &net.TCPAddr{IP: net.ParseIP("192.168.1.30"), Port: 5060}
 	ready := make(chan struct{}, 4)
 	n.BindTCP(func(data []byte, addr *net.TCPAddr) error {
 		if addr.String() != tcpPeer.String() {

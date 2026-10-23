@@ -11,7 +11,7 @@ import (
 func validDeviceConfig() Config {
 	return Config{
 		Enabled:               true,
-		PlatformSIPAddress:    "192.168.63.30",
+		PlatformSIPAddress:    "192.168.1.30",
 		PlatformSIPPort:       5060,
 		DeviceID:              "34020000001320000002",
 		ChannelID:             "34020000001320000002",

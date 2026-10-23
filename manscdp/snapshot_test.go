@@ -23,7 +23,7 @@ func TestDeviceConfigSnapShotConfigGolden(t *testing.T) {
 		SnapShotConfig: &SnapShotCmd{
 			SnapNum:   3,
 			Interval:  2,
-			UploadURL: "http://192.168.63.30:9090/api/gb28181/snapshot/upload",
+			UploadURL: "http://192.168.1.30:9090/api/gb28181/snapshot/upload",
 			SessionID: goldenSessionID,
 		},
 	}
@@ -33,7 +33,7 @@ func TestDeviceConfigSnapShotConfigGolden(t *testing.T) {
 	}
 	want := "<Control><CmdType>DeviceConfig</CmdType><SN>17</SN><DeviceID>34020000001320000001</DeviceID>" +
 		"<SnapShotConfig><SnapNum>3</SnapNum><Interval>2</Interval>" +
-		"<UploadURL>http://192.168.63.30:9090/api/gb28181/snapshot/upload</UploadURL>" +
+		"<UploadURL>http://192.168.1.30:9090/api/gb28181/snapshot/upload</UploadURL>" +
 		"<SessionID>" + goldenSessionID + "</SessionID></SnapShotConfig></Control>"
 	if string(out) != want {
 		t.Fatalf("config XML mismatch:\n got: %s\nwant: %s", out, want)

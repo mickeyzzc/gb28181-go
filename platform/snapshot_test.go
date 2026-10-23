@@ -14,7 +14,7 @@ func TestSendSnapShotCmd(t *testing.T) {
 	err := c.SendSnapShotCmd("34020000001320000001", manscdp.SnapShotCmd{
 		SnapNum:   3,
 		Interval:  2,
-		UploadURL: "http://192.168.63.30:9090/api/gb28181/snapshot/upload",
+		UploadURL: "http://192.168.1.30:9090/api/gb28181/snapshot/upload",
 		SessionID: "0123456789abcdef0123456789abcdef",
 	})
 	require.NoError(t, err)
@@ -22,7 +22,7 @@ func TestSendSnapShotCmd(t *testing.T) {
 	// root, CmdType=DeviceConfig, <SnapShotConfig> payload (issue #107).
 	require.Contains(t, sender.body, "<CmdType>DeviceConfig</CmdType>")
 	require.Contains(t, sender.body, "<SnapShotConfig><SnapNum>3</SnapNum><Interval>2</Interval>")
-	require.Contains(t, sender.body, "<UploadURL>http://192.168.63.30:9090/api/gb28181/snapshot/upload</UploadURL>")
+	require.Contains(t, sender.body, "<UploadURL>http://192.168.1.30:9090/api/gb28181/snapshot/upload</UploadURL>")
 
 	// Offline and missing channels behave like every other control.
 	require.ErrorIs(t, c.SendSnapShotCmd("34020000001329999999", manscdp.SnapShotCmd{SnapNum: 1}), ErrChannelNotFound)
@@ -44,12 +44,12 @@ func TestSend2022ClosureControls(t *testing.T) {
 
 	require.NoError(t, c.SendDeviceUpgradeCmd("34020000001320000001", manscdp.DeviceUpgradeCmd{
 		Firmware:     "v1.0.0",
-		FileURL:      "http://192.168.63.30/fw.bin",
+		FileURL:      "http://192.168.1.30/fw.bin",
 		Manufacturer: "MiBee",
 		SessionID:    "0123456789abcdef0123456789abcdef",
 	}))
 	require.Contains(t, sender.body, "<DeviceUpgrade><Firmware>v1.0.0</Firmware>")
-	require.Contains(t, sender.body, "<FileURL>http://192.168.63.30/fw.bin</FileURL>")
+	require.Contains(t, sender.body, "<FileURL>http://192.168.1.30/fw.bin</FileURL>")
 	require.Contains(t, sender.body, "<SessionID>0123456789abcdef0123456789abcdef</SessionID>")
 
 	require.NoError(t, c.SendFormatSDCardCmd("34020000001320000001", 0))

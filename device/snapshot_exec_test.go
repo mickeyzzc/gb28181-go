@@ -24,7 +24,7 @@ import (
 
 const (
 	snapSessionID = "0123456789abcdef0123456789abcdef"
-	snapUploadURL = "http://192.168.63.30:9090/api/gb28181/snapshot/upload?session=0123456789abcdef0123456789abcdef"
+	snapUploadURL = "http://192.168.1.30:9090/api/gb28181/snapshot/upload?session=0123456789abcdef0123456789abcdef"
 )
 
 // snapStubAuth accepts the REGISTER flow silently.
