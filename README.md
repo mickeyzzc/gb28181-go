@@ -116,22 +116,31 @@ source of truth for library manuals, bilingual:
 
 Manual changes go there by PR (review flow in the hub repo's GOVERNANCE).
 [`docs/README.md`](docs/README.md) keeps the redirect.
-## Examples
+## Interop CLI
 
-Runnable examples under [`examples/`](examples/) — each is a `main` package you can `go run`:
+[`cmd/gb28181`](cmd/gb28181) is a single interop CLI — one binary,
+three subcommands — and each subcommand file doubles as the runnable
+integration sample for its half of the library:
 
-| Example | Role | Shows |
+| Subcommand | Role | Shows |
 |---|---|---|
-| [`device-register`](examples/device-register/main.go) | Device (UAC) | SIP registration, keepalive, catalog answers, synthetic frames through `device.FrameHub`, INVITE-driven streaming |
-| [`platform-uas`](examples/platform-uas/main.go) | Platform (UAS) | SIP server with digest auth, in-memory `DeviceStore` seam, alarm `EventBus` subscription, INVITE/ByeChannel flow |
-| [`psmux-rtp`](examples/psmux-rtp/main.go) | Media path | H.264 Annex-B → MPEG-PS → RTP packetization to a UDP receiver |
+| [`device-register`](cmd/gb28181/device_register.go) | Device (UAC) | SIP registration, keepalive, catalog answers, synthetic frames through `device.FrameHub`, INVITE-driven streaming |
+| [`platform-uas`](cmd/gb28181/platform_uas.go) | Platform (UAS) | SIP server with digest auth, in-memory `DeviceStore` seam, alarm `EventBus` subscription, INVITE/ByeChannel flow |
+| [`psmux-rtp`](cmd/gb28181/psmux_rtp.go) | Media path | H.264 Annex-B → MPEG-PS → RTP packetization to a UDP receiver |
 
-The three examples double as interop tools and ship as prebuilt,
-zero-dependency bundles on
-[every release](https://github.com/mickeyzzc/gb28181-go/releases)
-(`gb28181-go-tools_<os>_<arch>.tar.gz` / `.zip` + `SHA256SUMS`, seven
-platforms) — a device-side emulator, a minimal platform UAS, and a
-media-path self-check. Per-tool manuals with scenarios live in the
+Everything is flag-driven (the old prebuilt examples hardcoded their
+configuration, which made the shipped binaries unusable):
+
+```sh
+gb28181 device-register -platform 192.168.1.10:5060 -password secret -transport tcp
+gb28181 platform-uas -listen :5060 -password secret
+gb28181 psmux-rtp
+```
+
+Every [release](https://github.com/mickeyzzc/gb28181-go/releases)
+ships the CLI as a prebuilt, zero-dependency bundle
+(`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` + `SHA256SUMS`, seven
+platforms). Per-subcommand manuals with scenarios live in the
 documentation hub (see [Documentation](#documentation)).
 
 ## Development

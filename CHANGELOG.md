@@ -11,6 +11,41 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.14.0] — 2026-10-24
+
+The unified-CLI package: the release tools become one flag-driven
+binary (`cmd/gb28181`), plus the platform-side audio follow-ons and
+transport/watchdog fixes that accumulated since v0.13.0.
+
+- **BREAKING-packaging**: the release tools are now **one binary** —
+  `cmd/gb28181` with the subcommands `device-register` / `platform-uas`
+  / `psmux-rtp`. The three prebuilt `examples/` binaries hard-coded
+  their configuration in source, so the shipped binaries could not be
+  pointed at anything without a recompile; every subcommand is
+  flag-driven now (`-platform`, `-device-id`, `-password`,
+  `-transport`, …). Release bundles change from
+  `gb28181-go-tools_<os>_<arch>` (three binaries inside) to a single
+  `gb28181-cli_<os>_<arch>` archive per platform. `examples/` is gone —
+  the subcommand files are the runnable integration samples.
+- `feat(platform)` **emission watchdog + session stall supervisor +
+  classification observability** (#144): `audio_frames_emitted` counts
+  both demux paths, per-session `Classification()` and
+  `SinceLastEmission()` answer "why is nothing produced", and
+  `SessionManager.SetStallWatchdog` recycles wedged sessions (BYE
+  first, teardown, optional immediate re-INVITE hook). Closes the
+  "six hours of misclassification went unnoticed" class from the
+  2026-10-23 pickup incident.
+- `fix(platform)` **bare G.711 classification wins over the ES
+  heuristic** (#143): on audio-only sessions the first-packet
+  classifier now tries the bare-G.711 hint before the H.264 ES
+  heuristic — a quiet A-law start (0x55 bytes reading as NAL-21) no
+  longer feeds the whole session into the ES demuxer with zero output.
+- `fix(platform)` **platform-initiated requests ride the device's
+  REGISTER transport** (#145): a TCP-registered device now receives
+  INVITE/BYE/MESSAGE/SUBSCRIBE over its pooled TCP connection
+  (`;transport=tcp` recipients; observed fix for Hikvision TCP-mode
+  INVITEs dying unanswered, MiBeeNvr #1058) — talk/playback/subscribe
+  recipients previously carried no transport param at all.
 - `feat(platform)`: voice-intercom uplink receive leg (#141) — the § 9.4
   sendrecv offer advertises the talk socket and upstream-capable devices
   stream return PCMA to it; a per-session read loop now drains the socket
