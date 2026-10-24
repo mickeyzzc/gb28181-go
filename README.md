@@ -109,13 +109,11 @@ The 2022 image-snapshot command rides the device-config channel (issue #107: a `
 
 ## Documentation
 
-Topic guides now live in the MiBee documentation hub — the single
-source of truth for library manuals, bilingual:
-
-> **https://www.mlsbs.top/docs/mibeelibs**
-
-Manual changes go there by PR (review flow in the hub repo's GOVERNANCE).
-[`docs/README.md`](docs/README.md) keeps the redirect.
+Topic guides live **in this repository**, bilingual:
+[`docs/README.md`](docs/README.md) is the index (`docs/en-US/` and
+`docs/zh-CN/` hold the pages — quickstart, architecture, protocol
+concepts, CLI manuals, testing). Fixes and new pages land
+here by PR.
 ## Interop CLI
 
 [`cmd/gb28181`](cmd/gb28181) is a single interop CLI — one binary,
@@ -140,8 +138,8 @@ gb28181 psmux-rtp
 Every [release](https://github.com/mickeyzzc/gb28181-go/releases)
 ships the CLI as a prebuilt, zero-dependency bundle
 (`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` + `SHA256SUMS`, seven
-platforms). Per-subcommand manuals with scenarios live in the
-documentation hub (see [Documentation](#documentation)).
+platforms). Per-subcommand manuals with scenarios live in this repository's
+docs ([Documentation](#documentation)).
 
 ## Development
 
