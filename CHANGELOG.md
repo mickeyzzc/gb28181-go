@@ -11,6 +11,40 @@ are released out of band.
 
 ## [Unreleased]
 
+### Added
+
+- `docs` **GB35114 A-level manual** (`docs/{zh-CN,en-US}/gb28181-go-gb35114.md`):
+  the SM-crypto story as a standalone page — handshake wire format,
+  device/platform wiring, the three interop knobs (`RandomEncoding`,
+  `Sign2Order`, `VKEKEncoding`), certificate provisioning, operational
+  properties of the platform state machine, and a procurement-oriented
+  selection cheat sheet. Linked from both READMEs' GB35114 sections.
+- `docs` **No-hardware interop lab** (`docs/{zh-CN,en-US}/gb28181-go-interop-lab.md`):
+  the full-chain tutorial the release tools were missing — a virtual
+  camera against a minimal platform in two terminals, the conformance
+  loopback suite as the developer self-attestation step, `psmux-rtp`
+  as the media smoke test, variant and troubleshooting tables.
+- `feat(device)` **GB/T 28181-2011 device-side compatibility, pinned**:
+  the device role's 2011 story is now a claim with teeth —
+  `device/gb2011_compat_test.go` pins the shapes a 2011-era platform
+  exercises (GB2312-declared child-element queries → attribute-form
+  answers, extension-free answer SDP: `y=` present, `f=`/`a=setup`
+  absent). Source for the 2011/2016 delta is the GB/T 28181-2016
+  foreword's official change list.
+
+### Fixed
+
+- `fix(device)` **GB2312-declared MANSCDP bodies were dropped by the
+  device-side dual-form parsers** — a real 2011-interop gap surfaced by
+  the new pins: Go's `encoding/xml` refuses a non-UTF-8 XML declaration
+  without a `CharsetReader`, so a GB2312-declared Catalog/DeviceInfo
+  query (exactly what a 2011 platform sends per §9.4.1) drew a WARN and
+  silence. `parseQueryDual` / `parseNotifyDual` / `parsePlaybackControl`
+  now normalize through the shared codec's new exported
+  `manscdp.UTF8Body` (byte transcoding + declaration strip); the
+  platform side already parsed exclusively through the codec, so both
+  roles now read GB2312/GBK/GB18030 declarations on every route.
+
 ## [v0.14.0] — 2026-10-24
 
 The unified-CLI package: the release tools become one flag-driven

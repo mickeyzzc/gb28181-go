@@ -7,7 +7,7 @@
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
 ![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
 
-GB/T 28181-2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard.
+GB/T 28181-2011/2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard. The device role interoperates with 2011-era platforms (see [GB/T 28181-2011 device-side compatibility](#gbt-28181-2011-device-side-compatibility)).
 
 Hand-written SIP (no SIP framework on the device side; the platform side builds on [ghettovoice/gosip](https://github.com/ghettovoice/gosip)), MANSCDP XML codec, RTP/PS media, and session orchestration. Extracted verbatim from Mi-Bee Studio production code, hardened against real GB28181 platforms (digest qop=auth, unique Via branches, local-IP detection, MANSCDP attribute form, SIP-over-TCP, TCP media).
 
@@ -54,7 +54,7 @@ Segment files use the reference format read by `device.OpenSegment`: bare Annex-
 
 ## GB35114 A-level security (v0.4.0 device / v0.5.0 platform, opt-in)
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light:
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light. Deep-dive manual (handshake wire format, wiring for both roles, the configurable ambiguities, operational properties, certificate provisioning): **[the GB35114 A-level manual](docs/en-US/gb28181-go-gb35114.md)**.
 
 ```go
 // go build -tags gb35114
@@ -107,12 +107,20 @@ The 2022 image-snapshot command rides the device-config channel (issue #107: a `
 
 - **SVAC-audio stream_type corrected to `0x9B`** (Annex C table; was `0x81`, a wire bug found by diffing the implementation against the standard text) and AAC audio (`0x0F`) is now settable on the PS muxer.
 
+## GB/T 28181-2011 device-side compatibility
+
+The device role interoperates with 2011-era platforms. Per the GB/T 28181-2016 foreword's official change list, everything a 2011 platform exercises is a strict subset of what this device answers — TCP media, voice broadcast/intercom, IFrameCmd/DragZoom/HomePosition, DeviceConfig, config/preset queries, multi-MESSAGE transport and the subscription families are all 2016 additions; the device handles them when they arrive (explicit rejects where unhandled) and never requires them. What the device emits is 2011-consumable as-is: the INVITE answer SDP carries `y=` and no `f=`/`a=setup` (2016 extensions), and REGISTER carries no `X-GB-Ver` by default (pinned by an existing test).
+
+This release fixes a real 2011 interop gap found while pinning those shapes: 2011 platforms declare their MANSCDP bodies **GB2312** (§9.4.1 — Catalog/DeviceInfo queries especially), and the device-side dual-form parsers fed them to raw `encoding/xml`, which refuses a non-UTF-8 declaration without a `CharsetReader` — the query drew a WARN and was silently dropped. All parsing routes now normalize through the shared codec's `manscdp.UTF8Body` (byte transcoding + declaration strip), so GB2312/GBK/GB18030 declarations read on every route of both roles. The 2011 shapes (GB2312-declared child-element queries → attribute-form answers, extension-free answer SDP) are pinned by `device/gb2011_compat_test.go`.
+
 ## Documentation
 
 Topic guides live **in this repository**, bilingual:
 [`docs/README.md`](docs/README.md) is the index (`docs/en-US/` and
 `docs/zh-CN/` hold the pages — quickstart, architecture, protocol
-concepts, CLI manuals, testing). Fixes and new pages land
+concepts, CLI manuals, the [no-hardware full-chain lab](docs/en-US/gb28181-go-interop-lab.md),
+the [GB35114 SM-crypto manual](docs/en-US/gb28181-go-gb35114.md), testing).
+Fixes and new pages land
 here by PR.
 ## Interop CLI
 
@@ -139,7 +147,9 @@ Every [release](https://github.com/mickeyzzc/gb28181-go/releases)
 ships the CLI as a prebuilt, zero-dependency bundle
 (`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` + `SHA256SUMS`, seven
 platforms). Per-subcommand manuals with scenarios live in this repository's
-docs ([Documentation](#documentation)).
+docs ([Documentation](#documentation)); chaining the three subcommands
+into "virtual camera + minimal platform + conformance self-attestation"
+is written up as **[the full-chain, no-hardware lab](docs/en-US/gb28181-go-interop-lab.md)**.
 
 ## Development
 

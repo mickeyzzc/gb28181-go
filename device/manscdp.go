@@ -122,14 +122,22 @@ type NotifyElem struct {
 // parseQueryDual tries to parse a Query body in both attribute and child-element format.
 // Returns the normalized Query struct and a bool indicating success.
 func parseQueryDual(body string) (Query, bool) {
+	// GB/T 28181 §9.4.1: platforms (2011-era ones especially) declare
+	// GB2312 on their MANSCDP bodies — encoding/xml refuses such
+	// documents without a CharsetReader, so normalize through the
+	// shared codec first (bytes → UTF-8, declaration stripped).
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return Query{}, false
+	}
 	// Try attribute format first (existing struct)
 	var query Query
-	if err := xml.Unmarshal([]byte(body), &query); err == nil && query.CmdType != "" {
+	if err := xml.Unmarshal(data, &query); err == nil && query.CmdType != "" {
 		return query, true
 	}
 	// Try child-element format
 	var queryElem QueryElem
-	if err := xml.Unmarshal([]byte(body), &queryElem); err == nil && queryElem.CmdType != "" {
+	if err := xml.Unmarshal(data, &queryElem); err == nil && queryElem.CmdType != "" {
 		// Normalize to Query struct
 		return Query{
 			CmdType:    queryElem.CmdType,
@@ -149,14 +157,18 @@ func parseQueryDual(body string) (Query, bool) {
 // parseNotifyDual tries to parse a Notify body in both attribute and child-element format.
 // Returns the normalized Notify struct and a bool indicating success.
 func parseNotifyDual(body string) (Notify, bool) {
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return Notify{}, false
+	}
 	// Try attribute format first (existing struct)
 	var notify Notify
-	if err := xml.Unmarshal([]byte(body), &notify); err == nil && notify.CmdType != "" {
+	if err := xml.Unmarshal(data, &notify); err == nil && notify.CmdType != "" {
 		return notify, true
 	}
 	// Try child-element format
 	var notifyElem NotifyElem
-	if err := xml.Unmarshal([]byte(body), &notifyElem); err == nil && notifyElem.CmdType != "" {
+	if err := xml.Unmarshal(data, &notifyElem); err == nil && notifyElem.CmdType != "" {
 		// Normalize to Notify struct
 		return Notify{
 			CmdType:  notifyElem.CmdType,
@@ -301,8 +313,12 @@ type ControlElem struct {
 // may come from either <Speed> or <Scale>. Returns ok=false when the body
 // is not a PlaybackControl command.
 func parsePlaybackControl(body string) (PlaybackControl, bool) {
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return PlaybackControl{}, false
+	}
 	var ctl ControlElem
-	if err := xml.Unmarshal([]byte(body), &ctl); err != nil || ctl.CmdType != "PlaybackControl" {
+	if err := xml.Unmarshal(data, &ctl); err != nil || ctl.CmdType != "PlaybackControl" {
 		return PlaybackControl{}, false
 	}
 	pc := PlaybackControl{Value: ctl.Info.ControlValue}
