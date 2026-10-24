@@ -181,12 +181,13 @@ func docsLinkHosts(text string) []string {
 
 // docsAllowedHosts: the only real hosts documentation may point at.
 var docsAllowedHosts = map[string]bool{
-	"github.com":    true,
-	"onvif.org":     true,
-	"www.onvif.org": true,
-	"w3.org":        true,
-	"www.w3.org":    true,
-	"pkg.go.dev":    true,
+	"github.com":          true,
+	"onvif.org":           true,
+	"www.onvif.org":       true,
+	"w3.org":              true,
+	"www.w3.org":          true,
+	"pkg.go.dev":          true,
+	"openstd.samr.gov.cn": true, // the GB standards body — official record of GB 35114-2017
 }
 
 // docsHostAllowed also admits the example endpoint placeholders that

@@ -7,7 +7,7 @@
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
 ![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
 
-**GB/T 28181-2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。
+**GB/T 28181-2011/2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。设备角色可与 2011 世代平台互操作（见 [GB/T 28181-2011 设备侧兼容](#gbt-28181-2011-设备侧兼容)）。
 
 手写 SIP（设备端不依赖任何 SIP 框架；平台端构建于 [ghettovoice/gosip](https://github.com/ghettovoice/gosip) 之上）、MANSCDP XML 编解码、RTP/PS 媒体与会话编排。代码从 Mi-Bee Studio 生产实现逐字抽取，经真实国标平台打磨（摘要 qop=auth、Via branch 唯一性、本机 IP 探测、MANSCDP 属性形式、SIP over TCP、TCP 媒体）。
 
@@ -55,7 +55,7 @@ err := srv.Start(ctx)
 
 ## GB35114 A 级安全（v0.4.0 设备侧 / v0.5.0 平台侧，可选）
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层。本库只实现 **A级** —— B/C 级额外依赖 SVAC 媒体（GB/T 25724，硬件编解码器），设计上不在范围内。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖：
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层。本库只实现 **A级** —— B/C 级额外依赖 SVAC 媒体（GB/T 25724，硬件编解码器），设计上不在范围内。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖。专题手册（握手线格式、两侧接线、可配置二义性、运维属性、证书供给）：**[GB35114 A 级安全手册](docs/zh-CN/gb28181-go-gb35114.md)**。
 
 ```go
 // go build -tags gb35114
@@ -108,11 +108,19 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 - **SVAC 音频 stream_type 修正为 `0x9B`**（附录 C 表；原实现误为 `0x81`，对照标准原文核查时发现的线格式 bug），PS 复用器新增 AAC 音频（`0x0F`）声明。
 
+## GB/T 28181-2011 设备侧兼容
+
+设备角色可与 2011 世代平台互操作。依据 GB/T 28181-2016 前言的官方技术变化清单，2011 平台会行使的信令是 2016/2022 的严格子集——TCP 媒体、语音广播/对讲、IFrameCmd/DragZoom/看守位、DeviceConfig、配置/预置位查询、多 MESSAGE 传输与订阅族全部是 2016 新增；设备角色对它们"来了才处理、未实现显式拒绝"，从不要求。设备发出侧天然 2011 可消费：INVITE 应答 SDP 带 `y=`、不带 `f=`/`a=setup`（2016 扩展），REGISTER 默认不带 `X-GB-Ver`（既有测试钉板）。
+
+本发布修复了一个真实的 2011 互操作缺口：2011 平台按 §9.4.1 以 **GB2312 声明**发出 MANSCDP 报文（Catalog/DeviceInfo 查询尤甚），而设备侧双形式解析器用裸 `encoding/xml`——Go 的 XML 解码器在无 `CharsetReader` 时直接拒析非 UTF-8 声明的文档，查询会被 WARN + 静默丢弃。现统一经共享编解码的 `manscdp.UTF8Body` 归一（字节转码 + 声明剥离）后解析，GB2312/GBK/GB18030 声明在库内全部路由（设备侧与平台侧）可读。2011 形状（GB2312 声明的子元素查询 → 属性形式应答、无 2016 扩展的应答 SDP）由 `device/gb2011_compat_test.go` 钉板。
+
 ## 文档
 
 主题手册**就在本仓库内**，双语：
 [`docs/README.md`](docs/README.md) 是索引（`docs/en-US/` 与
-`docs/zh-CN/` 存放各页——快速开始、架构、协议概念、CLI 手册、测试）。
+`docs/zh-CN/` 存放各页——快速开始、架构、协议概念、CLI 手册、
+[无硬件联调全链路教程](docs/zh-CN/gb28181-go-interop-lab.md)、
+[GB35114 国密手册](docs/zh-CN/gb28181-go-gb35114.md)、测试）。
 修订与新页以 PR 落本仓。
 ## 互操作 CLI
 
@@ -137,7 +145,8 @@ gb28181 psmux-rtp
 [每次发布](https://github.com/mickeyzzc/gb28181-go/releases)都以预编译零
 依赖包提供该 CLI（`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` +
 `SHA256SUMS`，七平台）。逐子命令手册（含场景）见本仓 docs
-（[文档](#文档)）。
+（[文档](#文档)）；把三个子命令串成"虚拟相机 + 最小平台 + conformance
+自证"的完整玩法，见**[无硬件联调国标全链路教程](docs/zh-CN/gb28181-go-interop-lab.md)**。
 
 ## 开发
 
