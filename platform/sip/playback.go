@@ -291,7 +291,7 @@ func (s *Server) sendPlaybackInvite(deviceID, channelID, netAddr string, sdp []b
 		DisplayName: sip.String{Str: channelID},
 		Uri:         &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal},
 	}
-	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.deviceTransportParams(deviceID)}
 	subject := fmt.Sprintf("%s:%s,%s:0", channelID, sdpSSRC(sdp), s.cfg.ServerID)
 
 	req, err := s.buildRequest(sip.INVITE, serverHost, from, to, recipient, subject, "application/sdp", string(sdp))

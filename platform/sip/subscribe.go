@@ -311,7 +311,7 @@ func (s *Server) sendRequestTo(method sip.RequestMethod, deviceID, netAddr, serv
 		DisplayName: sip.String{Str: deviceID},
 		Uri:         &sip.SipUri{FUser: sip.String{Str: deviceID}, FHost: devHost, FPort: &portVal},
 	}
-	recipient := &sip.SipUri{FUser: sip.String{Str: deviceID}, FHost: devHost, FPort: &portVal}
+	recipient := &sip.SipUri{FUser: sip.String{Str: deviceID}, FHost: devHost, FPort: &portVal, FUriParams: s.deviceTransportParams(deviceID)}
 
 	req, err := s.buildRequest(method, serverHost, from, to, recipient, "", contentType, body)
 	if err != nil {

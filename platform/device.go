@@ -28,6 +28,7 @@ type Device struct {
 	Manufacturer  string
 	Model         string
 	NetAddr       string // IP:port of the device's SIP stack
+	Transport     string // signaling transport of the latest REGISTER ("udp"|"tcp"|"tls"); routes platform-initiated requests
 	Status        atomic.Int32
 	channels      sync.Map     // channelID -> *Channel
 	lastKeepalive atomic.Int64 // UnixNano timestamp of the last keepalive
@@ -160,6 +161,7 @@ func (m *DeviceManager) Register(d *Device) {
 	dev.Manufacturer = d.Manufacturer
 	dev.Model = d.Model
 	dev.NetAddr = d.NetAddr
+	dev.Transport = d.Transport
 	dev.Mu.Unlock()
 }
 
