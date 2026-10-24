@@ -535,7 +535,7 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 		FUser:      sip.String{Str: deviceID},
 		FHost:      devHost,
 		FPort:      &portVal,
-		FUriParams: s.tlsTransportParams(),
+		FUriParams: s.deviceTransportParams(deviceID),
 	}
 
 	req, err := s.buildRequest(sip.MESSAGE, serverHost, from, to, recipient, "", "Application/MANSCDP+xml", string(body))
@@ -557,6 +557,26 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 // tlsTransportParams returns URI params forcing TLS routing (;transport=tls)
 // when the platform runs in SIPS mode — gosip then reuses the pooled TLS
 // connection the device registered over. Nil in UDP/TCP modes.
+// deviceTransportParams routes platform-initiated requests over the
+// transport the device actually REGISTERed on. A TCP-registered device
+// never sees requests aimed at its source port over UDP — the INVITE
+// leaves via UDP and dies unanswered, looping the media session. With
+// ;transport=tcp gosip reuses the pooled inbound TCP connection.
+func (s *Server) deviceTransportParams(deviceID string) sip.Params {
+	if p := s.tlsTransportParams(); p != nil {
+		return p
+	}
+	if dev, ok := s.deviceMgr.Device(deviceID); ok {
+		dev.Mu.RLock()
+		tp := dev.Transport
+		dev.Mu.RUnlock()
+		if tp == "tcp" {
+			return sip.NewParams().Add("transport", sip.String{Str: "tcp"})
+		}
+	}
+	return nil
+}
+
 func (s *Server) tlsTransportParams() sip.Params {
 	if s.cfg.SIPTransport != "tls" {
 		return nil
@@ -729,7 +749,7 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		DisplayName: sip.String{Str: channelID},
 		Uri:         &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal},
 	}
-	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.tlsTransportParams()}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.deviceTransportParams(deviceID)}
 
 	// GB28181 convention: Subject "<channelID>:<ssrc>,<serverID>:0".
 	subject := fmt.Sprintf("%s:%s,%s:0", channelID, sdpSSRC(sdp), s.cfg.ServerID)
@@ -970,7 +990,7 @@ func (s *Server) sendDialogReset(deviceID, channelID, deviceAddr string) {
 
 	from := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: s.cfg.ServerID}, FHost: serverHost}}
 	to := &sip.Address{Uri: &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal}}
-	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.tlsTransportParams()}
+	recipient := &sip.SipUri{FUser: sip.String{Str: channelID}, FHost: devHost, FPort: &portVal, FUriParams: s.deviceTransportParams(deviceID)}
 	bye, err := s.buildRequest(sip.BYE, serverHost, from, to, recipient, "", "", "")
 	if err != nil {
 		return
@@ -1261,8 +1281,9 @@ func (s *Server) handleRegister(req sip.Request, tx sip.ServerTransaction) {
 			}
 		}
 		s.deviceMgr.Register(&platform.Device{
-			ID:      deviceID,
-			NetAddr: req.Source(),
+			ID:        deviceID,
+			NetAddr:   req.Source(),
+			Transport: strings.ToLower(req.Transport()),
 		})
 		// Auto-register the device itself as a channel — but ONLY on first
 		// registration, not on periodic re-REGISTERs. Re-registering would
