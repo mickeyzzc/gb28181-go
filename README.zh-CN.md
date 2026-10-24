@@ -115,20 +115,30 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 > **https://www.mlsbs.top/docs/mibeelibs**
 
 手册修改向文档中心提 PR（流程见该仓 GOVERNANCE）。本仓 [`docs/README.md`](docs/README.md) 保留引导页。
-## 示例
+## 互操作 CLI
 
-[`examples/`](examples/) 下可直接 `go run` 的完整示例：
+[`cmd/gb28181`](cmd/gb28181) 是单一互操作命令行——一个二进制、三个子
+命令——每个子命令文件同时是对应库半边的可运行集成样例：
 
-| 示例 | 角色 | 演示 |
+| 子命令 | 角色 | 演示 |
 |---|---|---|
-| [`device-register`](examples/device-register/main.go) | 设备端（UAC） | SIP 注册、保活、目录应答、经 `device.FrameHub` 喂帧、INVITE 拉流 |
-| [`platform-uas`](examples/platform-uas/main.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
-| [`psmux-rtp`](examples/psmux-rtp/main.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
+| [`device-register`](cmd/gb28181/device_register.go) | 设备端（UAC） | SIP 注册、保活、目录应答、经 `device.FrameHub` 喂帧、INVITE 拉流 |
+| [`platform-uas`](cmd/gb28181/platform_uas.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
+| [`psmux-rtp`](cmd/gb28181/psmux_rtp.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
 
-三个示例同时是互操作工具，随[每次发布](https://github.com/mickeyzzc/gb28181-go/releases)
-以预编译零依赖包发布（`gb28181-go-tools_<os>_<arch>.tar.gz` / `.zip` +
-`SHA256SUMS`，七平台）——设备端模拟器、最小平台 UAS、媒体路径自检各一。
-逐工具手册（含场景）见 MiBee 文档中心（[文档](#文档)）。
+全部配置走旗标（旧的预编译示例把配置硬编码在源码里，发布出去的二进制
+根本没法用）：
+
+```sh
+gb28181 device-register -platform 192.168.1.10:5060 -password secret -transport tcp
+gb28181 platform-uas -listen :5060 -password secret
+gb28181 psmux-rtp
+```
+
+[每次发布](https://github.com/mickeyzzc/gb28181-go/releases)都以预编译零
+依赖包提供该 CLI（`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` +
+`SHA256SUMS`，七平台）。逐子命令手册（含场景）见 MiBee 文档中心
+（[文档](#文档)）。
 
 ## 开发
 

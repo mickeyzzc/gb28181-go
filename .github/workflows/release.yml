@@ -59,22 +59,20 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          # Whole-library compile first: the examples only cover their own
+          # Whole-library compile first: the CLI only covers its own
           # dependency closure, this catches platform-specific code
           # anywhere in the module.
           go build ./...
           mkdir -p dist
           ext=""
-          archive="gb28181-go-tools_${GOOS}_${GOARCH}.tar.gz"
+          archive="gb28181-cli_${GOOS}_${GOARCH}.tar.gz"
           if [ "${GOOS}" = "windows" ]; then
             ext=".exe"
-            archive="gb28181-go-tools_${GOOS}_${GOARCH}.zip"
+            archive="gb28181-cli_${GOOS}_${GOARCH}.zip"
           fi
-          # The examples double as interop tools: a GB28181 device
-          # emulator, a platform-side UAS, and an RTP/PS mux tester.
-          for cmd in device-register platform-uas psmux-rtp; do
-            go build -trimpath -o "dist/${cmd}${ext}" "./examples/${cmd}"
-          done
+          # One binary, three subcommands: device-register / platform-uas
+          # / psmux-rtp (the unified interop CLI — see cmd/gb28181).
+          go build -trimpath -o "dist/gb28181${ext}" ./cmd/gb28181
           if [ "${GOOS}" = "windows" ]; then
             (cd dist && zip -q "../${archive}" ./*)
           else
