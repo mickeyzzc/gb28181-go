@@ -110,11 +110,10 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 ## 文档
 
-专题手册已迁移至 MiBee 文档中心——库手册唯一真源（双语）：
-
-> **https://www.mlsbs.top/docs/mibeelibs**
-
-手册修改向文档中心提 PR（流程见该仓 GOVERNANCE）。本仓 [`docs/README.md`](docs/README.md) 保留引导页。
+主题手册**就在本仓库内**，双语：
+[`docs/README.md`](docs/README.md) 是索引（`docs/en-US/` 与
+`docs/zh-CN/` 存放各页——快速开始、架构、协议概念、CLI 手册、测试）。
+修订与新页以 PR 落本仓。
 ## 互操作 CLI
 
 [`cmd/gb28181`](cmd/gb28181) 是单一互操作命令行——一个二进制、三个子
@@ -137,7 +136,7 @@ gb28181 psmux-rtp
 
 [每次发布](https://github.com/mickeyzzc/gb28181-go/releases)都以预编译零
 依赖包提供该 CLI（`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` +
-`SHA256SUMS`，七平台）。逐子命令手册（含场景）见 MiBee 文档中心
+`SHA256SUMS`，七平台）。逐子命令手册（含场景）见本仓 docs
 （[文档](#文档)）。
 
 ## 开发
