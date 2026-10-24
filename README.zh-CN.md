@@ -125,6 +125,11 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 | [`platform-uas`](examples/platform-uas/main.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
 | [`psmux-rtp`](examples/psmux-rtp/main.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
 
+三个示例同时是互操作工具，随[每次发布](https://github.com/mickeyzzc/gb28181-go/releases)
+以预编译零依赖包发布（`gb28181-go-tools_<os>_<arch>.tar.gz` / `.zip` +
+`SHA256SUMS`，七平台）——设备端模拟器、最小平台 UAS、媒体路径自检各一。
+逐工具手册（含场景）见 MiBee 文档中心（[文档](#文档)）。
+
 ## 开发
 
 本项目严格执行 **TDD**，见 [CONTRIBUTING.md](CONTRIBUTING.md)。CI 强制 `gofmt`、`go vet`、`go test -race`；`main` 分支受保护（仅 PR 合入，CI 必过）。
