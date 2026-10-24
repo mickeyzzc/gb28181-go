@@ -11,6 +11,12 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.14.0] — 2026-10-24
+
+The unified-CLI package: the release tools become one flag-driven
+binary (`cmd/gb28181`), plus the platform-side audio follow-ons and
+transport/watchdog fixes that accumulated since v0.13.0.
+
 - **BREAKING-packaging**: the release tools are now **one binary** —
   `cmd/gb28181` with the subcommands `device-register` / `platform-uas`
   / `psmux-rtp`. The three prebuilt `examples/` binaries hard-coded
