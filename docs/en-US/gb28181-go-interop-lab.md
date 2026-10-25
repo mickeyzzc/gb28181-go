@@ -43,6 +43,12 @@ waits silently for a device to show up.
 gb28181 device-register -platform 127.0.0.1:5060 -password secret
 ```
 
+It runs until you Ctrl-C it (registration refresh + keepalives + query
+answers). If local port 5060 is already taken by another SIP service
+(`bind: address already in use`), add `-local-sip-port 5061` — the
+virtual camera is the calling party, so the local port does not affect
+interoperability.
+
 Both terminals now show the same rhythm:
 
 1. **REGISTER → 401 (digest challenge) → REGISTER with Authorization → 200**;

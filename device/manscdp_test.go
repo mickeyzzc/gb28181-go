@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mickeyzzc/gb28181-go/manscdp"
 )
 
 // testDeviceContext provides a default device context for tests.
@@ -277,7 +279,12 @@ func TestDispatch_UnknownCmdType_NoCrash(t *testing.T) {
 	}
 }
 
-// TestDeviceInfoResponse_XMLWellFormed tests DeviceInfo response XML.
+// TestDeviceInfoResponse_XMLWellFormed pins the DeviceInfo response wire
+// form (A.2.6.5) as a cross-role contract: the body must decode through
+// the shared codec — the exact parse path the platform role uses — with
+// every identity field populated. This is what catches the historical
+// wire bugs (nested <Device> wrapper, <Name> instead of <DeviceName>,
+// missing <Result>) that self-round-trips through go structs cannot see.
 func TestDeviceInfoResponse_XMLWellFormed(t *testing.T) {
 	sn := "101"
 	deviceID := "34020000012000000001"
@@ -291,34 +298,43 @@ func TestDeviceInfoResponse_XMLWellFormed(t *testing.T) {
 
 	msg := BuildDeviceInfoResponseMessage(sn, deviceID, info)
 
-	// Parse the XML back
-	var resp Response
-	if err := xml.Unmarshal([]byte(msg.Body), &resp); err != nil {
-		t.Fatalf("Failed to unmarshal DeviceInfo response: %v", err)
+	// Wire-element checks: flat form (no <Device> wrapper), the name
+	// element is DeviceName (A.2.6.5; <Name> belongs to BasicParam), and
+	// the required Result element is present.
+	if strings.Contains(msg.Body, "<Device>") {
+		t.Errorf("DeviceInfo response must be flat — no <Device> wrapper (A.2.6.5):\n%s", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "<DeviceName>MiBee Eye</DeviceName>") {
+		t.Errorf("DeviceInfo response must carry <DeviceName> (A.2.6.5), got:\n%s", msg.Body)
+	}
+	if strings.Contains(msg.Body, "<Name>MiBee") {
+		t.Errorf("DeviceInfo response must not emit the BasicParam-style <Name> element:\n%s", msg.Body)
+	}
+	if !strings.Contains(msg.Body, "<Result>OK</Result>") {
+		t.Errorf("DeviceInfo response must carry the required <Result> (A.2.6.5):\n%s", msg.Body)
 	}
 
-	if resp.CmdType != "DeviceInfo" {
-		t.Errorf("Expected CmdType DeviceInfo, got %s", resp.CmdType)
+	// Cross-role contract: decode through the shared codec exactly the way
+	// platform/sip does; the identity fields must survive the round trip.
+	ct, v, err := manscdp.Decode([]byte(msg.Body))
+	if err != nil {
+		t.Fatalf("shared codec decode failed: %v", err)
 	}
-	if resp.Device == nil {
-		t.Fatal("Device should not be nil")
+	if ct != manscdp.CmdDeviceInfo {
+		t.Errorf("expected CmdDeviceInfo, got %s", ct)
 	}
-
-	device := resp.Device
-	if device.DeviceID != deviceID {
-		t.Errorf("DeviceID mismatch: got %s, want %s", device.DeviceID, deviceID)
+	parsed, ok := v.(manscdp.DeviceInfo)
+	if !ok {
+		t.Fatalf("decoded payload is %T, want manscdp.DeviceInfo", v)
 	}
-	if device.Name != info.Name {
-		t.Errorf("Name mismatch: got %s, want %s", device.Name, info.Name)
+	if parsed.DeviceName != info.Name {
+		t.Errorf("DeviceName mismatch across roles: got %q, want %q", parsed.DeviceName, info.Name)
 	}
-	if device.Manufacturer != info.Manufacturer {
-		t.Errorf("Manufacturer mismatch: got %s, want %s", device.Manufacturer, info.Manufacturer)
+	if parsed.Manufacturer != info.Manufacturer || parsed.Model != info.Model || parsed.Firmware != info.Firmware {
+		t.Errorf("identity fields must survive the platform parse, got %+v", parsed)
 	}
-	if device.Model != info.Model {
-		t.Errorf("Model mismatch: got %s, want %s", device.Model, info.Model)
-	}
-	if device.Firmware != info.Firmware {
-		t.Errorf("Firmware mismatch: got %s, want %s", device.Firmware, info.Firmware)
+	if parsed.DeviceID != deviceID {
+		t.Errorf("DeviceID mismatch: got %s, want %s", parsed.DeviceID, deviceID)
 	}
 }
 

@@ -40,6 +40,11 @@ EventBus 订阅打印。启动后静默等待设备上线。
 gb28181 device-register -platform 127.0.0.1:5060 -password secret
 ```
 
+它会一直运行（注册刷新 + 保活 + 应答查询），Ctrl-C 结束。本机 5060
+已被其他 SIP 服务占用时（报 `bind: address already in use`），加
+`-local-sip-port 5061` 换个本地端口即可——虚拟相机是主叫方，本地端口
+不影响对通。
+
 终端一/二里应能看到同一套节奏：
 
 1. **REGISTER → 401（digest 挑战）→ 带 Authorization 的 REGISTER → 200**；

@@ -24,6 +24,10 @@ func runDeviceRegister(args []string) {
 	password := fs.String("password", "", "digest-auth secret agreed with the platform (required)")
 	localPort := fs.Int("local-sip-port", 5060, "local SIP port")
 	name := fs.String("name", "Front Door", "device name reported in DeviceInfo")
+	// Neutral defaults per the v0.3.0 wire-neutrality hardening: the
+	// catalog and DeviceInfo answers must not carry product branding.
+	manufacturer := fs.String("manufacturer", "Unknown", "manufacturer string reported in DeviceInfo/catalog")
+	model := fs.String("model", "Unknown", "model string reported in DeviceInfo/catalog")
 	transport := fs.String("transport", "udp", "signaling transport: udp | tcp | tls (SIPS, GB/T 28181-2022)")
 	interval := fs.Int("register-interval", 3600, "registration refresh interval, seconds")
 	heartbeat := fs.Int("heartbeat-interval", 60, "keepalive interval, seconds")
@@ -63,8 +67,8 @@ func runDeviceRegister(args []string) {
 
 	srv := device.New(cfg, device.DeviceInfo{
 		Name:         *name,
-		Manufacturer: "MiBee Studio",
-		Model:        "MiBee Eye",
+		Manufacturer: *manufacturer,
+		Model:        *model,
 	}, hub)
 
 	ctx, cancel := context.WithCancel(context.Background())

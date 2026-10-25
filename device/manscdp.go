@@ -93,9 +93,13 @@ type ChannelItem struct {
 }
 
 // DeviceItem represents basic device information.
+// The name element is DeviceName per the DeviceInfo-response schema
+// (GB/T 28181-2022 A.2.6.5 / 2016 §9.5.3.2 foreword addition) — <Name>
+// belongs to the BasicParam config schema, and real platforms parse
+// DeviceName (a <Name> element reads as no name at all).
 type DeviceItem struct {
 	DeviceID     string `xml:"DeviceID"`
-	Name         string `xml:"Name"`
+	Name         string `xml:"DeviceName"`
 	Manufacturer string `xml:"Manufacturer"`
 	Model        string `xml:"Model"`
 	Firmware     string `xml:"Firmware"`
@@ -441,14 +445,34 @@ func BuildCatalogResponseMessagePaged(sn, deviceID string, items []ChannelItem, 
 }
 
 // BuildDeviceInfoResponseMessage creates a SIP MESSAGE with DeviceInfo response.
+// deviceInfoResponseBody is the flat DeviceInfo response (A.2.6.5): the
+// identity fields are DIRECT children of Response — the nested <Device>
+// form this builder previously emitted reads as an empty device on every
+// standards-conformant platform — and Result is 必选. Element order
+// mirrors the Rust twin's builder byte-for-byte.
+type deviceInfoResponseBody struct {
+	XMLName      xml.Name `xml:"Response"`
+	CmdType      string   `xml:"CmdType,attr"`
+	SN           string   `xml:"SN,attr"`
+	DeviceID     string   `xml:"DeviceID"`
+	Result       string   `xml:"Result"`
+	DeviceName   string   `xml:"DeviceName"`
+	Manufacturer string   `xml:"Manufacturer"`
+	Model        string   `xml:"Model"`
+	Firmware     string   `xml:"Firmware"`
+}
+
 func BuildDeviceInfoResponseMessage(sn, deviceID string, info DeviceItem) SipMessage {
-	resp := Response{
-		CmdType:  "DeviceInfo",
-		SN:       sn,
-		DeviceID: deviceID,
-		Device:   &info,
-	}
-	xmlData, err := xml.Marshal(resp)
+	xmlData, err := xml.Marshal(deviceInfoResponseBody{
+		CmdType:      "DeviceInfo",
+		SN:           sn,
+		DeviceID:     deviceID,
+		Result:       "OK",
+		DeviceName:   info.Name,
+		Manufacturer: info.Manufacturer,
+		Model:        info.Model,
+		Firmware:     info.Firmware,
+	})
 	if err != nil {
 		slog.Error("Failed to marshal DeviceInfo response", "error", err)
 		return SipMessage{}

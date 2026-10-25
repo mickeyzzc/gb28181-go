@@ -57,7 +57,8 @@ gb28181 device-register \
 ```
 
 其余旗标：`-domain`（默认取 ID 前 10 位）、`-local-sip-port`（5060）、
-`-name`（DeviceInfo 名称）、`-register-interval` / `-heartbeat-interval`。
+`-name`（DeviceInfo 名称）、`-manufacturer` / `-model`（默认 `Unknown`，
+线格式中性身份，不带产品品牌）、`-register-interval` / `-heartbeat-interval`。
 
 典型用途：平台侧联调与回归（目录分页、INVITE、TCP/SIPS 传输）；
 也是 `device` 包的最小集成参考——把合成帧循环换成你的编码器输出、
