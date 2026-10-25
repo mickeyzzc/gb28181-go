@@ -63,7 +63,8 @@ gb28181 device-register \
 
 More flags: `-domain` (defaults to the ID's first 10 digits),
 `-local-sip-port` (5060), `-name` (DeviceInfo name),
-`-register-interval` / `-heartbeat-interval`.
+`-manufacturer` / `-model` (default `Unknown` — neutral wire identity,
+no product branding), `-register-interval` / `-heartbeat-interval`.
 
 Typical uses: platform-side joint testing and regression (catalog
 pagination, INVITE, TCP/SIPS transports). It is also the minimal

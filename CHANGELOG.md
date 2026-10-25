@@ -34,6 +34,24 @@ are released out of band.
 
 ### Fixed
 
+- `fix(device)` **DeviceInfo response was wire-broken three ways** —
+  caught by smoke-testing the new interop lab against the library's own
+  platform: the response nested the identity fields under a `<Device>`
+  wrapper that exists in no standard version (A.2.6.5 makes them direct
+  children of Response), named the device `<Name>` (the BasicParam
+  element — A.2.6.5 says `DeviceName`), and omitted the required
+  `<Result>` element. Every standards-conformant platform read an empty
+  device name; the Rust twin's hand-built body was already flat +
+  `DeviceName` + `Result` and is now byte-matched. The unit test became
+  a cross-role contract (builder output decoded through the shared
+  codec, exactly the platform's parse path) and the conformance loopback
+  asserts the name reaches the platform's device record.
+- `fix(cli)` **device-register branded the wire again** — the unified
+  CLI hardcoded `Manufacturer: "MiBee Studio"` / `Model: "MiBee Eye"`,
+  regressing the v0.3.0 wire-neutrality hardening through both the
+  DeviceInfo and catalog answers. Both are now `-manufacturer` /
+  `-model` flags defaulting to `Unknown` (same neutral default the
+  cascade catalog uses).
 - `fix(device)` **GB2312-declared MANSCDP bodies were dropped by the
   device-side dual-form parsers** — a real 2011-interop gap surfaced by
   the new pins: Go's `encoding/xml` refuses a non-UTF-8 XML declaration
