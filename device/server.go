@@ -1419,6 +1419,38 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	}
 	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, answerPort, ssrc, answerTransport, sessionType, answerSetup)
 
+	// GB35114 B/C media security: when the offer carries a=security, the
+	// configured responder negotiates. The answer attribute rides the SDP;
+	// the returned cryptor (level C) and the AU signer (level B) arm the
+	// pusher. A security offer the device cannot honor is refused with 488 —
+	// answering plaintext would silently violate the platform's policy.
+	var payloadEncryptor RTPPayloadCryptor
+	var auSigner AUSignerFunc
+	if offer := SDPSecurityAttributeValue(msg.Body); offer != "" {
+		responder, ok := s.cfg.RegisterAuthenticator.(MediaSecurityResponder)
+		if !ok || responder == nil {
+			slog.Warn("gb28181: INVITE requested GB35114 media security but no responder is configured — rejecting", "offer", offer)
+			s.rejectInvite(msg, fromAddr)
+			return
+		}
+		answerValue, encrypt, err := responder.AnswerMediaSecurity(offer)
+		if err != nil {
+			slog.Warn("gb28181: GB35114 media negotiation failed — rejecting INVITE", "error", err)
+			s.rejectInvite(msg, fromAddr)
+			return
+		}
+		if answerValue != "" {
+			deviceSDP += "\na=security:" + answerValue
+			payloadEncryptor = encrypt
+			if signer, ok := s.cfg.RegisterAuthenticator.(interface {
+				SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error)
+			}); ok {
+				auSigner = signer.SignAU
+			}
+			slog.Info("gb28181: GB35114 media security negotiated", "answer", answerValue)
+		}
+	}
+
 	// Send 200 OK with SDP answer
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
 	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
@@ -1543,6 +1575,12 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		}
 		pusher := NewRtpPusher(mediaConn, rtpDest)
 		pusher.SetMetricsHooks(s.metrics)
+		if payloadEncryptor != nil {
+			pusher.SetPayloadEncryptor(payloadEncryptor)
+		}
+		if auSigner != nil {
+			pusher.SetAUSigner(auSigner)
+		}
 		if tcpConn != nil {
 			pusher.SetTCPConn(tcpConn)
 		}
@@ -1572,6 +1610,28 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			}
 		}
 	}()
+}
+
+// rejectInvite answers an INVITE with 488 Not Acceptable Here — used when
+// the offer cannot be honored (no covering recordings, or a GB35114 media
+// security request the device cannot satisfy).
+func (s *Server) rejectInvite(msg SipMessage, fromAddr net.Addr) {
+	to := msg.To
+	if !strings.Contains(to, "tag=") {
+		to = to + ";tag=" + dialogTag
+	}
+	reject := SipMessage{
+		StatusCode: 488,
+		Via:        msg.Via,
+		From:       msg.From,
+		To:         to,
+		CallID:     msg.CallID,
+		CSeq:       msg.CSeq,
+		Headers:    make(map[string]string),
+	}
+	if err := s.sendSIP(reject.Serialize(), fromAddr); err != nil {
+		slog.Warn("gb28181: failed to send 488", "error", err)
+	}
 }
 
 // handleBye handles BYE requests - unsubscribe from AUHub and close media socket.
