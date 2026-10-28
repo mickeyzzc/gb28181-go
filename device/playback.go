@@ -46,6 +46,15 @@ func parseSDPTimeRange(body string) (startMs, endMs int64) {
 		if start == 0 && end == 0 {
 			return 0, math.MaxInt64
 		}
+		// GB/T 28181 SDP t= carries NTP seconds (since 1900); tolerate
+		// unix-seconds senders too (values below ~3e9 cannot be current-era
+		// NTP).
+		if start > 3_000_000_000 {
+			start -= 2208988800
+		}
+		if end > 3_000_000_000 {
+			end -= 2208988800
+		}
 		return start * 1000, end * 1000
 	}
 	return 0, math.MaxInt64
@@ -82,7 +91,7 @@ func (s *Server) sendMediaEnd(end *mediaEndNotify) error {
 	return err
 }
 
-func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, acceptTCP func(context.Context) *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify) {
+func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, mediaTCPConn *net.TCPConn, acceptTCP func(context.Context) *net.TCPConn, rtpDest *net.UDPAddr, ssrc uint32, segments []SegmentMeta, root string, startMs, endMs int64, sessionType string, ctlCh <-chan PlaybackControl, endNotify *mediaEndNotify, payloadEncryptor RTPCryptor, auSigner AUSignerFunc) {
 	// Passive answer (a=setup:active offer): wait for the platform's dial
 	// before streaming; acceptTCP returns nil on cancellation.
 	if mediaTCPConn == nil && acceptTCP != nil {
@@ -94,9 +103,16 @@ func (s *Server) runPlayback(mediaCtx context.Context, mediaConn *net.UDPConn, m
 	}
 	pusher := NewRtpPusher(mediaConn, rtpDest)
 	pusher.SetMetricsHooks(s.metrics)
+	if payloadEncryptor != nil {
+		pusher.SetPayloadEncryptor(payloadEncryptor)
+	}
+	if auSigner != nil {
+		pusher.SetAUSigner(auSigner)
+	}
 	if mediaTCPConn != nil {
 		pusher.SetTCPConn(mediaTCPConn)
 	}
+	defer pusher.ZeroSecurity()
 
 	// The index returns segments in append order; sort by start time so
 	// playback follows the recording chronology.

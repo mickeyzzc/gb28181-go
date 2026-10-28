@@ -105,6 +105,11 @@ type Config struct {
 	// "tcp-passive" (default), "udp", or "tcp-active".
 	MediaTransport string `yaml:"media_transport"`
 
+	// MonitorUserID (optional) stamps a Monitor-User-Identity header on
+	// INVITEs — the GB 35114 third-party call-control marker naming the
+	// user on whose behalf the platform pulls a stream (empty omits it).
+	MonitorUserID string `yaml:"monitor_user_id,omitempty"`
+
 	// SIPTransport selects the SIP signaling listener: "udp" (default),
 	// "tcp" (adds a SIP-over-TCP listener alongside UDP), or "tls" (SIPS —
 	// TLS listener per GB/T 28181-2022 A-level security; outbound requests

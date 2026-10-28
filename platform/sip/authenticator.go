@@ -1,5 +1,7 @@
 package sip
 
+import "github.com/mickeyzzc/gb28181-go/platform"
+
 // RegisterAuthenticator authenticates REGISTERs that carry a non-Digest
 // Authorization scheme — GB 35114 A-level today. The concrete
 // implementation lives behind the gb35114 build tag (security35114.Platform)
@@ -29,13 +31,25 @@ type DownstreamSigner interface {
 
 // MediaSecurityNegotiator negotiates GB35114 B/C media security on INVITE
 // dialogs. MediaSDPOffer feeds the offer's a=security attribute ("" = no
-// media security); ArmMediaSecurity inspects the device's answer SDP and
-// returns the receiver hooks — the RTP payload decryptor (level C) and the
-// per-AU signature verifier (level B). Both nil = plaintext session.
+// media security); ArmMediaSecurity inspects the device's answer SDP for
+// device-sent media (live/playback) and returns the receiver hooks — the
+// RTP payload decryptor (level C) and the per-AU signature verifier
+// (level B). Both nil = plaintext session. NewMediaEncryptor arms
+// platform-sent media (talk downlink): the offer attribute value carrying
+// the sealed VEK, the payload encryptor, and the platform-identity AU
+// signer.
 type MediaSecurityNegotiator interface {
 	MediaSDPOffer() string
 	ArmMediaSecurity(deviceID string, answerSDP []byte) (
-		decrypt func(payload []byte, ssrc uint32, seq uint16) []byte,
+		decrypt platform.RTPCryptor,
 		verifyAU func(au []byte, ssrc, timestamp uint32, sig []byte) error,
 		err error)
+	NewMediaEncryptor(deviceID string) (
+		offerValue string,
+		encrypt platform.RTPCryptor,
+		sign func(au []byte, ssrc, timestamp uint32) ([]byte, error),
+		err error)
+	// VerifyMediaSignature checks a device-signed media AU (talk uplink)
+	// against the trusted device certificate.
+	VerifyMediaSignature(deviceID string, au []byte, ssrc, timestamp uint32, sig []byte) error
 }

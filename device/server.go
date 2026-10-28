@@ -61,6 +61,10 @@ type Server struct {
 	cancel       context.CancelFunc
 	mediaCancel  context.CancelFunc
 	sub          *FrameSubscription
+	// talkCryptor is the GB35114 session cryptor of an active talkback
+	// dialog (shared by its receive and upstream halves — the XOR is
+	// symmetric). Zeroed at media teardown.
+	talkCryptor RTPCryptor
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
 	// onBroadcast is the host callback for voice-broadcast notifications
@@ -1261,6 +1265,10 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 // playback, or talkback receive) so a new INVITE never leaks a goroutine
 // + socket per session. Caller holds s.mu.
 func (s *Server) teardownMediaLocked() {
+	if s.talkCryptor != nil {
+		s.talkCryptor.Zero()
+		s.talkCryptor = nil
+	}
 	if s.mediaCancel != nil {
 		s.mediaCancel()
 		s.mediaCancel = nil
@@ -1424,7 +1432,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// the returned cryptor (level C) and the AU signer (level B) arm the
 	// pusher. A security offer the device cannot honor is refused with 488 —
 	// answering plaintext would silently violate the platform's policy.
-	var payloadEncryptor RTPPayloadCryptor
+	var payloadEncryptor RTPCryptor
 	var auSigner AUSignerFunc
 	if offer := SDPSecurityAttributeValue(msg.Body); offer != "" {
 		responder, ok := s.cfg.RegisterAuthenticator.(MediaSecurityResponder)
@@ -1541,7 +1549,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: playback media goroutine started", "session", sessionType, "remote", rtpDest.String(), "transport", s.cfg.Transport, "segments", len(playbackSegs))
 		go func() {
 			defer mediaCancel()
-			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
+			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify, payloadEncryptor, auSigner)
 		}()
 		return
 	}
@@ -1574,6 +1582,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			}
 		}
 		pusher := NewRtpPusher(mediaConn, rtpDest)
+		defer pusher.ZeroSecurity()
 		pusher.SetMetricsHooks(s.metrics)
 		if payloadEncryptor != nil {
 			pusher.SetPayloadEncryptor(payloadEncryptor)

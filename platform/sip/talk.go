@@ -7,7 +7,6 @@
 package sip
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pion/rtp"
 
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
@@ -42,6 +43,14 @@ type talkSession struct {
 	mu   sync.Mutex
 	seq  uint16
 	ts   uint32
+
+	// GB35114 B/C on the downlink audio: cryptor XORs each frame under the
+	// session VEK (level C), signer SM2-signs each frame (level B) with the
+	// signature riding an RFC 8285 extension. uplinkVerifier checks the
+	// device's return-audio signatures (same session). All nil = plaintext.
+	cryptor        platform.RTPCryptor
+	signer         func(au []byte, ssrc, timestamp uint32) ([]byte, error)
+	uplinkVerifier func(au []byte, ssrc, timestamp uint32, sig []byte) error
 
 	dialog *inviteDialog
 
@@ -109,6 +118,32 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		"y=%s\r\n",
 		s.cfg.ServerID, serverHost, serverHost, localPort, talkRTPPayloadType, ssrcStr)
 
+	// GB35114 B/C on platform-sent media: negotiate before the INVITE goes
+	// out — the offer carries the a=security attribute (with the sealed VEK
+	// at C) and the session gets the encryptor/signer. A C-level request
+	// with no security session fails closed rather than talking plaintext.
+	var talkCryptor platform.RTPCryptor
+	var talkSigner func(au []byte, ssrc, timestamp uint32) ([]byte, error)
+	var talkUplinkVerifier func(au []byte, ssrc, timestamp uint32, sig []byte) error
+	if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
+		offerValue, encrypt, sign, err := neg.NewMediaEncryptor(deviceID)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("gb28181: talk media security for %s: %w", deviceID, err)
+		}
+		if offerValue != "" {
+			sdp += "a=security:" + offerValue + "\r\n"
+			talkCryptor, talkSigner = encrypt, sign
+			if sign != nil {
+				// The device signs its return audio with its certificate's
+				// key; the platform verifies through the same negotiator.
+				talkUplinkVerifier = func(au []byte, ssrc, timestamp uint32, sig []byte) error {
+					return neg.VerifyMediaSignature(deviceID, au, ssrc, timestamp, sig)
+				}
+			}
+		}
+	}
+
 	devHost, devPortStr, err := net.SplitHostPort(netAddr)
 	if err != nil {
 		conn.Close()
@@ -133,6 +168,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		conn.Close()
 		return fmt.Errorf("gb28181: build talk INVITE: %w", err)
 	}
+	s.decorateOutgoing(deviceID, req)
 	tx, err := srv.Request(req)
 	if err != nil {
 		conn.Close()
@@ -180,8 +216,11 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		callID:    callID,
 		conn:      conn,
 		target:    &net.UDPAddr{IP: net.ParseIP(host), Port: int(port)},
-		ssrc:      uint32(ssrc),
-		dialog:    &inviteDialog{req: req, resp: resp},
+		ssrc:           uint32(ssrc),
+		cryptor:        talkCryptor,
+		signer:         talkSigner,
+		uplinkVerifier: talkUplinkVerifier,
+		dialog:         &inviteDialog{req: req, resp: resp},
 	}
 	s.talkMu.Lock()
 	s.talks[channelID] = t
@@ -194,7 +233,9 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 }
 
 // WriteTalkAudio packetizes one G.711 A-law frame as RTP/PCMA and sends it
-// to the device. Silently drops frames after StopTalk raced a writer.
+// to the device. On GB35114 sessions the frame is first signed (level B,
+// signature over the plaintext, carried in an RFC 8285 extension) and then
+// encrypted (level C). Silently drops frames after StopTalk raced a writer.
 func (s *Server) WriteTalkAudio(channelID string, alaw []byte) {
 	if len(alaw) == 0 || len(alaw) > talkMaxFrame {
 		return
@@ -211,17 +252,49 @@ func (s *Server) WriteTalkAudio(channelID string, alaw []byte) {
 		return
 	}
 	t.seq++
-	pkt := make([]byte, 12+len(alaw))
-	pkt[0] = 0x80 // V=2
-	pkt[1] = talkRTPPayloadType & 0x7F
-	binary.BigEndian.PutUint16(pkt[2:], t.seq)
-	binary.BigEndian.PutUint32(pkt[4:], t.ts)
-	binary.BigEndian.PutUint32(pkt[8:], t.ssrc)
-	copy(pkt[12:], alaw)
+	seq, ts, ssrc := t.seq, t.ts, t.ssrc
+	var sigDER []byte
+	if t.signer != nil {
+		sig, err := t.signer(alaw, ssrc, ts)
+		if err != nil {
+			t.mu.Unlock()
+			slog.Debug("gb28181: talk AU signing failed", "channel", channelID, "error", err)
+			return
+		}
+		sigDER = sig
+	}
+	payload := alaw
+	if t.cryptor != nil {
+		payload = t.cryptor.Crypt(alaw, ssrc, seq)
+	}
+	packet := &rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    uint8(talkRTPPayloadType),
+			SequenceNumber: seq,
+			Timestamp:      ts,
+			SSRC:           ssrc,
+		},
+		Payload: payload,
+	}
+	if sigDER != nil {
+		packet.Header.ExtensionProfile = rtp.ExtensionProfileTwoByte
+		if err := packet.SetExtension(platform.RTPExtAUSignature, sigDER); err != nil {
+			t.mu.Unlock()
+			slog.Debug("gb28181: talk RTP extension failed", "channel", channelID, "error", err)
+			return
+		}
+	}
+	pkt, err := packet.Marshal()
+	if err != nil {
+		t.mu.Unlock()
+		slog.Debug("gb28181: talk RTP marshal failed", "channel", channelID, "error", err)
+		return
+	}
 	// G.711 is one sample per byte at 8kHz — the sample count equals the
 	// payload length.
 	t.ts += uint32(len(alaw))
-	_, err := t.conn.WriteToUDP(pkt, t.target)
+	_, err = t.conn.WriteToUDP(pkt, t.target)
 	if err == nil {
 		t.packets++
 		t.bytesSent += int64(len(alaw))
@@ -255,6 +328,10 @@ func (s *Server) StopTalk(channelID string) error {
 	conn, dlg := t.conn, t.dialog
 	pk, by := t.packets, t.bytesSent
 	upk, upby := t.uplinkPackets, t.uplinkBytes
+	if t.cryptor != nil {
+		t.cryptor.Zero()
+		t.cryptor = nil
+	}
 	t.mu.Unlock()
 	conn.Close()
 	slog.Info("gb28181: talk session stopped",
@@ -294,42 +371,53 @@ func (s *Server) TalkStatusFor(cameraID string) platform.TalkStatus {
 // non-PCMA frames are dropped silently so a chatty peer cannot wedge the
 // session.
 func (t *talkSession) uplinkReadLoop() {
-	buf := make([]byte, 1500)
+	buf := make([]byte, 2048)
+	var pkt rtp.Packet
 	for {
 		n, _, err := t.conn.ReadFromUDP(buf)
 		if err != nil {
 			return // socket closed — the normal teardown path
 		}
-		payload, ssrc, ok := parseTalkUplinkRTP(buf[:n])
-		if !ok {
+		if err := pkt.Unmarshal(buf[:n]); err != nil {
 			continue
 		}
+		if pkt.Header.PayloadType != uint8(talkRTPPayloadType) {
+			continue
+		}
+		payload := append([]byte(nil), pkt.Payload...)
+		ssrc := pkt.Header.SSRC
+		// GB35114 B/C on the return audio: decrypt (level C — same session
+		// VEK, symmetric XOR) and verify the per-packet signature against
+		// the device certificate (level B). Fail closed drops the packet.
 		t.mu.Lock()
-		if t.closed {
-			t.mu.Unlock()
+		closed := t.closed
+		cryptor := t.cryptor
+		verifier := t.uplinkVerifier
+		t.mu.Unlock()
+		if closed {
 			return
 		}
+		if cryptor != nil {
+			payload = cryptor.Crypt(payload, ssrc, pkt.Header.SequenceNumber)
+		}
+		if verifier != nil {
+			sig := pkt.Header.GetExtension(platform.RTPExtAUSignature)
+			if len(sig) == 0 {
+				continue
+			}
+			if err := verifier(payload, ssrc, pkt.Header.Timestamp, sig); err != nil {
+				continue
+			}
+		}
+		t.mu.Lock()
 		t.uplinkPackets++
 		t.uplinkBytes += int64(len(payload))
 		t.uplinkSSRC = ssrc
 		t.mu.Unlock()
 		if cb := t.uplinkCB; cb != nil {
-			cb(t.channelID, append([]byte(nil), payload...))
+			cb(t.channelID, payload)
 		}
 	}
-}
-
-// parseTalkUplinkRTP validates one return-audio packet: plain RTP v2,
-// PT 8 (PCMA), no padding/extension/CSRC — the shape the GB28181 talk
-// profile sends on the wire. Returns the payload and SSRC.
-func parseTalkUplinkRTP(pkt []byte) (payload []byte, ssrc uint32, ok bool) {
-	if len(pkt) < 13 || pkt[0]>>6 != 2 || pkt[0]&0x3F != 0 {
-		return nil, 0, false
-	}
-	if pkt[1]&0x7F != talkRTPPayloadType {
-		return nil, 0, false
-	}
-	return pkt[12:], binary.BigEndian.Uint32(pkt[8:12]), true
 }
 
 // stopTalkOnBye ends a talk session whose BYE arrived from the device

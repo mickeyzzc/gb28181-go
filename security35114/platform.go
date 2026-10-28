@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/emmansun/gmsm/smx509"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // Platform-side failure modes, mapped by SIP servers onto 4xx responses.
@@ -88,8 +89,17 @@ type platformSession struct {
 	random1          string
 	announcedCert    *smx509.Certificate // from Capability cnonce, if any
 	vkek             []byte              // active once a handshake completed
+	vkekVer          int                 // handshake generation of vkek (0 = none yet)
+	vkekPrev         []vkekEntry         // superseded keys, newest first (capped)
 	lastAuth         string              // completed Authorization (retransmission cache)
 	lastSecurityInfo string
+}
+
+// vkekEntry is one superseded VKEK kept briefly so envelopes sealed under a
+// key that re-keyed mid-INVITE still open.
+type vkekEntry struct {
+	ver int
+	key []byte
 }
 
 // Platform implements the platform (UAS) side of GB35114 A-level. Its
@@ -165,17 +175,50 @@ func (p *Platform) MediaSDPOffer() string {
 }
 
 // NewMediaDecryptor opens the VEK envelope from a level-C SDP answer with
-// the device's negotiated VKEK and returns the RTP-payload decryptor.
-func (p *Platform) NewMediaDecryptor(deviceID, envelope string) (func(payload []byte, ssrc uint32, seq uint16) []byte, error) {
-	vkek := p.VKEK(deviceID)
+// the device's VKEK and returns the RTP-payload decryptor. vkekVer selects
+// the handshake generation the envelope was sealed under (0 = current) — a
+// device that re-registered while its INVITE was in flight sealed under the
+// previous key.
+func (p *Platform) NewMediaDecryptor(deviceID, envelope string, vkekVer int) (*PacketCryptor, error) {
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	var vkek []byte
+	if s != nil {
+		vkek = vkekForVersionLocked(s, vkekVer)
+	}
+	p.mu.Unlock()
 	if vkek == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+		return nil, fmt.Errorf("%w: %s (vkekver=%d)", ErrNoSession, deviceID, vkekVer)
 	}
 	vek, err := OpenVEK(vkek, envelope)
 	if err != nil {
 		return nil, fmt.Errorf("gb35114: opening VEK envelope for %s: %w", deviceID, err)
 	}
 	return NewPacketCryptor(vek)
+}
+
+// vkekForVersionLocked resolves the VKEK of one handshake generation:
+// 0/absent = the active key; otherwise the matching historical entry, or
+// nil when that generation has aged out of the ring.
+func vkekForVersionLocked(s *platformSession, ver int) []byte {
+	if s == nil || s.vkek == nil {
+		return nil
+	}
+	if ver <= 0 || ver == s.vkekVer {
+		return s.vkek
+	}
+	for _, e := range s.vkekPrev {
+		if e.ver == ver {
+			return e.key
+		}
+	}
+	return nil
+}
+
+// VerifyMediaSignature is the MediaSecurityNegotiator-seam name for
+// VerifyAUSignature (talk-uplink media signed by the device).
+func (p *Platform) VerifyMediaSignature(deviceID string, au []byte, ssrc, timestamp uint32, sigDER []byte) error {
+	return p.VerifyAUSignature(deviceID, au, ssrc, timestamp, sigDER)
 }
 
 // VerifyAUSignature checks a level-B per-AU signature against the device's
@@ -195,13 +238,54 @@ func (p *Platform) VerifyAUSignature(deviceID string, au []byte, ssrc, timestamp
 	return VerifyAU(cert, au, ssrc, timestamp, sigDER)
 }
 
+// NewMediaEncryptor prepares platform-sent media (talk downlink) at the
+// configured level: the "a=security:" offer value carrying the sealed VEK
+// (level C), the payload encryptor, and the per-AU signer bound to the
+// platform identity. Level A yields empty values; C before the device's
+// handshake completed is an error (fail closed rather than plaintext).
+func (p *Platform) NewMediaEncryptor(deviceID string) (offerValue string, encrypt platform.RTPCryptor, sign func(au []byte, ssrc, timestamp uint32) ([]byte, error), err error) {
+	if !p.cfg.Level.AtLeast(LevelB) {
+		return "", nil, nil, nil
+	}
+	sign = func(au []byte, ssrc, timestamp uint32) ([]byte, error) {
+		return SignAU(p.cfg.Identity.PrivateKey, au, ssrc, timestamp)
+	}
+	if !p.cfg.Level.AtLeast(LevelC) {
+		return SDPSecurityOffer(LevelB), nil, sign, nil
+	}
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	var vkek []byte
+	var ver int
+	if s != nil {
+		vkek, ver = s.vkek, s.vkekVer
+	}
+	p.mu.Unlock()
+	if vkek == nil {
+		return "", nil, nil, fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+	}
+	vek, err := GenerateVEK(p.cfg.Rand)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	envelope, err := SealVEK(vkek, vek)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	encrypt, err = NewPacketCryptor(vek)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return SDPSecurityAnswer(LevelC, envelope, ver), encrypt, sign, nil
+}
+
 // ArmMediaSecurity implements the platform/sip MediaSecurityNegotiator
 // seam: it inspects a device's INVITE answer SDP and returns the receiver
 // hooks for the negotiated level — the AU-signature verifier at B, plus the
 // payload decryptor at C. Nil hooks mean a plaintext session (no
 // a=security attribute, or level A).
 func (p *Platform) ArmMediaSecurity(deviceID string, answerSDP []byte) (
-	decrypt func(payload []byte, ssrc uint32, seq uint16) []byte,
+	decrypt platform.RTPCryptor,
 	verifyAU func(au []byte, ssrc, timestamp uint32, sig []byte) error,
 	err error,
 ) {
@@ -222,7 +306,7 @@ func (p *Platform) ArmMediaSecurity(deviceID string, answerSDP []byte) (
 	if !sec.Level.AtLeast(LevelC) || sec.VEKEnvelope == "" {
 		return nil, verifyAU, nil
 	}
-	decrypt, err = p.NewMediaDecryptor(deviceID, sec.VEKEnvelope)
+	decrypt, err = p.NewMediaDecryptor(deviceID, sec.VEKEnvelope, sec.VKEKVer)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -347,6 +431,13 @@ func (p *Platform) VerifyRegister(deviceID, authorization string) (string, error
 	securityInfo := BuildSecurityInfo(si)
 
 	p.mu.Lock()
+	if s.vkek != nil {
+		s.vkekPrev = append([]vkekEntry{{ver: s.vkekVer, key: s.vkek}}, s.vkekPrev...)
+		if len(s.vkekPrev) > 2 {
+			s.vkekPrev = s.vkekPrev[:2]
+		}
+	}
+	s.vkekVer++
 	s.vkek = vkek
 	s.lastAuth, s.lastSecurityInfo = authorization, securityInfo
 	p.mu.Unlock()
