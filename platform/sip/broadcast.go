@@ -21,6 +21,8 @@ import (
 
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
+	"github.com/mickeyzzc/gb28181-go/platform"
+	"github.com/pion/rtp"
 )
 
 // broadcastSession is one armed voice broadcast: the host's audio feed
@@ -147,6 +149,25 @@ func (s *Server) answerBroadcastInvite(req sip.Request, tx sip.ServerTransaction
 	sdp := fmt.Sprintf("v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n"+
 		"m=audio %d RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\ny=%d\r\n",
 		serverHost, serverHost, srcPort, ssrc)
+	// GB35114 B/C on platform-sent broadcast audio: the answer carries the
+	// a=security attribute (with the sealed VEK at C) and the sender arms
+	// the cryptor/signer. A C-level failure fails closed (488) rather than
+	// streaming plaintext.
+	var bcCryptor platform.RTPCryptor
+	var bcSigner func(au []byte, ssrc, timestamp uint32) ([]byte, error)
+	if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
+		answerValue, encrypt, sign, err := neg.NewMediaEncryptor(deviceID)
+		if err != nil {
+			slog.Warn("gb28181: broadcast media security failed — 488", "device", deviceID, "error", err)
+			_ = conn.Close()
+			s.respond(req, tx, sip.StatusCode(488), "Not Acceptable Here", nil)
+			return true
+		}
+		if answerValue != "" {
+			sdp += "a=security:" + answerValue + "\r\n"
+			bcCryptor, bcSigner = encrypt, sign
+		}
+	}
 	resp := sip.NewResponseFromRequest("", req, sip.StatusCode(200), "OK", sdp)
 	ct := sip.ContentType("application/sdp")
 	resp.AppendHeader(&ct)
@@ -163,7 +184,7 @@ func (s *Server) answerBroadcastInvite(req sip.Request, tx sip.ServerTransaction
 	bs.inviteResp = resp
 	bs.cancel = cancel
 	s.mu.Unlock()
-	go runBroadcastSender(ctx, conn, dst, bs.audio)
+	go runBroadcastSender(ctx, conn, dst, bs.audio, bcCryptor, bcSigner)
 	close(bs.ready)
 	slog.Info("gb28181: broadcast session up", "device", deviceID, "dest", dst.String())
 	return true
@@ -171,15 +192,20 @@ func (s *Server) answerBroadcastInvite(req sip.Request, tx sip.ServerTransaction
 
 // runBroadcastSender paces the platform→device audio: one source frame
 // per 20 ms tick packetized as RTP/PCMA (8 kHz clock — the timestamp
-// advances by the payload length). Twin of the device package's
-// runTalkbackSender (gb28181-go#94).
-func runBroadcastSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr, frames <-chan []byte) {
-	buf := make([]byte, 12+2048)
+// advances by the payload length). GB35114 sessions sign the plaintext
+// frame (level B) into an RFC 8285 extension and encrypt the payload
+// (level C). Twin of the device package's runTalkbackSender (gb28181-go#94).
+func runBroadcastSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr, frames <-chan []byte, cryptor platform.RTPCryptor, signer func(au []byte, ssrc, timestamp uint32) ([]byte, error)) {
 	ssrc := randUint32()
 	seq := uint16(randUint32())
 	ts := randUint32()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	defer func() {
+		if cryptor != nil {
+			cryptor.Zero()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,13 +217,44 @@ func runBroadcastSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr
 				if len(frame) == 0 || len(frame) > 2048 {
 					continue
 				}
-				buf[0] = 0x80
-				buf[1] = 8 // PCMA
-				binary.BigEndian.PutUint16(buf[2:], seq)
-				binary.BigEndian.PutUint32(buf[4:], ts)
-				binary.BigEndian.PutUint32(buf[8:], ssrc)
-				copy(buf[12:], frame)
-				if _, err := conn.WriteToUDP(buf[:12+len(frame)], dst); err != nil {
+				// GB35114: sign the plaintext frame (level B) into an RFC
+				// 8285 extension, then encrypt the payload (level C).
+				var sigDER []byte
+				if signer != nil {
+					sig, err := signer(frame, ssrc, ts)
+					if err != nil {
+						slog.Debug("gb28181: broadcast AU signing failed", "error", err)
+						continue
+					}
+					sigDER = sig
+				}
+				payload := frame
+				if cryptor != nil {
+					payload = cryptor.Crypt(frame, ssrc, seq)
+				}
+				packet := &rtp.Packet{
+					Header: rtp.Header{
+						Version:        2,
+						PayloadType:    8, // PCMA
+						SequenceNumber: seq,
+						Timestamp:      ts,
+						SSRC:           ssrc,
+					},
+					Payload: payload,
+				}
+				if sigDER != nil {
+					packet.Header.ExtensionProfile = rtp.ExtensionProfileTwoByte
+					if err := packet.SetExtension(platform.RTPExtAUSignature, sigDER); err != nil {
+						slog.Debug("gb28181: broadcast RTP extension failed", "error", err)
+						continue
+					}
+				}
+				wire, err := packet.Marshal()
+				if err != nil {
+					slog.Debug("gb28181: broadcast RTP marshal failed", "error", err)
+					continue
+				}
+				if _, err := conn.WriteToUDP(wire, dst); err != nil {
 					slog.Debug("gb28181: broadcast send loop ended", "error", err)
 					_ = conn.Close()
 					return

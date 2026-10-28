@@ -181,15 +181,37 @@ func (s *Server) startBroadcastSession(ctx context.Context, notify manscdp.Broad
 		if err := s.sendSIP(ackMsg.Serialize(), platformAddr); err != nil {
 			slog.Warn("gb28181: failed to send broadcast ACK", "error", err)
 		}
+		// GB35114 B/C: the platform's 200-OK answer may carry a=security
+		// (with the sealed VEK at C) for the audio it is about to stream.
+		// Absent attribute = plaintext; a malformed one kills the session.
+		var bcCryptor RTPCryptor
+		var bcVerifier AUVerifierFunc
+		if answerSec := SDPSecurityAttributeValue(resp.Body); answerSec != "" {
+			opener, ok := s.cfg.RegisterAuthenticator.(MediaSecurityReceiver)
+			if !ok || opener == nil {
+				slog.Warn("gb28181: broadcast answer carries GB35114 media security but no receiver is configured — abandoning", "answer", answerSec)
+				_ = mediaConn.Close()
+				return
+			}
+			decrypt, verify, err := opener.OpenMediaSecurity(answerSec)
+			if err != nil {
+				slog.Warn("gb28181: GB35114 broadcast media negotiation failed — abandoning", "error", err)
+				_ = mediaConn.Close()
+				return
+			}
+			bcCryptor, bcVerifier = decrypt, verify
+			slog.Info("gb28181: GB35114 broadcast media security negotiated", "answer", answerSec)
+		}
 		_, mediaCancel := context.WithCancel(ctx)
 		s.mu.Lock()
 		s.mediaConn = mediaConn
 		s.mediaCancel = mediaCancel
+		s.talkCryptor = bcCryptor
 		s.mu.Unlock()
 		slog.Info("gb28181: broadcast session receiving", "call_id", inv.CallID, "port", mediaPort)
 		go func() {
 			defer mediaCancel()
-			runTalkbackReceiver(mediaConn, sink, ssrc, AudioPCMA)
+			runTalkbackReceiver(mediaConn, sink, ssrc, AudioPCMA, bcCryptor, bcVerifier)
 		}()
 	case <-time.After(5 * time.Second):
 		slog.Warn("gb28181: broadcast INVITE unanswered — session abandoned")

@@ -29,7 +29,7 @@ type RtpPusher struct {
 	// payloadEncryptor XORs each fragment's payload under the session VEK
 	// (level C); auSigner SM2-signs the whole PS access unit, the signature
 	// riding the AU's last packet as an RTP header extension (level B).
-	payloadEncryptor RTPPayloadCryptor
+	payloadEncryptor RTPCryptor
 	auSigner         AUSignerFunc
 
 	// metrics receives PSBytesOut for every frame handed to the wire
@@ -44,7 +44,7 @@ type RtpPusher struct {
 const RTPExtAUSignature = 1
 
 // SetPayloadEncryptor arms level-C SM4-OFB payload encryption (nil clears).
-func (rp *RtpPusher) SetPayloadEncryptor(fn RTPPayloadCryptor) {
+func (rp *RtpPusher) SetPayloadEncryptor(fn RTPCryptor) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.payloadEncryptor = fn
@@ -55,6 +55,18 @@ func (rp *RtpPusher) SetAUSigner(fn AUSignerFunc) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.auSigner = fn
+}
+
+// ZeroSecurity wipes the session cryptor's key material and detaches the
+// security hooks (session teardown).
+func (rp *RtpPusher) ZeroSecurity() {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if rp.payloadEncryptor != nil {
+		rp.payloadEncryptor.Zero()
+	}
+	rp.payloadEncryptor = nil
+	rp.auSigner = nil
 }
 
 // NewRtpPusher creates a new RTP pusher with the provided UDP connection.
@@ -200,7 +212,7 @@ func (rp *RtpPusher) SendFrame(psData []byte, isKeyFrame bool, pts time.Time, ss
 		// Level C: each fragment XORed under the session VEK with a
 		// per-packet IV (loss of one packet never desyncs the rest).
 		if rp.payloadEncryptor != nil {
-			fragment = rp.payloadEncryptor(fragment, ssrc, rp.seqNum)
+			fragment = rp.payloadEncryptor.Crypt(fragment, ssrc, rp.seqNum)
 		}
 
 		var rtpBuf []byte

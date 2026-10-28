@@ -705,10 +705,16 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 	startNTP := start.Unix() + 2208988800
 	endNTP := end.Unix() + 2208988800
 
-	// Build SDP answer for the fetch (GB28181 format with t= line)
+	// Build SDP answer for the fetch (GB28181 format with t= line). The
+	// a=security line rides along when GB35114 B/C media security is
+	// configured (the fetch receiver arms from the device's answer).
+	fetchSecurity := ""
+	if offer := sm.mediaSecurityOffer(); offer != "" {
+		fetchSecurity = "a=security:" + offer + "\r\n"
+	}
 	sdpAnswer := []byte(fmt.Sprintf(
-		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%d %d\r\nm=video %d RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=%s\r\n",
-		serverIP, sdpName, serverIP, startNTP, endNTP, port, ssrc,
+		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%d %d\r\nm=video %d RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=%s\r\n%s",
+		serverIP, sdpName, serverIP, startNTP, endNTP, port, ssrc, fetchSecurity,
 	))
 
 	// Create StreamHub for this session
