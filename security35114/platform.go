@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/emmansun/gmsm/smx509"
 )
@@ -73,6 +75,11 @@ type PlatformConfig struct {
 	Rand io.Reader
 	// VKEKLen is the negotiated key length in bytes (default 16).
 	VKEKLen int
+	// Level selects the GB 35114 security level (default A). Level B/C
+	// additionally arm per-AU signature verification and, at C, media
+	// decryption — both consulted by the media layers through NewMediaDecryptor
+	// and VerifyAUSignature.
+	Level Level
 }
 
 // platformSession is the per-device handshake state.
@@ -123,7 +130,115 @@ func NewPlatform(cfg PlatformConfig) (*Platform, error) {
 	if cfg.Rand == nil {
 		cfg.Rand = rand.Reader
 	}
+	level, err := ParseLevel(string(cfg.Level))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Level = level
 	return &Platform{cfg: cfg, sessions: map[string]*platformSession{}}, nil
+}
+
+// Level reports the configured security level.
+func (p *Platform) Level() Level { return p.cfg.Level }
+
+// DecorateDownstream stamps the Date and keyed-SM3 Note headers onto a
+// platform→device request (the standard makes the §9.4 digest bidirectional;
+// this is the platform-side mirror of the device's OutgoingSigner). Requests
+// for a device without a completed handshake, and REGISTERs, pass through
+// untouched.
+func (p *Platform) DecorateDownstream(deviceID, method, from, to, callID, body string) (date string, note string) {
+	vkek := p.VKEK(deviceID)
+	if vkek == nil || method == "REGISTER" {
+		return "", ""
+	}
+	date = FormatDate(time.Now())
+	return date, BuildNoteHeader(method, from, to, callID, date, vkek, body, p.cfg.VKEKEncoding)
+}
+
+// MediaSDPOffer returns the "a=security:" SDP value for INVITE offers at the
+// configured level, or "" at level A (no media security negotiated).
+func (p *Platform) MediaSDPOffer() string {
+	if !p.cfg.Level.AtLeast(LevelB) {
+		return ""
+	}
+	return SDPSecurityOffer(p.cfg.Level)
+}
+
+// NewMediaDecryptor opens the VEK envelope from a level-C SDP answer with
+// the device's negotiated VKEK and returns the RTP-payload decryptor.
+func (p *Platform) NewMediaDecryptor(deviceID, envelope string) (func(payload []byte, ssrc uint32, seq uint16) []byte, error) {
+	vkek := p.VKEK(deviceID)
+	if vkek == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+	}
+	vek, err := OpenVEK(vkek, envelope)
+	if err != nil {
+		return nil, fmt.Errorf("gb35114: opening VEK envelope for %s: %w", deviceID, err)
+	}
+	return NewPacketCryptor(vek)
+}
+
+// VerifyAUSignature checks a level-B per-AU signature against the device's
+// trusted certificate (pre-provisioned, or announced via the Capability
+// cnonce at registration).
+func (p *Platform) VerifyAUSignature(deviceID string, au []byte, ssrc, timestamp uint32, sigDER []byte) error {
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	p.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+	}
+	cert := p.resolveCert(deviceID, s)
+	if cert == nil {
+		return fmt.Errorf("%w: %s", ErrDeviceCert, deviceID)
+	}
+	return VerifyAU(cert, au, ssrc, timestamp, sigDER)
+}
+
+// ArmMediaSecurity implements the platform/sip MediaSecurityNegotiator
+// seam: it inspects a device's INVITE answer SDP and returns the receiver
+// hooks for the negotiated level — the AU-signature verifier at B, plus the
+// payload decryptor at C. Nil hooks mean a plaintext session (no
+// a=security attribute, or level A).
+func (p *Platform) ArmMediaSecurity(deviceID string, answerSDP []byte) (
+	decrypt func(payload []byte, ssrc uint32, seq uint16) []byte,
+	verifyAU func(au []byte, ssrc, timestamp uint32, sig []byte) error,
+	err error,
+) {
+	value := sdpsAttributeValue(string(answerSDP))
+	if value == "" {
+		return nil, nil, nil
+	}
+	sec, err := ParseSDPSecurity(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !sec.Level.AtLeast(LevelB) {
+		return nil, nil, nil
+	}
+	verifyAU = func(au []byte, ssrc, timestamp uint32, sig []byte) error {
+		return p.VerifyAUSignature(deviceID, au, ssrc, timestamp, sig)
+	}
+	if !sec.Level.AtLeast(LevelC) || sec.VEKEnvelope == "" {
+		return nil, verifyAU, nil
+	}
+	decrypt, err = p.NewMediaDecryptor(deviceID, sec.VEKEnvelope)
+	if err != nil {
+		return nil, nil, err
+	}
+	return decrypt, verifyAU, nil
+}
+
+// sdpsAttributeValue extracts the first a=security value from an SDP body.
+func sdpsAttributeValue(sdp string) string {
+	for _, line := range strings.Split(sdp, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "a=security:"); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // Challenge records the Capability announcement (parsing an optional cnonce

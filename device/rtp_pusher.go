@@ -25,9 +25,36 @@ type RtpPusher struct {
 	seqNum     uint16
 	mu         sync.Mutex
 
+	// GB35114 B/C media security (nil = plaintext session):
+	// payloadEncryptor XORs each fragment's payload under the session VEK
+	// (level C); auSigner SM2-signs the whole PS access unit, the signature
+	// riding the AU's last packet as an RTP header extension (level B).
+	payloadEncryptor RTPPayloadCryptor
+	auSigner         AUSignerFunc
+
 	// metrics receives PSBytesOut for every frame handed to the wire
 	// (issue #40); nil = no-op.
 	metrics metrics.Hooks
+}
+
+// RTPExtAUSignature is the RFC 8285 extension ID carrying the GB35114
+// level-B per-AU SM2 signature on the AU's last (marker) packet. DER
+// signatures exceed the 16-byte one-byte-header limit, so the two-byte
+// header profile is used.
+const RTPExtAUSignature = 1
+
+// SetPayloadEncryptor arms level-C SM4-OFB payload encryption (nil clears).
+func (rp *RtpPusher) SetPayloadEncryptor(fn RTPPayloadCryptor) {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	rp.payloadEncryptor = fn
+}
+
+// SetAUSigner arms level-B per-AU signatures (nil clears).
+func (rp *RtpPusher) SetAUSigner(fn AUSignerFunc) {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	rp.auSigner = fn
 }
 
 // NewRtpPusher creates a new RTP pusher with the provided UDP connection.
@@ -80,6 +107,33 @@ func BuildRtpPacket(payload []byte, marker bool, ssrc uint32, seqNum uint16, tim
 	return buf, nil
 }
 
+// BuildRtpPacketWithExtension builds an RTP packet carrying one RFC 8285
+// header extension (the GB35114 level-B AU signature). DER SM2 signatures
+// exceed the 16-byte one-byte-header limit, so the two-byte header profile
+// is selected before the extension is attached.
+func BuildRtpPacketWithExtension(payload []byte, marker bool, ssrc uint32, seqNum uint16, timestamp uint32, extID uint8, ext []byte) ([]byte, error) {
+	packet := &rtp.Packet{
+		Header: rtp.Header{
+			Version:          2,
+			PayloadType:      96,
+			Marker:           marker,
+			SequenceNumber:   seqNum,
+			Timestamp:        timestamp,
+			SSRC:             ssrc,
+			ExtensionProfile: rtp.ExtensionProfileTwoByte,
+		},
+		Payload: payload,
+	}
+	if err := packet.SetExtension(extID, ext); err != nil {
+		return nil, fmt.Errorf("failed to set RTP extension %d: %w", extID, err)
+	}
+	buf, err := packet.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal RTP packet: %w", err)
+	}
+	return buf, nil
+}
+
 // writeRTPOverTCP frames an RTP packet with GB/T 28181 $-framing.
 // RTSP-interleaved style (Annex C.2 as demuxed by GB28181 platforms and
 // ZLMediaKit/wvp-class receivers):
@@ -119,6 +173,17 @@ func (rp *RtpPusher) SendFrame(psData []byte, isKeyFrame bool, pts time.Time, ss
 	// Convert PTS to 90kHz RTP timestamp (32-bit per RFC 3550; wraps naturally)
 	timestamp := uint32(timeTo90kHz(pts))
 
+	// Level B: one signature over the whole PS access unit, carried in the
+	// RTP header extension of the AU's final packet.
+	var auSig []byte
+	if rp.auSigner != nil {
+		sig, err := rp.auSigner(psData, ssrc, timestamp)
+		if err != nil {
+			return fmt.Errorf("failed to sign access unit: %w", err)
+		}
+		auSig = sig
+	}
+
 	// Fragment PS data across multiple RTP packets
 	offset := 0
 	totalFragments := (len(psData) + rtpMtu - 1) / rtpMtu
@@ -132,7 +197,19 @@ func (rp *RtpPusher) SendFrame(psData []byte, isKeyFrame bool, pts time.Time, ss
 		fragment := psData[offset:end]
 		marker := (fragmentIndex == totalFragments-1) // Last fragment
 
-		rtpBuf, err := BuildRtpPacket(fragment, marker, ssrc, rp.seqNum, timestamp)
+		// Level C: each fragment XORed under the session VEK with a
+		// per-packet IV (loss of one packet never desyncs the rest).
+		if rp.payloadEncryptor != nil {
+			fragment = rp.payloadEncryptor(fragment, ssrc, rp.seqNum)
+		}
+
+		var rtpBuf []byte
+		var err error
+		if marker && auSig != nil {
+			rtpBuf, err = BuildRtpPacketWithExtension(fragment, marker, ssrc, rp.seqNum, timestamp, RTPExtAUSignature, auSig)
+		} else {
+			rtpBuf, err = BuildRtpPacket(fragment, marker, ssrc, rp.seqNum, timestamp)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to build RTP packet for fragment %d: %w", fragmentIndex, err)
 		}

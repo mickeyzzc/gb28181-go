@@ -233,6 +233,49 @@ func (a *Authenticator) VerifyIncomingNote(method, from, to, callID, date, note,
 	return nil
 }
 
+// AnswerMediaSecurity answers an INVITE's "a=security:" offer. The offered
+// level is authoritative (the standard has the SIP server control front-end
+// signing/encryption): level B returns the echoed level only; level C
+// additionally draws a session VEK, seals it under the negotiated VKEK, and
+// returns the payload encryptor alongside the answer attribute value. An
+// empty answer value (level A offer or parse failure reported via err)
+// means the session stays plaintext.
+func (a *Authenticator) AnswerMediaSecurity(offerValue string) (answerValue string, encrypt func(payload []byte, ssrc uint32, seq uint16) []byte, err error) {
+	sec, err := ParseSDPSecurity(offerValue)
+	if err != nil {
+		return "", nil, err
+	}
+	if !sec.Level.AtLeast(LevelB) {
+		return "", nil, nil
+	}
+	if !sec.Level.AtLeast(LevelC) {
+		return SDPSecurityAnswer(LevelB, ""), nil, nil
+	}
+	vkek := a.VKEK()
+	if vkek == nil {
+		return "", nil, errors.New("security35114: C-level media requested before the handshake completed")
+	}
+	vek, err := GenerateVEK(a.opts.Rand)
+	if err != nil {
+		return "", nil, err
+	}
+	envelope, err := SealVEK(vkek, vek)
+	if err != nil {
+		return "", nil, err
+	}
+	encrypt, err = NewPacketCryptor(vek)
+	if err != nil {
+		return "", nil, err
+	}
+	return SDPSecurityAnswer(LevelC, envelope), encrypt, nil
+}
+
+// SignAU signs one access unit with the device identity (level B media
+// signatures).
+func (a *Authenticator) SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error) {
+	return SignAU(a.opts.Device.PrivateKey, au, ssrc, timestamp)
+}
+
 // newRandom draws the 128-bit random2.
 func (a *Authenticator) newRandom() (string, error) {
 	buf := make([]byte, 16)

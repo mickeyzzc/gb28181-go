@@ -57,6 +57,14 @@ type Receiver struct {
 	maxJitterPackets int    // default: 32
 	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
+	// GB35114 B/C media security (nil = plaintext session). payloadDecryptor
+	// un-XORs each incoming payload (level C, set before Start); auVerifier
+	// checks the level-B per-AU signature carried in the marker packet's
+	// RTP header extension and drops the AU on failure (fail closed).
+	payloadDecryptor func(payload []byte, ssrc uint32, seq uint16) []byte
+	auVerifier       func(au []byte, ssrc, timestamp uint32, sig []byte) error
+	auVerifyFailed   atomic.Uint64
+
 	// Stage 2: PS demux — or ES depacketization when the session's
 	// payloads are bare NAL units (GB/T 28181-2022 ES over RTP, issue
 	// #110). The mode latches on the first classified payload.
@@ -227,6 +235,31 @@ func (r *Receiver) Running() bool {
 // NAL-shaped classify as bare G.711 RTP. Call before the first packet.
 func (r *Receiver) SetAudioOnly(v bool) { r.audioOnlyHint.Store(v) }
 
+// RTPExtAUSignature is the RFC 8285 extension ID carrying the GB35114
+// level-B per-AU SM2 signature on the AU's marker packet.
+const RTPExtAUSignature = 1
+
+// SetPayloadDecryptor arms level-C SM4-OFB payload decryption. Call before
+// Start; nil (default) keeps the session plaintext.
+func (r *Receiver) SetPayloadDecryptor(fn func(payload []byte, ssrc uint32, seq uint16) []byte) {
+	r.payloadDecryptor = fn
+}
+
+// SetAUVerifier arms level-B per-AU signature verification (nil disables).
+func (r *Receiver) SetAUVerifier(fn func(au []byte, ssrc, timestamp uint32, sig []byte) error) {
+	r.auVerifier = fn
+}
+
+// AUVerifyFailures reports how many access units were dropped by signature
+// verification (level-B diagnostics).
+func (r *Receiver) AUVerifyFailures() uint64 { return r.auVerifyFailed.Load() }
+
+// MediaSecurityArmed reports which GB35114 media-security hooks are active
+// (payload decryption at level C, AU-signature verification at level B/C).
+func (r *Receiver) MediaSecurityArmed() (decrypt, verify bool) {
+	return r.payloadDecryptor != nil, r.auVerifier != nil
+}
+
 // AudioOnly reports whether this receiver serves an audio-only session —
 // the keyframe watchdog exempts such sessions (no IDR ever arrives).
 func (r *Receiver) AudioOnly() bool {
@@ -380,6 +413,13 @@ func (r *Receiver) readLoop(ctx context.Context) {
 		}
 
 		pkt.Payload = append([]byte(nil), pkt.Payload...)
+
+		// GB35114 level C: un-XOR the payload before reassembly so the PS
+		// demuxer sees plaintext. Per-packet IVs keep the keystream
+		// independent of packet loss.
+		if r.payloadDecryptor != nil {
+			pkt.Payload = r.payloadDecryptor(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
+		}
 
 		// Feed to jitter buffer for reassembly
 		if err := r.feedJitterBuffer(&pkt); err != nil {
@@ -662,6 +702,28 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	lastPkt := packets[len(packets)-1]
 	ptsTicks := int64(lastPkt.Header.Timestamp)
 	r.ptsClock.Store(ptsTicks)
+
+	// GB35114 level B: verify the AU signature carried in the marker
+	// packet's RTP header extension. The signature covers the stitched PS
+	// bytes plus the SSRC/timestamp binding. Fail closed: an invalid
+	// signature, or a marker AU with no signature at all (an attacker could
+	// strip the extension), drops the whole access unit. (ES-over-RTP
+	// sessions depacketize per-packet and are not signature-verified.)
+	if r.auVerifier != nil && endedOnMarker {
+		sig := lastPkt.Header.GetExtension(RTPExtAUSignature)
+		if len(sig) == 0 {
+			r.auVerifyFailed.Add(1)
+			logger().Warn("gb28181: GB35114 AU signature missing — dropping access unit",
+				"camera_id", r.cameraID)
+			return
+		}
+		if err := r.auVerifier(auPayload, lastPkt.Header.SSRC, lastPkt.Header.Timestamp, sig); err != nil {
+			r.auVerifyFailed.Add(1)
+			logger().Warn("gb28181: GB35114 AU signature rejected — dropping access unit",
+				"camera_id", r.cameraID, "error", err)
+			return
+		}
+	}
 
 	// Feed to Stage 2: PS demuxer
 	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, endedOnMarker)

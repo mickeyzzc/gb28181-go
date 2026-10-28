@@ -243,9 +243,42 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 	// snapshot (udp | tcp-passive | tcp-active — GB28181 media_transport).
 	sessionMgr.SetMediaTransport(func() string { return s.cfg.MediaTransport })
 	sessionMgr.SetTCPFraming(func() string { return s.cfg.TCPFraming })
+	// GB35114 B/C media security: the offer attribute resolves live from
+	// the configured authenticator ("" keeps offers plaintext).
+	if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
+		sessionMgr.SetMediaSecurityOffer(neg.MediaSDPOffer)
+	}
 	// Playback fetch sessions BYE on their own dialog store.
 	sessionMgr.SetPlaybackByeSender(s.sendByeForPlayback)
 	return s
+}
+
+// decorateOutgoing stamps the GB35114 Date + Note headers onto a
+// platform→device request when the authenticator implements DownstreamSigner
+// and the device has a completed security session (the standard's §9.4
+// digest is bidirectional). Requests to Digest-only devices pass through.
+// From/To/Call-ID enter the digest in their wire value form (see
+// verifyIncomingNote) so the device recomputes over identical octets.
+func (s *Server) decorateOutgoing(deviceID string, req sip.Request) {
+	signer, ok := s.cfg.RegisterAuthenticator.(DownstreamSigner)
+	if !ok || signer == nil {
+		return
+	}
+	var fromVal, toVal string
+	if from, ok := req.From(); ok {
+		fromVal = from.Value()
+	}
+	if to, ok := req.To(); ok {
+		toVal = to.Value()
+	}
+	callIDVal := wireHeaderValue(req, "Call-ID")
+	date, note := signer.DecorateDownstream(deviceID, string(req.Method()),
+		fromVal, toVal, callIDVal, string(req.Body()))
+	if date == "" {
+		return
+	}
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Date", Contents: date})
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Note", Contents: note})
 }
 
 // onFirstRTP confirms a session as playing when its first media packet
@@ -542,6 +575,7 @@ func (s *Server) SendMessage(deviceID string, body []byte) error {
 	if err != nil {
 		return err
 	}
+	s.decorateOutgoing(deviceID, req)
 
 	if _, err := srv.Request(req); err != nil {
 		return fmt.Errorf("gb28181: send MESSAGE to %s: %w", deviceID, err)
@@ -767,6 +801,8 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		return fmt.Errorf("gb28181: SIP server not started")
 	}
 
+	s.decorateOutgoing(deviceID, req)
+
 	tx, err := srv2.Request(req)
 	if err != nil {
 		_ = s.sessionMgr.Bye(channelID)
@@ -786,6 +822,28 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		return fmt.Errorf("gb28181: INVITE to %s: %w", channelID, err)
 	}
 	if resp != nil {
+		// GB35114 B/C: arm the receiver's media security from the device's
+		// answer BEFORE the ACK — most devices start streaming the instant
+		// they see it, and level-C payloads must decrypt from the first
+		// packet. No a=security in the answer (or a level-A session) arms
+		// nothing.
+		if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
+			if rc := s.sessionMgr.GetReceiver(channelID); rc != nil {
+				decrypt, verifyAU, err := neg.ArmMediaSecurity(deviceID, []byte(resp.Body()))
+				if err != nil {
+					slog.Warn("gb28181: GB35114 media negotiation failed on INVITE answer", "channel", channelID, "error", err)
+				} else {
+					if decrypt != nil {
+						rc.SetPayloadDecryptor(decrypt)
+						slog.Info("gb28181: GB35114 level-C media decryption armed", "channel", channelID, "device", deviceID)
+					}
+					if verifyAU != nil {
+						rc.SetAUVerifier(verifyAU)
+						slog.Info("gb28181: GB35114 level-B AU signature verification armed", "channel", channelID, "device", deviceID)
+					}
+				}
+			}
+		}
 		// Complete the 3-way handshake with the matched 2xx: without the ACK
 		// most GB28181 devices never start the RTP stream (RFC 3261 §13.2.2.4).
 		ack := sip.NewAckRequest("", req, resp, "", nil)
@@ -995,6 +1053,7 @@ func (s *Server) sendDialogReset(deviceID, channelID, deviceAddr string) {
 	if err != nil {
 		return
 	}
+	s.decorateOutgoing(deviceID, bye)
 	if _, err := srv.Request(bye); err != nil {
 		slog.Debug("gb28181: dialog-reset BYE send failed", "channel", channelID, "error", err)
 		return
@@ -1979,6 +2038,22 @@ func rawHeaderValue(req sip.Request, name string) string {
 	for _, h := range req.GetHeaders(name) {
 		if gh, ok := h.(*sip.GenericHeader); ok {
 			return strings.TrimSpace(gh.Contents)
+		}
+	}
+	return ""
+}
+
+// wireHeaderValue extracts a header's wire value across gosip's typed
+// headers: GenericHeader contents first, then the rendered String() minus
+// the header name (Call-ID arrives typed, so rawHeaderValue alone misses
+// it). This is the value a peer reads after the colon.
+func wireHeaderValue(req sip.Request, name string) string {
+	if v := rawHeaderValue(req, name); v != "" {
+		return v
+	}
+	for _, h := range req.GetHeaders(name) {
+		if s := h.String(); strings.HasPrefix(s, name+":") {
+			return strings.TrimSpace(strings.TrimPrefix(s, name+":"))
 		}
 	}
 	return ""

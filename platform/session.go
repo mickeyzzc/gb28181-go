@@ -79,6 +79,11 @@ type SessionManager struct {
 	// tcpFramingFunc resolves the configured TCP framing ("rfc4571" |
 	// "0x24" | "auto"); nil → auto.
 	tcpFramingFunc func() string
+
+	// mediaSecurityOffer (optional) is the "a=security:" SDP value stamped
+	// on live INVITE offers when GB35114 B/C media security is configured
+	// ("" = plaintext offers). A func so config reloads are picked up.
+	mediaSecurityOfferFunc func() string
 	// byeSender (optional, set by the SIP server) transmits a SIP BYE to the
 	// device before local teardown when a session is stopped locally
 	// (user-initiated stop, INVITE failure). Nil in tests.
@@ -129,6 +134,25 @@ func (sm *SessionManager) SetTCPFraming(fn func() string) {
 	sm.mu.Lock()
 	sm.tcpFramingFunc = fn
 	sm.mu.Unlock()
+}
+
+// SetMediaSecurityOffer wires the GB35114 "a=security:" INVITE-offer value
+// resolver ("" disables media security negotiation on offers).
+func (sm *SessionManager) SetMediaSecurityOffer(fn func() string) {
+	sm.mu.Lock()
+	sm.mediaSecurityOfferFunc = fn
+	sm.mu.Unlock()
+}
+
+// mediaSecurityOffer snapshots the configured offer value ("" = none).
+func (sm *SessionManager) mediaSecurityOffer() string {
+	sm.mu.Lock()
+	fn := sm.mediaSecurityOfferFunc
+	sm.mu.Unlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
 }
 
 // MediaTransport snapshots the configured media transport (tcp-passive
@@ -231,8 +255,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 
 	transport := sm.MediaTransport()
 	// Build SDP offer (GB28181 minimal format) — audio-only channels get
-	// the lone m=audio form (#135).
-	sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly)
+	// the lone m=audio form (#135). The a=security line rides along when
+	// GB35114 B/C media security is configured.
+	sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly, sm.mediaSecurityOffer())
 
 	// Use the provided AU callback (from the recorder) instead of creating
 	// an orphaned hub. When onAU is nil (tests), fall back to a local hub.
@@ -311,7 +336,7 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 			sm.sessions[channel.ID] = sess
 			sm.mu.Unlock()
 			slog.Info("gb28181: multicast media session", "group", serverIP, "port", port, "channel", channel.ID)
-			sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly)
+			sdpAnswer := buildLiveSDP(serverIP, port, transport, ssrc, channel.AudioOnly, sm.mediaSecurityOffer())
 			return sdpAnswer, nil
 		}
 		addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", serverIP, port))
@@ -351,7 +376,9 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 }
 
 // buildLiveSDP assembles the live-view SDP for the requested transport.
-func buildLiveSDP(serverIP string, port uint16, transport, ssrc string, audioOnly bool) []byte {
+// securityOffer, when non-empty, is emitted as a trailing a=security line
+// (GB35114 B/C media security negotiation).
+func buildLiveSDP(serverIP string, port uint16, transport, ssrc string, audioOnly bool, securityOffer string) []byte {
 	// Audio-only channels (voice-input devices, Table E.1 type 136) have no
 	// video track: the INVITE negotiates a lone m=audio line with G.711
 	// A-law, PT 8 (issue #135). Devices answer bare RTP G.711 on it; some
@@ -373,11 +400,14 @@ func buildLiveSDP(serverIP string, port uint16, transport, ssrc string, audioOnl
 	default:
 		mLine = fmt.Sprintf("m=%s %d RTP/AVP %s\r\n", media, port, pt)
 	}
+	security := ""
+	if securityOffer != "" {
+		security = "a=security:" + securityOffer + "\r\n"
+	}
 	return []byte(fmt.Sprintf(
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=Play\r\nc=IN IP4 %s\r\nt=0 0\r\n%s"+
-			"a=recvonly\r\na=rtpmap:%s\r\n%sy=%s\r\n",
-		serverIP, serverIP, mLine, rtpmap, setup, ssrc,
-	))
+			"a=recvonly\r\na=rtpmap:%s\r\n%sy=%s\r\n%s",
+		serverIP, serverIP, mLine, rtpmap, setup, ssrc, security))
 }
 
 // acceptTCP waits for the device's media connection on the session's TCP
