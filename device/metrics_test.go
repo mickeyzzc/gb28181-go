@@ -15,14 +15,14 @@ type countingHooks struct {
 	attempt, ok, fail, keepaliveFail, psBytes atomic.Int32
 }
 
-func (c *countingHooks) RegisterAttempt()      { c.attempt.Add(1) }
-func (c *countingHooks) RegisterOK()           { c.ok.Add(1) }
-func (c *countingHooks) RegisterFail()         { c.fail.Add(1) }
-func (c *countingHooks) KeepaliveFail()        { c.keepaliveFail.Add(1) }
-func (c *countingHooks) InviteSessionStarted() {}
-func (c *countingHooks) InviteSessionStopped() {}
-func (c *countingHooks) InviteFail()           {}
-func (c *countingHooks) PSBytesOut(n int64)    { c.psBytes.Add(int32(n)) }
+func (c *countingHooks) RegisterAttempt()             { c.attempt.Add(1) }
+func (c *countingHooks) RegisterOK()                  { c.ok.Add(1) }
+func (c *countingHooks) RegisterFail()                { c.fail.Add(1) }
+func (c *countingHooks) KeepaliveFail()               { c.keepaliveFail.Add(1) }
+func (c *countingHooks) InviteSessionStarted()        {}
+func (c *countingHooks) InviteSessionStopped()        {}
+func (c *countingHooks) InviteFail()                  {}
+func (c *countingHooks) PSBytesOut(n int64)           { c.psBytes.Add(int32(n)) }
 func (c *countingHooks) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*countingHooks)(nil)

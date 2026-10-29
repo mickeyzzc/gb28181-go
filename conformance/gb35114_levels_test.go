@@ -430,7 +430,7 @@ func TestGB35114LevelC_VoiceBroadcast(t *testing.T) {
 
 	audio <- []byte{0xD5, 0x5A, 0xA5, 0x37}
 	audio <- []byte{0x0F}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case p := <-got:
 			require.Equal(t, [][]byte{{0xD5, 0x5A, 0xA5, 0x37}, {0x0F}}[i], p,

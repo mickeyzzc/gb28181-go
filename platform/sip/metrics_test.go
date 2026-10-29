@@ -16,14 +16,14 @@ type countingSipHooks struct {
 	ok, fail, started, stopped atomic.Int32
 }
 
-func (c *countingSipHooks) RegisterAttempt()      {}
-func (c *countingSipHooks) RegisterOK()           { c.ok.Add(1) }
-func (c *countingSipHooks) RegisterFail()         { c.fail.Add(1) }
-func (c *countingSipHooks) KeepaliveFail()        {}
-func (c *countingSipHooks) InviteSessionStarted() { c.started.Add(1) }
-func (c *countingSipHooks) InviteSessionStopped() { c.stopped.Add(1) }
-func (c *countingSipHooks) InviteFail()           {}
-func (c *countingSipHooks) PSBytesOut(int64)      {}
+func (c *countingSipHooks) RegisterAttempt()             {}
+func (c *countingSipHooks) RegisterOK()                  { c.ok.Add(1) }
+func (c *countingSipHooks) RegisterFail()                { c.fail.Add(1) }
+func (c *countingSipHooks) KeepaliveFail()               {}
+func (c *countingSipHooks) InviteSessionStarted()        { c.started.Add(1) }
+func (c *countingSipHooks) InviteSessionStopped()        { c.stopped.Add(1) }
+func (c *countingSipHooks) InviteFail()                  {}
+func (c *countingSipHooks) PSBytesOut(int64)             {}
 func (c *countingSipHooks) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*countingSipHooks)(nil)
