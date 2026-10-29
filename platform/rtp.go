@@ -75,6 +75,11 @@ type Receiver struct {
 	es         *ESDemuxer
 	esLatch    atomic.Bool
 	classified atomic.Bool // payload mode decided once per session
+	// expectDecryptor holds emissions until the level-C decryptor arms:
+	// the INVITE offer promised GB35114-C, so pre-arm packets are
+	// ciphertext — buffering them without draining keeps the stream
+	// complete; arming retro-decrypts and releases the run.
+	expectDecryptor atomic.Bool
 	// audioOnlyHint arms bare-audio mode for voice-input channels (#135):
 	// the first payload that is neither PS nor NAL-shaped is treated as
 	// bare G.711 (PT 8) instead of garbage PS.
@@ -262,10 +267,66 @@ type RTPCryptor interface {
 // auVerifierFn is the level-B per-AU signature verifier signature.
 type auVerifierFn func(au []byte, ssrc, timestamp uint32, sig []byte) error
 
-// SetPayloadDecryptor arms level-C SM4-OFB payload decryption. Call before
-// Start; nil (default) keeps the session plaintext.
+// SetExpectPayloadDecryptor declares that this session's INVITE offered
+// GB35114-C media security: packets arriving before the decryptor arms
+// are buffered without draining (they are ciphertext); the arming call
+// retro-decrypts and releases them. false releases the hold (answer
+// downgrade / teardown).
+func (r *Receiver) SetExpectPayloadDecryptor(expect bool) {
+	r.expectDecryptor.Store(expect)
+}
+
+// SetPayloadDecryptor arms level-C SM4-OFB payload decryption. Ideally
+// called before Start; a late arming (the INVITE answer racing the
+// device's first packets — the device streams the instant it answers) is
+// handled: anything buffered so far is UNDECRYPTED ciphertext, and the
+// one-shot classification latch may already have misread it (encrypted
+// bytes false-positive as ES ~1/3 of the time, latching the whole
+// session into the wrong demuxer). Late arming drops the buffered
+// pre-arm packets and re-opens classification. nil clears the hook
+// without touching session state.
 func (r *Receiver) SetPayloadDecryptor(c RTPCryptor) {
 	r.payloadDecryptor.Store(&c)
+	if c == nil {
+		return
+	}
+	r.jitterBufferMu.Lock()
+	defer r.jitterBufferMu.Unlock()
+	held := r.expectDecryptor.Swap(false)
+	if !held && !r.classified.Load() && len(r.jitterBuffer) == 0 {
+		return // armed before any packet — nothing to salvage
+	}
+	// Late arming (the INVITE answer racing the device's first packets —
+	// the device streams the instant it answers, and the platform's
+	// OpenVEK arming runs SM2/SM4 after the answer transit). The buffered
+	// packets are UNDECRYPTED ciphertext, and the one-shot classification
+	// latch may already have misread them (encrypted bytes false-positive
+	// as ES ~1/3 of the time). Per-packet IVs (SM3(VEK‖SSRC‖seq)) make
+	// the transform position-independent: RETRO-DECRYPT the buffered run
+	// instead of dropping it — nothing is lost, the stream stays complete
+	// from its first packet.
+	for seq, pkt := range r.jitterBuffer {
+		if len(pkt.Payload) > 0 {
+			pkt.Payload = c.Crypt(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
+			r.jitterBuffer[seq] = pkt
+		}
+	}
+	// Classification and the demuxer may have consumed ciphertext —
+	// re-open both; the (now plaintext) buffered run re-classifies on its
+	// next drain. baseSeq/baseSeqSet stay: the sequence stream itself is
+	// intact.
+	if r.esLatch.Load() || r.bareAudio.Load() {
+		logger().Info("gb28181: GB35114 decryptor armed after classification — retro-decrypting buffered packets and re-classifying",
+			"camera_id", r.cameraID, "buffered", len(r.jitterBuffer))
+	}
+	r.classified.Store(false)
+	r.esLatch.Store(false)
+	r.bareAudio.Store(false)
+	r.es = nil
+	r.demuxer = NewPSDemuxer()
+	// Release the held run (retro-decrypted above) — classification and
+	// AU emission proceed from the stream's true first packet.
+	r.emitAccessUnitsLocked()
 }
 
 // SetAUVerifier arms level-B per-AU signature verification (nil disables).
@@ -570,6 +631,13 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 	r.jitterBuffer[seq] = pkt
 	r.lastSeq = seq
 
+	// GB35114-C session awaiting its decryptor: hold the run (ciphertext)
+	// until arming retro-decrypts and releases it — draining now would
+	// misclassify and feed garbage.
+	if r.expectDecryptor.Load() && r.payloadDecryptor.Load() == nil {
+		return nil
+	}
+
 	// Marker bit indicates AU boundary - emit complete AU
 	if pkt.Header.Marker {
 		r.emitAccessUnitsLocked()
@@ -589,10 +657,29 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 // continues (the partial AU is dropped, which the PS demuxer tolerates)
 // instead of freezing and growing the buffer without bound.
 func (r *Receiver) emitAccessUnitsLocked() {
-	if len(r.jitterBuffer) == 0 {
-		return
+	for {
+		packets := r.drainContiguousRunLocked()
+		if len(packets) == 0 {
+			return
+		}
+		// Split the run at MARKER boundaries: a contiguous run can span
+		// several complete AUs (held packets released on decryptor arming,
+		// gap-skip re-runs, force flushes) — stitching them into one AU
+		// would hand consumers mis-framed multi-frame emissions.
+		start := 0
+		for i, pkt := range packets {
+			if pkt.Header.Marker || i == len(packets)-1 {
+				r.processRunLocked(packets[start : i+1])
+				start = i + 1
+			}
+		}
 	}
+}
 
+// drainContiguousRunLocked collects the ordered contiguous run of packets
+// from baseSeq (deleting as it goes), skipping a leading sequence gap when
+// baseSeq itself is missing. An empty result means nothing is drainable.
+func (r *Receiver) drainContiguousRunLocked() []*rtp.Packet {
 	// Build the ordered, CONTIGUOUS run of packets by sequence number starting
 	// at baseSeq. The loop runs until the run breaks at a gap — comparing
 	// against len(r.jitterBuffer) as the bound would be wrong: entries are
@@ -617,7 +704,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 		// that is AHEAD of baseSeq (positive 16-bit distance — wrap-safe).
 		next, ok := r.nextBufferedSeqLocked()
 		if !ok {
-			return
+			return nil
 		}
 		r.packetsDroppedU++
 		logger().Debug("gb28181: RTP packet loss — skipping gap",
@@ -631,12 +718,16 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			r.es.DropPartial()
 		}
 		r.baseSeq = next
-		// Re-run so the buffered packets above the gap are emitted now.
-		r.emitAccessUnitsLocked()
-		return
+		// Drain the buffered packets above the gap.
+		return r.drainContiguousRunLocked()
 	}
+	return packets
+}
 
-	// Advance base sequence to account for emitted packets
+// processRunLocked reassembles one packet run (ending on its AU's marker
+// when complete) and emits its access units.
+func (r *Receiver) processRunLocked(packets []*rtp.Packet) {
+	// Advance base sequence to account for drained packets
 	r.baseSeq += uint16(len(packets))
 
 	// A real AU boundary exists only when the drained run ENDS on the marker
