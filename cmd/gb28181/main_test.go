@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 // The dispatch table is the CLI's contract: empty and unknown
 // subcommands are usage errors (exit 2), help exits 0. The subcommand
@@ -36,5 +39,17 @@ func TestDispatchKnowsAllSubcommands(t *testing.T) {
 		if fn == nil {
 			t.Errorf("subcommand %q has no runner", sub)
 		}
+	}
+}
+
+// annexB joins NALUs with start codes — the psmux-rtp input format.
+func TestAnnexB(t *testing.T) {
+	got := annexB([][]byte{{1, 2}, {3}})
+	want := []byte{0, 0, 0, 1, 1, 2, 0, 0, 0, 1, 3}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("annexB = %x, want %x", got, want)
+	}
+	if got := annexB(nil); len(got) != 0 {
+		t.Fatalf("annexB(nil) = %x, want empty", got)
 	}
 }
