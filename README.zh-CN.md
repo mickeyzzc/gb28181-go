@@ -23,7 +23,7 @@
 | `nalutil/` | NALU 工具（IDR 判定、参数集提取/比较）—— 平台收流与未来设备侧共用 | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform 自回环 conformance 套件 —— 真实 `device.Server` 对真实平台 SIP 服务器（localhost）：REGISTER+摘要认证 → 目录 → 保活存活 → INVITE 直播 → 字节级 RTP/PS 往返 → BYE；另有 SIPS（TLS 信令）变体。两个角色必须在每次 CI 上对每一条协议理解达成一致。 | 新增（issue #13） |
 | `platform/cascade/` | 级联客户端 —— 本平台作为下级平台向上级平台注册：聚合目录上报（GB 通道 ID 首见分配、跨重启稳定）、INVITE 转发拉流（FrameHub 订阅 → psmux → RTP）、录像段回放、BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS 处理、协议级回环测试。本地摄像头经 `CameraSource` 注入、持久化经 `Store`、录像段读取经 `SegmentParser` —— 全部宿主接缝。 | MiBeeNvr `internal/gb28181/cascade` |
-| `security35114/` | **可选，build tag 隔离（`-tags gb35114`）** —— GB 35114-2017 **A级** 安全，**设备/平台两侧**：设备侧基于 SM2 数字证书的 REGISTER 双向认证（`device.Config.RegisterAuthenticator`），平台侧挑战/验签/Note 校验状态机（`security35114.Platform`，经 `platform/sip` 的 `Config.RegisterAuthenticator` 接入）。`cryptkey` SM2 信封内的 VKEK 协商、后续信令的 keyed-SM3 `Note` 头完整性。 | 新增（v0.4.0，平台侧 v0.5.0） |
+| `security35114/` | **可选，build tag 隔离（`-tags gb35114`）** —— GB 35114-2017 **A/B/C 三级**安全，**设备/平台两侧**：设备侧基于 SM2 数字证书的 REGISTER 双向认证（`device.Config.RegisterAuthenticator`），平台侧挑战/验签/Note 校验状态机（`security35114.Platform`，经 `platform/sip` 的 `Config.RegisterAuthenticator` 接入）。`cryptkey` SM2 信封内的 VKEK 协商、后续信令的 keyed-SM3 `Note` 头完整性。 | 新增（v0.4.0，平台侧 v0.5.0） |
 
 ## 使用（设备端）
 
@@ -53,9 +53,9 @@ err := srv.Start(ctx)
 
 录像段使用 `device.OpenSegment` 读取的参考格式：裸 Annex-B H.264 + 每帧 `.ts.jsonl` sidecar。测试可使用现成的 `device.FrameHub`（有界通道、满则丢弃语义的 `FrameSource` 实现）。
 
-## GB35114 A 级安全（v0.4.0 设备侧 / v0.5.0 平台侧，可选）
+## GB35114 国密安全（A/B/C 三级，可选）
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层。本库只实现 **A级** —— B/C 级额外依赖 SVAC 媒体（GB/T 25724，硬件编解码器），设计上不在范围内。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖。专题手册（握手线格式、两侧接线、可配置二义性、运维属性、证书供给）：**[GB35114 A 级安全手册](docs/zh-CN/gb28181-go-gb35114.md)**。
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层——**A/B/C 三级全部实现**（B/C 媒体侧为 PS-over-RTP 软件形态：B 级逐 AU SM2 签名，C 级 VKEK 信封 VEK + SM4-OFB 载荷加密，经 INVITE SDP `a=security` 属性按会话协商；全部媒体方向覆盖——直播、回放/下载、双向对讲、语音广播、级联）。SVAC 原生（GB/T 25724 硬件编码器）流仍设计性不在范围。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖。专题手册（握手线格式、两侧接线、B/C 媒体安全、密钥管理、证书供给）：**[GB35114 国密手册](docs/zh-CN/gb28181-go-gb35114.md)**。
 
 ```go
 // go build -tags gb35114

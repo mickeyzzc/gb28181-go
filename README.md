@@ -23,7 +23,7 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform loopback conformance suite — a real `device.Server` against a real platform SIP server on localhost: REGISTER+digest → catalog → keepalive liveness → INVITE live → byte-exact RTP/PS round-trip → BYE; plus the SIPS (TLS signaling) variant. Both roles must agree on every protocol reading, on every CI run. | new (issue #13) |
 | `platform/cascade/` | Cascade client — this platform registers as a LOWER platform to an upper platform: aggregated catalog upload with stable first-seen channel IDs, INVITE forwarding (FrameHub subscribe → psmux → RTP), playback from recorded segments, BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS handling, protocol-level loopback tests. Local cameras via `CameraSource`, persistence via `Store`, segment reading via `SegmentParser` — all host-injected. | MiBeeNvr `internal/gb28181/cascade` |
-| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 **A-level** security for **both sides**: device-side SM2-certificate mutual authentication over the REGISTER flow (`device.Config.RegisterAuthenticator`) and platform-side challenge/verify/Note state machine (`security35114.Platform`, wired through `platform/sip`'s `Config.RegisterAuthenticator`). VKEK negotiation inside the `cryptkey` SM2 envelope, keyed-SM3 `Note`-header integrity for subsequent signaling. | new (v0.4.0, platform side v0.5.0) |
+| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 security **levels A/B/C** for **both sides**: device-side SM2-certificate mutual authentication over the REGISTER flow (`device.Config.RegisterAuthenticator`) and platform-side challenge/verify/Note state machine (`security35114.Platform`, wired through `platform/sip`'s `Config.RegisterAuthenticator`). VKEK negotiation inside the `cryptkey` SM2 envelope, keyed-SM3 `Note`-header integrity for subsequent signaling. | new (v0.4.0, platform side v0.5.0) |
 
 ## Usage (device)
 
@@ -52,9 +52,9 @@ Host seams (interfaces, host-injected):
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
 
-## GB35114 A-level security (v0.4.0 device / v0.5.0 platform, opt-in)
+## GB35114 security, levels A/B/C (opt-in)
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light. Deep-dive manual (handshake wire format, wiring for both roles, the configurable ambiguities, operational properties, certificate provisioning): **[the GB35114 A-level manual](docs/en-US/gb28181-go-gb35114.md)**.
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181 — **levels A/B/C are all implemented** (the B/C media side in the PS-over-RTP software form: per-AU SM2 signatures at B, SM4-OFB payload encryption under a VKEK-sealed VEK at C, negotiated per session over the INVITE SDP `a=security` attribute; every media direction covered — live, playback/download, talk both ways, voice broadcast, cascade). SVAC-native (GB/T 25724 hardware-codec) streams remain out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light. Deep-dive manual (handshake wire format, wiring for both roles, levels B/C media security, key management, certificate provisioning): **[the GB35114 manual](docs/en-US/gb28181-go-gb35114.md)**.
 
 ```go
 // go build -tags gb35114

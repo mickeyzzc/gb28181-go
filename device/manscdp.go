@@ -90,6 +90,11 @@ type ChannelItem struct {
 	Port         int     `xml:"Port"`
 	Longitude    float64 `xml:"Longitude"`
 	Latitude     float64 `xml:"Latitude"`
+	// PTZType is the GB/T 28181-2016 §5.4.12 PTZ capability code
+	// (3 = pan/tilt/zoom); platforms gate PTZCmd dispatch on a non-zero
+	// value. nil omits the element — historical deployments stay
+	// byte-identical (same semantics as the Rust twin's Option<u8>).
+	PTZType *int `xml:"PTZType,omitempty"`
 }
 
 // DeviceItem represents basic device information.
@@ -364,6 +369,11 @@ type DeviceContext struct {
 	// queries (A.2.6.12-16); nil keeps the minimal answers. Installed via
 	// Server.SetInfoQueryProvider.
 	InfoQueries InfoQueryProvider
+	// PTZType, when non-nil, is emitted as the device's own catalog
+	// channel's <PTZType> (2016 §5.4.12); nil keeps the catalog
+	// byte-identical to the historical wire form. Extra channels carry
+	// their own value on ChannelItem directly.
+	PTZType *int
 	// OnBroadcast fires when a voice-broadcast notification (语音广播,
 	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
 	// SourceID → TargetID and follows with a talk INVITE. Preparing the
@@ -398,6 +408,7 @@ func buildChannel(dev DeviceContext) ChannelItem {
 		DeviceID:     dev.ChannelID,
 		Name:         dev.ChannelID,
 		Status:       "ON",
+		PTZType:      dev.PTZType,
 		Manufacturer: dev.Manufacturer,
 		Model:        dev.Model,
 		Owner:        dev.DeviceID,

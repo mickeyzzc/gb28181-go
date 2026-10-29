@@ -13,7 +13,40 @@ are released out of band.
 
 ### Added
 
-- `docs` **GB35114 A-level manual** (`docs/{zh-CN,en-US}/gb28181-go-gb35114.md`):
+- `feat(security35114)` **GB 35114 levels B and C** (#152): the A-only
+  implementation extends to the standard's full software-form coverage.
+  Level B adds per-access-unit SM2 signatures (the signature rides the
+  AU's marker packet as an RFC 8285 two-byte-header RTP extension) and
+  makes the §9.4 digest bidirectional. Level C adds media encryption:
+  per-session 128-bit VEK sealed SM4-ECB under the negotiated VKEK,
+  distributed via the INVITE SDP `a=security` attribute, RTP payloads
+  encrypted SM4-OFB under per-packet IVs `SM3(VEK‖SSRC‖seq)[:16]`
+  (packet loss never desyncs the keystream). Seams are tag-free
+  (`device.MediaSecurityResponder`, `platform/sip.MediaSecurityNegotiator`),
+  so default builds stay crypto-free; a security offer the device cannot
+  honor answers 488 (fail closed).
+- `feat(security35114)` **B/C completion — every media direction, VKEK
+  versioning, hardening** (#155, closes #153): playback/download fetch,
+  talk in both directions, voice broadcast, and cascade
+  (`Upstream.RegisterAuthenticator` with keyed Date+Note verification);
+  ES-over-RTP stitched-burst and bare-audio per-packet signature
+  verification; VKEK version ring (`vkekver`) so mid-INVITE re-keys still
+  open; SM4 key schedule expanded once per session and key material
+  zeroized at teardown. Also fixes two latent bugs found by the new
+  loopbacks (seam interface signatures must match exactly or the tag-free
+  assertions silently degrade to plaintext; playback SDP `t=` treated
+  NTP seconds as unix — ~70-year window shift), three data races
+  (PacketCryptor Zero-vs-Crypt, Receiver hook arming vs packet loop,
+  SetRecordingIndex), and the live path subscribing to the AUHub only
+  after the INVITE 200 OK — hosts pushing immediately lost the first
+  burst on slow machines.
+- `feat(device)` **PTZType catalog capability emission** (2016 §5.4.12):
+  `device.DeviceInfo.PTZType` (nil = omit, byte-identical historical
+  wire) threads to the device channel's `<PTZType>` in catalog answers —
+  platforms gate PTZCmd dispatch on a non-zero value. Parity with the
+  Rust twin's `ptz_type`.
+
+- `docs` **GB35114 manual (levels A/B/C)** (`docs/{zh-CN,en-US}/gb28181-go-gb35114.md`):
   the SM-crypto story as a standalone page — handshake wire format,
   device/platform wiring, the three interop knobs (`RandomEncoding`,
   `Sign2Order`, `VKEKEncoding`), certificate provisioning, operational
