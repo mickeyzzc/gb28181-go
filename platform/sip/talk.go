@@ -210,12 +210,12 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		callID = cid.String()
 	}
 	t := &talkSession{
-		cameraID:  cameraID,
-		deviceID:  deviceID,
-		channelID: channelID,
-		callID:    callID,
-		conn:      conn,
-		target:    &net.UDPAddr{IP: net.ParseIP(host), Port: int(port)},
+		cameraID:       cameraID,
+		deviceID:       deviceID,
+		channelID:      channelID,
+		callID:         callID,
+		conn:           conn,
+		target:         &net.UDPAddr{IP: net.ParseIP(host), Port: int(port)},
 		ssrc:           uint32(ssrc),
 		cryptor:        talkCryptor,
 		signer:         talkSigner,

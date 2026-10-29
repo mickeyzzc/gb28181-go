@@ -441,7 +441,6 @@ func (s *Service) ForwardCount() int {
 	return len(s.sessions) + len(s.playbacks)
 }
 
-
 // securedRequest wraps an inbound handler with GB35114 Note verification:
 // requests from an upper whose registration runs an authenticator are
 // verified when they carry a Note header; failures answer 403 (fail
