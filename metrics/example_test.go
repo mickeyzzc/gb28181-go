@@ -19,14 +19,15 @@ type PrometheusBridge struct {
 	psBytes     atomic.Int64
 }
 
-func (b *PrometheusBridge) RegisterAttempt()      {}
-func (b *PrometheusBridge) RegisterOK()           { b.registersOK.Add(1) }
-func (b *PrometheusBridge) RegisterFail()         {}
-func (b *PrometheusBridge) KeepaliveFail()        {}
-func (b *PrometheusBridge) InviteSessionStarted() {}
-func (b *PrometheusBridge) InviteSessionStopped() {}
-func (b *PrometheusBridge) InviteFail()           {}
-func (b *PrometheusBridge) PSBytesOut(n int64)    { b.psBytes.Add(n) }
+func (b *PrometheusBridge) RegisterAttempt()             {}
+func (b *PrometheusBridge) RegisterOK()                  { b.registersOK.Add(1) }
+func (b *PrometheusBridge) RegisterFail()                {}
+func (b *PrometheusBridge) KeepaliveFail()               {}
+func (b *PrometheusBridge) InviteSessionStarted()        {}
+func (b *PrometheusBridge) InviteSessionStopped()        {}
+func (b *PrometheusBridge) InviteFail()                  {}
+func (b *PrometheusBridge) PSBytesOut(n int64)           { b.psBytes.Add(n) }
+func (b *PrometheusBridge) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*PrometheusBridge)(nil)
 

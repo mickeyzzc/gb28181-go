@@ -67,6 +67,7 @@ type Receiver struct {
 	payloadDecryptor atomic.Pointer[RTPCryptor]
 	auVerifier       atomic.Pointer[auVerifierFn]
 	auVerifyFailed   atomic.Uint64
+	onAUVerifyFailed func()
 
 	// Stage 2: PS demux — or ES depacketization when the session's
 	// payloads are bare NAL units (GB/T 28181-2022 ES over RTP, issue
@@ -332,6 +333,12 @@ func (r *Receiver) SetPayloadDecryptor(c RTPCryptor) {
 // SetAUVerifier arms level-B per-AU signature verification (nil disables).
 func (r *Receiver) SetAUVerifier(fn auVerifierFn) {
 	r.auVerifier.Store(&fn)
+}
+
+// SetAUVerifyFailedHook installs the observability callback fired on every
+// access unit dropped by signature verification (metrics/alarm bridging).
+func (r *Receiver) SetAUVerifyFailedHook(fn func()) {
+	r.onAUVerifyFailed = fn
 }
 
 // AUVerifyFailures reports how many access units were dropped by signature
@@ -780,12 +787,18 @@ func (r *Receiver) processRunLocked(packets []*rtp.Packet) {
 				sig := pkt.Header.GetExtension(RTPExtAUSignature)
 				if len(sig) == 0 {
 					r.auVerifyFailed.Add(1)
+					if r.onAUVerifyFailed != nil {
+						r.onAUVerifyFailed()
+					}
 					logger().Warn("gb28181: GB35114 AU signature missing — dropping audio packet",
 						"camera_id", r.cameraID)
 					continue
 				}
 				if err := (*v)(pkt.Payload, pkt.Header.SSRC, pkt.Header.Timestamp, sig); err != nil {
 					r.auVerifyFailed.Add(1)
+					if r.onAUVerifyFailed != nil {
+						r.onAUVerifyFailed()
+					}
 					logger().Warn("gb28181: GB35114 AU signature rejected — dropping audio packet",
 						"camera_id", r.cameraID, "error", err)
 					continue
@@ -821,6 +834,9 @@ func (r *Receiver) processRunLocked(packets []*rtp.Packet) {
 			}
 			if err != nil {
 				r.auVerifyFailed.Add(1)
+				if r.onAUVerifyFailed != nil {
+					r.onAUVerifyFailed()
+				}
 				logger().Warn("gb28181: GB35114 AU signature rejected — dropping ES access unit",
 					"camera_id", r.cameraID, "error", err)
 				r.es.DropPartial()
@@ -866,12 +882,18 @@ func (r *Receiver) processRunLocked(packets []*rtp.Packet) {
 		sig := lastPkt.Header.GetExtension(RTPExtAUSignature)
 		if len(sig) == 0 {
 			r.auVerifyFailed.Add(1)
+			if r.onAUVerifyFailed != nil {
+				r.onAUVerifyFailed()
+			}
 			logger().Warn("gb28181: GB35114 AU signature missing — dropping access unit",
 				"camera_id", r.cameraID)
 			return
 		}
 		if err := (*v)(auPayload, lastPkt.Header.SSRC, lastPkt.Header.Timestamp, sig); err != nil {
 			r.auVerifyFailed.Add(1)
+			if r.onAUVerifyFailed != nil {
+				r.onAUVerifyFailed()
+			}
 			logger().Warn("gb28181: GB35114 AU signature rejected — dropping access unit",
 				"camera_id", r.cameraID, "error", err)
 			return

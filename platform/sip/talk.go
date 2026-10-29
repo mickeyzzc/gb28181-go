@@ -51,6 +51,7 @@ type talkSession struct {
 	cryptor        platform.RTPCryptor
 	signer         func(au []byte, ssrc, timestamp uint32) ([]byte, error)
 	uplinkVerifier func(au []byte, ssrc, timestamp uint32, sig []byte) error
+	onVerifyFailed func() // observability bridge for dropped return-audio
 
 	dialog *inviteDialog
 
@@ -125,6 +126,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 	var talkCryptor platform.RTPCryptor
 	var talkSigner func(au []byte, ssrc, timestamp uint32) ([]byte, error)
 	var talkUplinkVerifier func(au []byte, ssrc, timestamp uint32, sig []byte) error
+	var talkVerifyFailed func()
 	if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
 		offerValue, encrypt, sign, err := neg.NewMediaEncryptor(deviceID)
 		if err != nil {
@@ -140,6 +142,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 				talkUplinkVerifier = func(au []byte, ssrc, timestamp uint32, sig []byte) error {
 					return neg.VerifyMediaSignature(deviceID, au, ssrc, timestamp, sig)
 				}
+				talkVerifyFailed = func() { s.metrics.GB35114AUVerifyFailed(channelID) }
 			}
 		}
 	}
@@ -220,6 +223,7 @@ func (s *Server) StartTalk(cameraID, deviceID, channelID string) error {
 		cryptor:        talkCryptor,
 		signer:         talkSigner,
 		uplinkVerifier: talkUplinkVerifier,
+		onVerifyFailed: talkVerifyFailed,
 		dialog:         &inviteDialog{req: req, resp: resp},
 	}
 	s.talkMu.Lock()
@@ -402,10 +406,14 @@ func (t *talkSession) uplinkReadLoop() {
 		}
 		if verifier != nil {
 			sig := pkt.Header.GetExtension(platform.RTPExtAUSignature)
-			if len(sig) == 0 {
-				continue
+			drop := len(sig) == 0
+			if !drop && verifier(payload, ssrc, pkt.Header.Timestamp, sig) != nil {
+				drop = true
 			}
-			if err := verifier(payload, ssrc, pkt.Header.Timestamp, sig); err != nil {
+			if drop {
+				if t.onVerifyFailed != nil {
+					t.onVerifyFailed()
+				}
 				continue
 			}
 		}
