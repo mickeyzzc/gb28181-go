@@ -11,6 +11,28 @@ are released out of band.
 
 ## [Unreleased]
 
+### Fixed
+
+- `fix(security35114)` **level-C media failed closed after device
+  re-registration against a long-lived platform** (#157): the INVITE
+  answer's `vkekver` label was the DEVICE's local handshake count — which
+  restarts at 1 on every process restart — while the platform's key ring
+  is per-identity and keeps counting up. From the second re-registration
+  the label collided with a historical ring entry, the platform opened
+  the VEK envelope with a stale VKEK, and (the envelope having no
+  integrity check) silently armed a wrong-key decryptor: every AU then
+  died to signature verification, zero video, no self-healing. Two-layer
+  fix, both suggested in the issue: (1) the platform now stamps its
+  authoritative generation into the SecurityInfo (`vkekver=` parameter)
+  and the device echoes THAT number — labels index the ring exactly
+  (device falls back to its local count for platforms that send none);
+  (2) the VEK envelope gains an SM3 integrity tag (plaintext is now
+  VEK‖SM3(VEK)[:16], two SM4 blocks) — a wrong-generation VKEK fails
+  OpenVEK loudly at arming time instead of arming garbage. The issue's
+  deterministic reproducer (four device generations against one platform,
+  real-size frames) lands in `conformance/` as the regression pin:
+  generations 1–4 all clean; level B unaffected throughout.
+
 ### Added
 
 - `feat(security35114)` **GB 35114 levels B and C** (#152): the A-only

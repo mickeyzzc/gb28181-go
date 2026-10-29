@@ -774,6 +774,10 @@ func TestServer_ReInviteReplacesPreviousSession(t *testing.T) {
 	defer sockB.Close()
 	portB := sockB.LocalAddr().(*net.UDPAddr).Port
 	invB := buildSdpInvite(portB)
+	// A re-INVITE inside a dialog increments CSeq (RFC 3261 §14.1) — with
+	// the same CSeq the request is indistinguishable from a retransmission
+	// and correctly replays the cached 200 OK.
+	invB.CSeq = "2 INVITE"
 	if _, err := clientConn.Write(invB.Serialize()); err != nil {
 		t.Fatalf("send INVITE 2: %v", err)
 	}

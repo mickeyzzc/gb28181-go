@@ -67,6 +67,10 @@ type Server struct {
 	talkCryptor RTPCryptor
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
+	// inviteAnswerCache serves RFC 3261 §13.3.1.4 INVITE-retransmission
+	// idempotency: Call-ID+" "+CSeq → the serialized 200 OK to replay.
+	// Cleared on teardown (BYE) and superseded by the next new INVITE.
+	inviteAnswerCache map[string][]byte
 	// onBroadcast is the host callback for voice-broadcast notifications
 	// (§9.12.1), copied into devCtx at Start.
 	onBroadcast func(sourceID, targetID string)
@@ -145,15 +149,16 @@ type Server struct {
 // New creates a new GB28181 server.
 func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 	s := &Server{
-		cfg:            cfg,
-		deviceCfg:      deviceCfg,
-		hub:            hub,
-		regRespCh:      make(chan SipMessage, 4),
-		inviteRespCh:   make(chan SipMessage, 4),
-		reRegisterCh:   make(chan struct{}, 1),
-		metrics:        metrics.NoopHooks{},
-		notifier:       newDeviceNotifier(),
-		positionCancel: make(chan struct{}),
+		cfg:               cfg,
+		deviceCfg:         deviceCfg,
+		hub:               hub,
+		regRespCh:         make(chan SipMessage, 4),
+		inviteRespCh:      make(chan SipMessage, 4),
+		reRegisterCh:      make(chan struct{}, 1),
+		metrics:           metrics.NoopHooks{},
+		notifier:          newDeviceNotifier(),
+		positionCancel:    make(chan struct{}),
+		inviteAnswerCache: make(map[string][]byte),
 	}
 	// Upstream law defaults to PCMA — see the upstreamLaw field note.
 	s.upstreamLaw.Store(int32(AudioPCMA))
@@ -344,6 +349,15 @@ func (s *Server) Start(ctx context.Context) error {
 			// Handle based on method
 			switch msg.Method {
 			case "INVITE":
+				// RFC 3261 §13.3.1.4: a retransmitted INVITE (same
+				// Call-ID + CSeq) must re-receive the cached 200 OK —
+				// re-running the handler would re-negotiate media
+				// security (a fresh VEK per answer) and start a second
+				// media task, desyncing the platform's armed key
+				// permanently (#157's retransmission face).
+				if s.replayInviteAnswer(msg, addr) {
+					continue
+				}
 				s.handleInvite(ctx, msg, addr)
 			case "BYE":
 				s.handleBye(ctx, msg, addr)
@@ -395,19 +409,32 @@ func (s *Server) allowIncomingNote(msg SipMessage) bool {
 	if note == "" {
 		return true
 	}
-	err := verifier.VerifyIncomingNote(msg.Method, msg.From, msg.To, msg.CallID,
-		msg.ExtensionHeader("Date"), note, msg.Body)
-	if err == nil {
-		return true
+	// The platform can only Note-sign after ITS side of the handshake —
+	// whose 200 OK precedes this request on the same wire — but our
+	// REGISTER-response processing is asynchronous (regRespCh), so the
+	// VKEK install can lag this request by scheduling. A Note arriving
+	// before the key materialized is almost certainly that lag, not an
+	// attack: wait briefly for the handshake to land before failing.
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		err := verifier.VerifyIncomingNote(msg.Method, msg.From, msg.To, msg.CallID,
+			msg.ExtensionHeader("Date"), note, msg.Body)
+		if err == nil {
+			return true
+		}
+		if !strings.Contains(err.Error(), "before the handshake completed") ||
+			time.Now().After(deadline) {
+			if s.cfg.IncomingNotePolicy == GB35114NoteWarn {
+				slog.Warn("gb28181: incoming Note verification failed (warn policy, serving anyway)",
+					"method", msg.Method, "error", err)
+				return true
+			}
+			slog.Warn("gb28181: incoming Note verification failed, rejecting",
+				"method", msg.Method, "error", err)
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if s.cfg.IncomingNotePolicy == GB35114NoteWarn {
-		slog.Warn("gb28181: incoming Note verification failed (warn policy, serving anyway)",
-			"method", msg.Method, "error", err)
-		return true
-	}
-	slog.Warn("gb28181: incoming Note verification failed, rejecting",
-		"method", msg.Method, "error", err)
-	return false
 }
 
 // Stop stops the server.
@@ -1296,6 +1323,38 @@ func (s *Server) teardownMediaLocked() {
 	s.playbackCtl = nil
 }
 
+// inviteCacheKey identifies one INVITE transaction (dialog + CSeq).
+func inviteCacheKey(msg SipMessage) string {
+	return msg.CallID + " " + msg.CSeq
+}
+
+// replayInviteAnswer re-serves the cached 200 OK of an already-answered
+// INVITE retransmission. true = served, caller must not re-handle.
+func (s *Server) replayInviteAnswer(msg SipMessage, addr net.Addr) bool {
+	s.mu.Lock()
+	cached, ok := s.inviteAnswerCache[inviteCacheKey(msg)]
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	slog.Info("gb28181: retransmitted INVITE — replaying cached 200 OK", "call_id", msg.CallID)
+	_ = s.sendSIP(cached, addr)
+	return true
+}
+
+// cacheInviteAnswer stores the 200 OK bytes for retransmission replay.
+func (s *Server) cacheInviteAnswer(msg SipMessage, answer []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inviteAnswerCache == nil {
+		s.inviteAnswerCache = make(map[string][]byte)
+	}
+	if len(s.inviteAnswerCache) > 4 {
+		s.inviteAnswerCache = make(map[string][]byte)
+	}
+	s.inviteAnswerCache[inviteCacheKey(msg)] = answer
+}
+
 // handleInvite handles INVITE requests - parses SDP, binds media, sends 200 OK with device SDP, subscribes to AUHub.
 func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.Addr) {
 	slog.Info("gb28181: received INVITE", "from", fromAddr.String())
@@ -1484,9 +1543,13 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
 	}
 
-	// Send 200 OK with SDP answer
+	// Send 200 OK with SDP answer (cached for §13.3.1.4 retransmission
+	// replay — a re-run would re-negotiate a fresh VEK and desync the
+	// platform's armed key).
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
-	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+	answer := ok200.Serialize()
+	s.cacheInviteAnswer(msg, answer)
+	if err := s.sendSIP(answer, fromAddr); err != nil {
 		slog.Warn("gb28181: failed to send 200 OK", "error", err)
 		return
 	}

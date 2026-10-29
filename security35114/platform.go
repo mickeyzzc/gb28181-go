@@ -428,7 +428,6 @@ func (p *Platform) VerifyRegister(deviceID, authorization string) (string, error
 		}
 		si.Sign2 = sign2
 	}
-	securityInfo := BuildSecurityInfo(si)
 
 	p.mu.Lock()
 	if s.vkek != nil {
@@ -439,6 +438,12 @@ func (p *Platform) VerifyRegister(deviceID, authorization string) (string, error
 	}
 	s.vkekVer++
 	s.vkek = vkek
+	// The platform-assigned generation is authoritative: stamp it into
+	// the SecurityInfo so the device echoes THIS number as its vkekver
+	// (a device-local counter restarts at 1 every process and collides
+	// with historical ring entries — issue #157).
+	si.VKEKVer = s.vkekVer
+	securityInfo := BuildSecurityInfo(si)
 	s.lastAuth, s.lastSecurityInfo = authorization, securityInfo
 	p.mu.Unlock()
 	return securityInfo, nil

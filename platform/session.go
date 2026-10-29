@@ -270,6 +270,11 @@ func (sm *SessionManager) Invite(channel *Channel, serverIP string, deviceAddr s
 	// Audio-only sessions expect bare G.711 RTP (PT 8); PS-muxed audio
 	// still routes through the PS demuxer's audio path.
 	receiver.SetAudioOnly(channel.AudioOnly)
+	if offer := sm.mediaSecurityOffer(); strings.HasPrefix(offer, "GB35114-C") {
+		// The offer promises level-C encryption: hold pre-arm packets
+		// (ciphertext) until the answer's decryptor arms.
+		receiver.SetExpectPayloadDecryptor(true)
+	}
 	sm.mu.Lock()
 	firstRTP := sm.firstRTPHook
 	sm.mu.Unlock()
@@ -709,8 +714,10 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 	// a=security line rides along when GB35114 B/C media security is
 	// configured (the fetch receiver arms from the device's answer).
 	fetchSecurity := ""
+	expectDecrypt := false
 	if offer := sm.mediaSecurityOffer(); offer != "" {
 		fetchSecurity = "a=security:" + offer + "\r\n"
+		expectDecrypt = strings.HasPrefix(offer, "GB35114-C")
 	}
 	sdpAnswer := []byte(fmt.Sprintf(
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%d %d\r\nm=video %d RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\ny=%s\r\n%s",
@@ -723,6 +730,11 @@ func (sm *SessionManager) inviteFetch(channel *Channel, serverIP string, start, 
 
 	// Create receiver
 	receiver := NewReceiver(channel.ID, hub, sm.portManager)
+	if expectDecrypt {
+		// The fetch offer promised level-C encryption: hold pre-arm
+		// packets (ciphertext) until the answer's decryptor arms.
+		receiver.SetExpectPayloadDecryptor(true)
+	}
 
 	// Create UDP listener on allocated port
 	addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", serverIP, port))
