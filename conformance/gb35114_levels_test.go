@@ -16,7 +16,6 @@ package conformance
 import (
 	"bytes"
 	"context"
-
 	"fmt"
 	"os"
 	"path/filepath"
@@ -304,12 +303,15 @@ type playbackEnroller struct {
 func (e *playbackEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
 	return nil
 }
+
 func (e *playbackEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (string, bool) {
 	return "cam-gb35114-pb", true
 }
+
 func (e *playbackEnroller) GB28181NALUWriter(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool) {
 	return nil
 }
+
 func (e *playbackEnroller) GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
 	return nil
 }
@@ -323,12 +325,15 @@ func (e *playbackEnroller) GB28181SubChannelID(deviceID, channelID string) strin
 func (e *playbackEnroller) SetGB28181SubChannel(deviceID, channelID, subChannelID string) error {
 	return nil
 }
+
 func (e *playbackEnroller) GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
 	return nil
 }
+
 func (e *playbackEnroller) UpdateGB28181DeviceMeta(deviceID, manufacturer, model string) error {
 	return nil
 }
+
 func (e *playbackEnroller) NewGB28181PlaybackSink(cameraID string) (platform.AUWriter, error) {
 	return auCollector{e}, nil
 }
