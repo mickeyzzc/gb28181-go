@@ -1095,3 +1095,35 @@ func TestDispatchBroadcastNotify(t *testing.T) {
 		t.Fatalf("OnBroadcast got %q/%q", gotSource, gotTarget)
 	}
 }
+
+// PTZType (GB/T 28181-2016 §5.4.12): a set value emits <PTZType> on the
+// device channel in catalog answers; nil omits the element so historical
+// deployments stay byte-identical — mirroring the Rust twin's Option<u8>
+// semantics (gb28181-rs test_channel_item_ptz_type).
+func TestCatalogChannelPTZType(t *testing.T) {
+	three := 3
+	ctx := testDeviceContext()
+
+	// nil (default): the element is absent.
+	ok200, pages, err := DispatchInboundMessage(buildInboundMessage(
+		`<Query><CmdType>Catalog</CmdType><SN>201</SN><DeviceID>34020000012000000001</DeviceID></Query>`),
+		ctx, nil)
+	if err != nil || ok200.StatusCode != 200 || len(pages) == 0 {
+		t.Fatalf("dispatch: err=%v status=%d pages=%d", err, ok200.StatusCode, len(pages))
+	}
+	if strings.Contains(pages[0].Body, "<PTZType>") {
+		t.Errorf("nil PTZType must omit the element:\n%s", pages[0].Body)
+	}
+
+	// Set: emitted once, on the device's own channel.
+	ctx.PTZType = &three
+	_, pages, err = DispatchInboundMessage(buildInboundMessage(
+		`<Query><CmdType>Catalog</CmdType><SN>202</SN><DeviceID>34020000012000000001</DeviceID></Query>`),
+		ctx, nil)
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("dispatch with PTZType: err=%v pages=%d", err, len(pages))
+	}
+	if got := strings.Count(pages[0].Body, "<PTZType>3</PTZType>"); got != 1 {
+		t.Errorf("PTZType element count = %d, want 1 (device channel only):\n%s", got, pages[0].Body)
+	}
+}

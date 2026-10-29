@@ -73,7 +73,7 @@ type DeviceStore interface {
 ```
 
 An in-memory implementation ships for tests and the
-`examples/platform-uas` demo.
+`gb28181 platform-uas` subcommand (the runnable integration sample in `cmd/gb28181/`).
 
 ## Events: EventBus
 

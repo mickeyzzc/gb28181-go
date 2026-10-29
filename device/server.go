@@ -237,6 +237,7 @@ func (s *Server) Start(ctx context.Context) error {
 		LocalIP:       localIP(),
 		LocalPort:     s.cfg.LocalSIPPort,
 		ExtraChannels: s.cfg.ExtraChannels,
+		PTZType:       s.deviceCfg.PTZType,
 
 		OnBroadcast: s.onBroadcast,
 	}

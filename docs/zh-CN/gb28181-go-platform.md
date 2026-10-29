@@ -71,7 +71,7 @@ type DeviceStore interface {
 }
 ```
 
-测试与 `examples/platform-uas` 演示自带内存实现。
+测试与 `gb28181 platform-uas` 子命令（`cmd/gb28181/` 里的可运行集成样例）自带内存实现。
 
 ## 事件：EventBus
 

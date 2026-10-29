@@ -33,7 +33,7 @@ Prebuilt bundle from a release:
 ```bash
 gh release download v0.14.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz'
-tar xzf gb28181-cli_linux_arm64.tar.gz   # the single gb28181 binary inside
+tar xzf gb28181-cli_linux_amd64.tar.gz   # the single gb28181 binary inside
 sha256sum -c SHA256SUMS                        # verify
 ```
 

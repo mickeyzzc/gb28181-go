@@ -29,7 +29,7 @@ windows amd64/arm64——`CGO_ENABLED=0` 纯静态，拷到树莓派、NAS、测
 ```bash
 gh release download v0.14.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz'
-tar xzf gb28181-cli_linux_arm64.tar.gz   # 里面就是单个 gb28181 二进制
+tar xzf gb28181-cli_linux_amd64.tar.gz   # 里面就是单个 gb28181 二进制
 sha256sum -c SHA256SUMS                        # 校验
 ```
 
