@@ -649,6 +649,11 @@ func (s *Server) buildRequest(method sip.RequestMethod, serverHost string, from,
 	if subject != "" {
 		rb.AddHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: subject})
 	}
+	if method == sip.INVITE && s.cfg.MonitorUserID != "" {
+		// GB 35114 third-party call control: name the user the pull is on
+		// behalf of.
+		rb.AddHeader(&sip.GenericHeader{HeaderName: "Monitor-User-Identity", Contents: s.cfg.MonitorUserID})
+	}
 	if contentType != "" {
 		ct := sip.ContentType(contentType)
 		rb.SetContentType(&ct)
@@ -825,25 +830,8 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 		// GB35114 B/C: arm the receiver's media security from the device's
 		// answer BEFORE the ACK — most devices start streaming the instant
 		// they see it, and level-C payloads must decrypt from the first
-		// packet. No a=security in the answer (or a level-A session) arms
-		// nothing.
-		if neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator); ok && neg != nil {
-			if rc := s.sessionMgr.GetReceiver(channelID); rc != nil {
-				decrypt, verifyAU, err := neg.ArmMediaSecurity(deviceID, []byte(resp.Body()))
-				if err != nil {
-					slog.Warn("gb28181: GB35114 media negotiation failed on INVITE answer", "channel", channelID, "error", err)
-				} else {
-					if decrypt != nil {
-						rc.SetPayloadDecryptor(decrypt)
-						slog.Info("gb28181: GB35114 level-C media decryption armed", "channel", channelID, "device", deviceID)
-					}
-					if verifyAU != nil {
-						rc.SetAUVerifier(verifyAU)
-						slog.Info("gb28181: GB35114 level-B AU signature verification armed", "channel", channelID, "device", deviceID)
-					}
-				}
-			}
-		}
+		// packet.
+		s.armMediaSecurity(deviceID, channelID, resp.Body(), s.sessionMgr.GetReceiver(channelID))
 		// Complete the 3-way handshake with the matched 2xx: without the ACK
 		// most GB28181 devices never start the RTP stream (RFC 3261 §13.2.2.4).
 		ack := sip.NewAckRequest("", req, resp, "", nil)
@@ -879,6 +867,33 @@ func (s *Server) inviteCore(deviceID string, ch *platform.Channel, netAddr, serv
 
 	slog.Info("gb28181: INVITE answered, ACK sent", "channel", channelID, "device", deviceID)
 	return nil
+}
+
+// armMediaSecurity negotiates the receiver-side GB35114 hooks (payload
+// decryption at C, AU-signature verification at B) from a device's INVITE
+// answer. Shared by the live and playback-fetch dialogs; a missing
+// a=security attribute (level A / plaintext peer) arms nothing.
+func (s *Server) armMediaSecurity(deviceID, channelID, answerBody string, rc *platform.Receiver) {
+	if rc == nil {
+		return
+	}
+	neg, ok := s.cfg.RegisterAuthenticator.(MediaSecurityNegotiator)
+	if !ok || neg == nil {
+		return
+	}
+	decrypt, verifyAU, err := neg.ArmMediaSecurity(deviceID, []byte(answerBody))
+	if err != nil {
+		slog.Warn("gb28181: GB35114 media negotiation failed on INVITE answer", "channel", channelID, "error", err)
+		return
+	}
+	if decrypt != nil {
+		rc.SetPayloadDecryptor(decrypt)
+		slog.Info("gb28181: GB35114 level-C media decryption armed", "channel", channelID, "device", deviceID)
+	}
+	if verifyAU != nil {
+		rc.SetAUVerifier(verifyAU)
+		slog.Info("gb28181: GB35114 level-B AU signature verification armed", "channel", channelID, "device", deviceID)
+	}
 }
 
 // watchSession monitors an established session for as long as it lives and

@@ -3,6 +3,8 @@ package cascade
 import (
 	"context"
 	"time"
+
+	"github.com/mickeyzzc/gb28181-go/device"
 )
 
 // Config configures the cascade client (this platform registering as a
@@ -115,6 +117,15 @@ type Upstream struct {
 	Password          string `yaml:"password,omitempty"`
 	HeartbeatInterval string `yaml:"heartbeat_interval,omitempty"`
 	RegisterExpires   int    `yaml:"register_expires,omitempty"`
+
+	// RegisterAuthenticator (optional, code-injected) replaces the Digest
+	// REGISTER flow with an alternative scheme — GB 35114 via the tagged
+	// security35114 package (the cascade then behaves as a GB35114 device
+	// toward this upper). When it also implements device.OutgoingSigner the
+	// keepalive/catalog requests carry the keyed Date+Note pair; when it
+	// implements device.MediaSecurityResponder the INVITE answers negotiate
+	// level-B/C media security on the forwarded streams.
+	RegisterAuthenticator device.RegisterAuthenticator `yaml:"-"`
 }
 
 // CascadeChannel is the persisted channel-ID assignment: the first-seen GB

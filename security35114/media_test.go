@@ -59,17 +59,17 @@ func TestPacketCryptorLossResilient(t *testing.T) {
 	p1 := bytes.Repeat([]byte{0xA5}, 1400)
 	p2 := bytes.Repeat([]byte{0x5A}, 900)
 
-	e1 := crypt(p1, ssrc, 100)
-	e2 := crypt(p2, ssrc, 101)
+	e1 := crypt.Crypt(p1, ssrc, 100)
+	e2 := crypt.Crypt(p2, ssrc, 101)
 	if bytes.Equal(e1, p1) || bytes.Equal(e2, p2) {
 		t.Fatal("encryption must change the payload")
 	}
 	// Same (ssrc, seq) keystream: XOR twice restores.
-	if got := crypt(e1, ssrc, 100); !bytes.Equal(got, p1) {
+	if got := crypt.Crypt(e1, ssrc, 100); !bytes.Equal(got, p1) {
 		t.Fatal("round-trip with same seq failed")
 	}
 	// Packet loss resilience: decrypt packet 2 without ever seeing packet 1.
-	if got := crypt(e2, ssrc, 101); !bytes.Equal(got, p2) {
+	if got := crypt.Crypt(e2, ssrc, 101); !bytes.Equal(got, p2) {
 		t.Fatal("decrypt after dropped predecessor failed")
 	}
 	// Distinct seqs must not share a keystream prefix.
@@ -135,11 +135,11 @@ func TestSDPSecurityRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealVEK: %v", err)
 	}
-	if got := SDPSecurityAnswer(LevelB, ""); got != "GB35114-B" {
+	if got := SDPSecurityAnswer(LevelB, "", 0); got != "GB35114-B" {
 		t.Fatalf("B answer = %q", got)
 	}
-	got := SDPSecurityAnswer(LevelC, env)
-	if !strings.HasPrefix(got, "GB35114-C,vek=") || !strings.HasSuffix(got, env) {
+	got := SDPSecurityAnswer(LevelC, env, 3)
+	if !strings.HasPrefix(got, "GB35114-C,vek=") || !strings.HasSuffix(got, ",vkekver=3") {
 		t.Fatalf("C answer = %q", got)
 	}
 
@@ -208,7 +208,7 @@ func TestPlatformArmMediaSecurity(t *testing.T) {
 		t.Fatal("C arming must yield decrypt + AU verifier")
 	}
 	plain := []byte("gb35114 media payload")
-	if got := decrypt(encrypt(plain, 7, 42), 7, 42); !bytes.Equal(got, plain) {
+	if got := decrypt.Crypt(encrypt.Crypt(plain, 7, 42), 7, 42); !bytes.Equal(got, plain) {
 		t.Fatal("decrypt(encrypt(payload)) != payload")
 	}
 

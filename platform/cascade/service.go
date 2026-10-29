@@ -26,6 +26,7 @@ import (
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/mickeyzzc/gb28181-go/backoff"
+	"github.com/mickeyzzc/gb28181-go/device"
 	"github.com/mickeyzzc/gb28181-go/manscdp"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	mbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
@@ -264,9 +265,9 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("gb28181-cascade: SIP listen %s: %w", listen, err)
 	}
 	s.srv = srv
-	_ = srv.OnRequest(sip.MESSAGE, s.onMessage)
-	_ = srv.OnRequest(sip.INVITE, s.onInvite)
-	_ = srv.OnRequest(sip.BYE, s.onBye)
+	_ = srv.OnRequest(sip.MESSAGE, s.securedRequest(s.onMessage))
+	_ = srv.OnRequest(sip.INVITE, s.securedRequest(s.onInvite))
+	_ = srv.OnRequest(sip.BYE, s.securedRequest(s.onBye))
 	// ACK completes the upper platform's INVITE dialog. gosip logs "SIP
 	// request handler not found" for unregistered methods; a no-op handler
 	// keeps the transaction layer quiet (dialog state lives in the media
@@ -282,7 +283,7 @@ func (s *Service) Start(ctx context.Context) error {
 	})
 	// MANSRTSP playback controls (pause/resume/seek/scale) ride in-dialog INFO
 	// messages; onInfo routes them to the channel's playback session.
-	_ = srv.OnRequest(sip.INFO, s.onInfo)
+	_ = srv.OnRequest(sip.INFO, s.securedRequest(s.onInfo))
 
 	if len(s.uppers) == 0 {
 		return fmt.Errorf("gb28181-cascade: no upper platform configured (server_addr / upstreams)")
@@ -440,6 +441,75 @@ func (s *Service) ForwardCount() int {
 	return len(s.sessions) + len(s.playbacks)
 }
 
+// securedRequest wraps an inbound handler with GB35114 Note verification:
+// requests from an upper whose registration runs an authenticator are
+// verified when they carry a Note header; failures answer 403 (fail
+// closed, mirroring the device role).
+func (s *Service) securedRequest(next func(sip.Request, sip.ServerTransaction)) func(sip.Request, sip.ServerTransaction) {
+	return func(req sip.Request, tx sip.ServerTransaction) {
+		if !s.allowSecuredRequest(req) {
+			_, _ = s.srv.RespondOnRequest(req, 403, "Note verification failed", "", nil)
+			return
+		}
+		next(req, tx)
+	}
+}
+
+// allowSecuredRequest runs the incoming Note verification for one request.
+func (s *Service) allowSecuredRequest(req sip.Request) bool {
+	u := s.upperOf(req)
+	if u == nil || u.cfg.RegisterAuthenticator == nil {
+		return true
+	}
+	verifier, ok := u.cfg.RegisterAuthenticator.(device.IncomingNoteVerifier)
+	if !ok || verifier == nil {
+		return true
+	}
+	note := requestHeaderValue(req, "Note")
+	if note == "" {
+		return true
+	}
+	var fromVal, toVal string
+	if from, ok := req.From(); ok {
+		fromVal = from.Value()
+	}
+	if to, ok := req.To(); ok {
+		toVal = to.Value()
+	}
+	callIDVal := requestHeaderValue(req, "Call-ID")
+	err := verifier.VerifyIncomingNote(string(req.Method()), fromVal, toVal, callIDVal,
+		requestHeaderValue(req, "Date"), note, string(req.Body()))
+	if err == nil {
+		return true
+	}
+	slog.Warn("gb28181-cascade: incoming Note verification failed, rejecting",
+		"method", req.Method(), "error", err)
+	return false
+}
+
+// decorateSecured stamps the GB35114 Date+Note pair onto an outgoing
+// request when the upper's authenticator signs (the bidirectional digest).
+func (s *Service) decorateSecured(u *upper, req sip.Request) {
+	signer, ok := u.cfg.RegisterAuthenticator.(device.OutgoingSigner)
+	if !ok || signer == nil {
+		return
+	}
+	var fromVal, toVal string
+	if from, ok := req.From(); ok {
+		fromVal = from.Value()
+	}
+	if to, ok := req.To(); ok {
+		toVal = to.Value()
+	}
+	date, note := signer.DecorateOutgoing(string(req.Method()), fromVal, toVal,
+		requestHeaderValue(req, "Call-ID"), string(req.Body()))
+	if date == "" {
+		return
+	}
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Date", Contents: date})
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Note", Contents: note})
+}
+
 func upperAddr(u *upper) (*net.UDPAddr, error) {
 	return net.ResolveUDPAddr("udp", u.cfg.ServerAddr)
 }
@@ -542,6 +612,9 @@ func (s *Service) sendRegister(u *upper, expires int) error {
 	if s.srv == nil {
 		return fmt.Errorf("not started")
 	}
+	if u.cfg.RegisterAuthenticator != nil {
+		return s.sendRegister35114(u, expires, u.cfg.RegisterAuthenticator)
+	}
 	host, port := s.localHostPort(u)
 	req, err := s.buildCoreRequest(u, sip.REGISTER, host, port, "", "")
 	if err != nil {
@@ -575,6 +648,69 @@ func (s *Service) sendRegister(u *upper, expires int) error {
 		return fmt.Errorf("register: status %d (%s)", resp.StatusCode(), resp.Reason())
 	}
 	return nil
+}
+
+// sendRegister35114 runs the GB 35114 REGISTER dance in place of Digest:
+// Capability announcement → 401 challenge → signed re-REGISTER → 200 OK
+// carrying SecurityInfo (cryptkey envelope + sign2). The authenticator is
+// the device-role implementation from the tagged security35114 package.
+func (s *Service) sendRegister35114(u *upper, expires int, auth device.RegisterAuthenticator) error {
+	host, port := s.localHostPort(u)
+	req, err := s.buildCoreRequest(u, sip.REGISTER, host, port, "", "")
+	if err != nil {
+		return err
+	}
+	exp := sip.Expires(uint32(expires))
+	req.AppendHeader(&exp)
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Authorization", Contents: auth.InitialAuthorization()})
+
+	resp, err := s.request(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode() != 401 {
+		return fmt.Errorf("gb35114 register: want 401 challenge, got %d (%s)", resp.StatusCode(), resp.Reason())
+	}
+	wwwAuth := responseHeaderValue(resp, "WWW-Authenticate")
+	authorization, err := auth.AuthorizeWithChallenge(wwwAuth)
+	if err != nil {
+		return fmt.Errorf("gb35114 register: challenge: %w", err)
+	}
+	req2, err := s.buildCoreRequest(u, sip.REGISTER, host, port, "", "")
+	if err != nil {
+		return err
+	}
+	exp2 := sip.Expires(uint32(expires))
+	req2.AppendHeader(&exp2)
+	req2.AppendHeader(&sip.GenericHeader{HeaderName: "Authorization", Contents: authorization})
+	resp, err = s.request(req2)
+	if err != nil {
+		return err
+	}
+	if !resp.IsSuccess() {
+		return fmt.Errorf("gb35114 register: status %d (%s)", resp.StatusCode(), resp.Reason())
+	}
+	if si := responseHeaderValue(resp, "SecurityInfo"); si != "" {
+		if err := auth.(interface {
+			VerifyOK(securityInfo string) error
+		}).VerifyOK(si); err != nil {
+			return fmt.Errorf("gb35114 register: SecurityInfo: %w", err)
+		}
+	}
+	return nil
+}
+
+// responseHeaderValue extracts a raw header value from a SIP response.
+func responseHeaderValue(resp sip.Response, name string) string {
+	for _, h := range resp.GetHeaders(name) {
+		if g, ok := h.(*sip.GenericHeader); ok {
+			return strings.TrimSpace(g.Contents)
+		}
+		if s := h.String(); strings.HasPrefix(s, name+":") {
+			return strings.TrimSpace(strings.TrimPrefix(s, name+":"))
+		}
+	}
+	return ""
 }
 
 var challengeRe = regexp.MustCompile(`(\w+)\s*=\s*"([^"]+)"`)
@@ -662,6 +798,7 @@ func (s *Service) sendKeepalive(u *upper) error {
 	if err != nil {
 		return err
 	}
+	s.decorateSecured(u, req)
 	resp, err := s.request(req)
 	if err != nil {
 		return err

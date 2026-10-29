@@ -26,7 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm3"
@@ -101,25 +103,63 @@ func PacketIV(vek []byte, ssrc uint32, seq uint16) []byte {
 	return h.Sum(nil)[:sm4.BlockSize]
 }
 
-// NewPacketCryptor returns an in-place SM4-OFB payload cryptor bound to one
-// VEK. Encryption and decryption are the same XOR operation.
-func NewPacketCryptor(vek []byte) (func(payload []byte, ssrc uint32, seq uint16) []byte, error) {
+// PacketCryptor applies the level-C SM4-OFB payload protection for one
+// session. The SM4 key schedule is expanded once at construction — per
+// packet only the IV derivation and keystream XOR run. Zero wipes the key
+// material when the session ends (best effort under Go's GC; call it from
+// teardown paths). Crypt and Zero are mutually exclusive: teardown can
+// race a still-running media task (BYE arriving mid-burst), so both take
+// the cryptor's mutex — and a wiped cryptor fails CLOSED (Crypt returns
+// nil, dropping the packet) rather than emitting plaintext.
+type PacketCryptor struct {
+	mu    sync.Mutex
+	vek   []byte
+	block cipher.Block
+}
+
+// NewPacketCryptor binds a cryptor to one VEK. Encryption and decryption
+// are the same XOR operation.
+func NewPacketCryptor(vek []byte) (*PacketCryptor, error) {
 	if len(vek) != VEKLen {
 		return nil, fmt.Errorf("security35114: VEK is %d bytes, want %d", len(vek), VEKLen)
 	}
-	return func(payload []byte, ssrc uint32, seq uint16) []byte {
-		if len(payload) == 0 {
-			return payload
-		}
-		block, err := sm4.NewCipher(vek)
-		if err != nil {
-			return payload // unreachable: key length checked above
-		}
-		stream := cipher.NewOFB(block, PacketIV(vek, ssrc, seq))
-		out := make([]byte, len(payload))
-		stream.XORKeyStream(out, payload)
-		return out
-	}, nil
+	block, err := sm4.NewCipher(vek)
+	if err != nil {
+		return nil, fmt.Errorf("security35114: SM4: %w", err)
+	}
+	c := &PacketCryptor{vek: append([]byte(nil), vek...), block: block}
+	return c, nil
+}
+
+// Crypt XORs one RTP payload with the per-packet SM4-OFB keystream. After
+// Zero the cryptor is wiped: nil comes back and the caller drops the
+// packet (never a plaintext fallback).
+func (c *PacketCryptor) Crypt(payload []byte, ssrc uint32, seq uint16) []byte {
+	if c == nil || len(payload) == 0 {
+		return payload
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.vek == nil {
+		return nil
+	}
+	stream := cipher.NewOFB(c.block, PacketIV(c.vek, ssrc, seq))
+	out := make([]byte, len(payload))
+	stream.XORKeyStream(out, payload)
+	return out
+}
+
+// Zero wipes the VEK material (idempotent).
+func (c *PacketCryptor) Zero() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.vek {
+		c.vek[i] = 0
+	}
+	c.vek = nil
 }
 
 // AUSignPayload builds the level-B signed octets: the reassembled PS access
@@ -163,10 +203,16 @@ func SDPSecurityOffer(level Level) string {
 }
 
 // SDPSecurityAnswer is the 200-OK-answer form: the echoed level plus, at
-// level C, the VKEK-sealed VEK envelope ("a=security:GB35114-C,vek=<b64>").
-func SDPSecurityAnswer(level Level, vekEnvelope string) string {
+// level C, the VKEK-sealed VEK envelope and the VKEK version it was sealed
+// under ("a=security:GB35114-C,vek=<b64>,vkekver=<n>"). vkekVer <= 0 omits
+// the version (envelopes from peers that do not count handshakes).
+func SDPSecurityAnswer(level Level, vekEnvelope string, vkekVer int) string {
 	if level.AtLeast(LevelC) && vekEnvelope != "" {
-		return "GB35114-" + string(level) + ",vek=" + vekEnvelope
+		ans := "GB35114-" + string(level) + ",vek=" + vekEnvelope
+		if vkekVer > 0 {
+			ans += fmt.Sprintf(",vkekver=%d", vkekVer)
+		}
+		return ans
 	}
 	return "GB35114-" + string(level)
 }
@@ -175,10 +221,11 @@ func SDPSecurityAnswer(level Level, vekEnvelope string) string {
 type SDPSecurity struct {
 	Level       Level
 	VEKEnvelope string // level C answers only
+	VKEKVer     int    // handshake generation the envelope was sealed under (0 = unversioned)
 }
 
 // ParseSDPSecurity parses the value of an "a=security:" SDP attribute:
-// "GB35114-B" or "GB35114-C,vek=<base64 envelope>".
+// "GB35114-B", "GB35114-C,vek=<b64>" or "GB35114-C,vek=<b64>,vkekver=<n>".
 func ParseSDPSecurity(value string) (SDPSecurity, error) {
 	value = strings.TrimSpace(value)
 	token, param, _ := strings.Cut(value, ",")
@@ -192,12 +239,25 @@ func ParseSDPSecurity(value string) (SDPSecurity, error) {
 		return SDPSecurity{}, fmt.Errorf("security35114: bad GB35114 SDP level: %q", value)
 	}
 	out := SDPSecurity{Level: lvl}
-	if param != "" {
-		k, v, _ := strings.Cut(strings.TrimSpace(param), "=")
-		if k != "vek" || v == "" {
-			return SDPSecurity{}, fmt.Errorf("security35114: bad a=security parameter: %q", param)
+	for param != "" {
+		var kv string
+		kv, param, _ = strings.Cut(param, ",")
+		k, v, _ := strings.Cut(strings.TrimSpace(kv), "=")
+		switch k {
+		case "vek":
+			if v == "" {
+				return SDPSecurity{}, fmt.Errorf("security35114: empty vek parameter")
+			}
+			out.VEKEnvelope = v
+		case "vkekver":
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return SDPSecurity{}, fmt.Errorf("security35114: bad vkekver %q", v)
+			}
+			out.VKEKVer = n
+		default:
+			return SDPSecurity{}, fmt.Errorf("security35114: bad a=security parameter %q", k)
 		}
-		out.VEKEnvelope = v
 	}
 	return out, nil
 }

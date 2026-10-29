@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/emmansun/gmsm/smx509"
+	"github.com/mickeyzzc/gb28181-go/device"
 )
 
 // Options configures an Authenticator. Device, DeviceID and ServerID are
@@ -64,6 +65,7 @@ type Authenticator struct {
 	random1 string
 	random2 string
 	vkek    []byte
+	vkekVer int // handshake generation of vkek (mirrors the platform's counter)
 }
 
 // New validates the options and returns a ready Authenticator.
@@ -175,6 +177,7 @@ func (a *Authenticator) VerifyOK(securityInfo string) error {
 	}
 
 	a.mu.Lock()
+	a.vkekVer++
 	a.vkek = vkek
 	a.mu.Unlock()
 	return nil
@@ -240,7 +243,7 @@ func (a *Authenticator) VerifyIncomingNote(method, from, to, callID, date, note,
 // returns the payload encryptor alongside the answer attribute value. An
 // empty answer value (level A offer or parse failure reported via err)
 // means the session stays plaintext.
-func (a *Authenticator) AnswerMediaSecurity(offerValue string) (answerValue string, encrypt func(payload []byte, ssrc uint32, seq uint16) []byte, err error) {
+func (a *Authenticator) AnswerMediaSecurity(offerValue string) (answerValue string, encrypt device.RTPCryptor, err error) {
 	sec, err := ParseSDPSecurity(offerValue)
 	if err != nil {
 		return "", nil, err
@@ -249,7 +252,7 @@ func (a *Authenticator) AnswerMediaSecurity(offerValue string) (answerValue stri
 		return "", nil, nil
 	}
 	if !sec.Level.AtLeast(LevelC) {
-		return SDPSecurityAnswer(LevelB, ""), nil, nil
+		return SDPSecurityAnswer(LevelB, "", 0), nil, nil
 	}
 	vkek := a.VKEK()
 	if vkek == nil {
@@ -267,7 +270,55 @@ func (a *Authenticator) AnswerMediaSecurity(offerValue string) (answerValue stri
 	if err != nil {
 		return "", nil, err
 	}
-	return SDPSecurityAnswer(LevelC, envelope), encrypt, nil
+	return SDPSecurityAnswer(LevelC, envelope, a.vkekVersion()), encrypt, nil
+}
+
+// OpenMediaSecurity is the device side of a platform-sent media session
+// (talk downlink): it opens the level-C offer's VEK envelope under the
+// negotiated VKEK and returns the receive-side decryptor plus the closure
+// verifying the platform's per-AU signatures. Level B offers return the
+// verifier only; level A / absent attribute returns nil hooks.
+func (a *Authenticator) OpenMediaSecurity(offerValue string) (decrypt device.RTPCryptor, verify func(au []byte, ssrc, timestamp uint32, sig []byte) error, err error) {
+	sec, err := ParseSDPSecurity(offerValue)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !sec.Level.AtLeast(LevelB) {
+		return nil, nil, nil
+	}
+	verify = a.VerifyMediaSignature
+	if !sec.Level.AtLeast(LevelC) || sec.VEKEnvelope == "" {
+		return nil, verify, nil
+	}
+	vkek := a.VKEK()
+	if vkek == nil {
+		return nil, nil, errors.New("security35114: C-level media offered before the handshake completed")
+	}
+	vek, err := OpenVEK(vkek, sec.VEKEnvelope)
+	if err != nil {
+		return nil, nil, fmt.Errorf("security35114: opening platform VEK envelope: %w", err)
+	}
+	decrypt, err = NewPacketCryptor(vek)
+	if err != nil {
+		return nil, nil, err
+	}
+	return decrypt, verify, nil
+}
+
+// VerifyMediaSignature checks a platform-signed media AU against the
+// pre-provisioned platform certificate.
+func (a *Authenticator) VerifyMediaSignature(au []byte, ssrc, timestamp uint32, sigDER []byte) error {
+	if a.opts.PlatformCert == nil {
+		return errors.New("security35114: no platform certificate to verify media signatures")
+	}
+	return VerifyAU(a.opts.PlatformCert, au, ssrc, timestamp, sigDER)
+}
+
+// vkekVersion snapshots the handshake generation counter.
+func (a *Authenticator) vkekVersion() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.vkekVer
 }
 
 // SignAU signs one access unit with the device identity (level B media

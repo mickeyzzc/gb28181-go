@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
+	"github.com/mickeyzzc/gb28181-go/device"
 	"github.com/mickeyzzc/gb28181-go/platform"
 	gbsip "github.com/mickeyzzc/gb28181-go/platform/sip"
 	"github.com/mickeyzzc/gb28181-go/psmux"
@@ -332,6 +333,42 @@ func (s *Service) onInvite(req sip.Request, _ sip.ServerTransaction) {
 				"m=video %d TCP/RTP/AVP 96\r\na=sendonly\r\na=setup:active\r\na=connection:new\r\n"+
 				"a=rtpmap:96 PS/90000\r\ny=%d\r\n",
 			ms.localHost(), ms.localHost(), ms.localPort(), sd.ssrc)
+	}
+	// GB35114 B/C toward the upper platform: when the upper's INVITE offer
+	// carries a=security and its registration runs an authenticator, the
+	// answer echoes the negotiated level (with the sealed VEK at C) and the
+	// forward pusher arms encryption + per-AU signatures. A security offer
+	// that cannot be honored is refused 488 — never forwarded plaintext.
+	if u := s.upperOf(req); u != nil && u.cfg.RegisterAuthenticator != nil {
+		if offerSec := device.SDPSecurityAttributeValue(req.Body()); offerSec != "" {
+			responder, ok := u.cfg.RegisterAuthenticator.(device.MediaSecurityResponder)
+			if !ok {
+				slog.Warn("gb28181-cascade: INVITE requested GB35114 media security but the authenticator cannot answer — 488", "offer", offerSec)
+				_, _ = s.srv.RespondOnRequest(req, 488, "Not Acceptable Here", "", nil)
+				return
+			}
+			answerValue, encrypt, err := responder.AnswerMediaSecurity(offerSec)
+			if err != nil {
+				slog.Warn("gb28181-cascade: GB35114 media negotiation failed — 488", "error", err)
+				_, _ = s.srv.RespondOnRequest(req, 488, "Not Acceptable Here", "", nil)
+				return
+			}
+			if answerValue != "" {
+				ms.sdpBody += "a=security:" + answerValue + "\r\n"
+				var cryptFn func(payload []byte, ssrc uint32, seq uint16) []byte
+				if encrypt != nil {
+					cryptFn = encrypt.Crypt
+				}
+				var signFn func(au []byte, ssrc uint32, tsTicks uint32) ([]byte, error)
+				if signer, ok := u.cfg.RegisterAuthenticator.(interface {
+					SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error)
+				}); ok {
+					signFn = signer.SignAU
+				}
+				ms.rtp.SetSecurity(cryptFn, signFn)
+				slog.Info("gb28181-cascade: GB35114 media security negotiated", "answer", answerValue)
+			}
+		}
 	}
 
 	s.mu.Lock()

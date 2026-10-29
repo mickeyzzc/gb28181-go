@@ -58,11 +58,14 @@ type Receiver struct {
 	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
 	// GB35114 B/C media security (nil = plaintext session). payloadDecryptor
-	// un-XORs each incoming payload (level C, set before Start); auVerifier
+	// un-XORs each incoming payload (level C); auVerifier
 	// checks the level-B per-AU signature carried in the marker packet's
 	// RTP header extension and drops the AU on failure (fail closed).
-	payloadDecryptor func(payload []byte, ssrc uint32, seq uint16) []byte
-	auVerifier       func(au []byte, ssrc, timestamp uint32, sig []byte) error
+	// Both are armed concurrently with the running packet loop (a
+	// playback fetch arms its receiver from the INVITE answer, after
+	// Start) — hence the atomics.
+	payloadDecryptor atomic.Pointer[RTPCryptor]
+	auVerifier       atomic.Pointer[auVerifierFn]
 	auVerifyFailed   atomic.Uint64
 
 	// Stage 2: PS demux — or ES depacketization when the session's
@@ -199,6 +202,12 @@ func (r *Receiver) Stop() error {
 		_ = r.conn.Close()
 	}
 
+	if p := r.payloadDecryptor.Load(); p != nil {
+		(*p).Zero()
+		r.payloadDecryptor.Store(nil)
+	}
+	r.auVerifier.Store(nil)
+
 	if r.done != nil {
 		close(r.done)
 	}
@@ -239,15 +248,29 @@ func (r *Receiver) SetAudioOnly(v bool) { r.audioOnlyHint.Store(v) }
 // level-B per-AU SM2 signature on the AU's marker packet.
 const RTPExtAUSignature = 1
 
+// errAUSignatureMissing marks a marker AU that carried no level-B signature.
+var errAUSignatureMissing = errors.New("AU signature extension missing")
+
+// RTPCryptor applies the GB35114 level-C per-packet payload protection
+// (SM4-OFB); Zero wipes key material at session end. Structurally identical
+// to device.RTPCryptor and security35114.PacketCryptor satisfies both.
+type RTPCryptor interface {
+	Crypt(payload []byte, ssrc uint32, seq uint16) []byte
+	Zero()
+}
+
+// auVerifierFn is the level-B per-AU signature verifier signature.
+type auVerifierFn func(au []byte, ssrc, timestamp uint32, sig []byte) error
+
 // SetPayloadDecryptor arms level-C SM4-OFB payload decryption. Call before
 // Start; nil (default) keeps the session plaintext.
-func (r *Receiver) SetPayloadDecryptor(fn func(payload []byte, ssrc uint32, seq uint16) []byte) {
-	r.payloadDecryptor = fn
+func (r *Receiver) SetPayloadDecryptor(c RTPCryptor) {
+	r.payloadDecryptor.Store(&c)
 }
 
 // SetAUVerifier arms level-B per-AU signature verification (nil disables).
-func (r *Receiver) SetAUVerifier(fn func(au []byte, ssrc, timestamp uint32, sig []byte) error) {
-	r.auVerifier = fn
+func (r *Receiver) SetAUVerifier(fn auVerifierFn) {
+	r.auVerifier.Store(&fn)
 }
 
 // AUVerifyFailures reports how many access units were dropped by signature
@@ -257,7 +280,7 @@ func (r *Receiver) AUVerifyFailures() uint64 { return r.auVerifyFailed.Load() }
 // MediaSecurityArmed reports which GB35114 media-security hooks are active
 // (payload decryption at level C, AU-signature verification at level B/C).
 func (r *Receiver) MediaSecurityArmed() (decrypt, verify bool) {
-	return r.payloadDecryptor != nil, r.auVerifier != nil
+	return r.payloadDecryptor.Load() != nil, r.auVerifier.Load() != nil
 }
 
 // AudioOnly reports whether this receiver serves an audio-only session —
@@ -417,8 +440,8 @@ func (r *Receiver) readLoop(ctx context.Context) {
 		// GB35114 level C: un-XOR the payload before reassembly so the PS
 		// demuxer sees plaintext. Per-packet IVs keep the keystream
 		// independent of packet loss.
-		if r.payloadDecryptor != nil {
-			pkt.Payload = r.payloadDecryptor(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
+		if p := r.payloadDecryptor.Load(); p != nil {
+			pkt.Payload = (*p).Crypt(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
 		}
 
 		// Feed to jitter buffer for reassembly
@@ -659,6 +682,24 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			if len(pkt.Payload) == 0 {
 				continue
 			}
+			// GB35114 level B on bare-audio sessions: each packet is its
+			// own access unit, so its signature rides the packet itself.
+			// Fail closed (drop the packet) like the PS path drops AUs.
+			if v := r.auVerifier.Load(); v != nil {
+				sig := pkt.Header.GetExtension(RTPExtAUSignature)
+				if len(sig) == 0 {
+					r.auVerifyFailed.Add(1)
+					logger().Warn("gb28181: GB35114 AU signature missing — dropping audio packet",
+						"camera_id", r.cameraID)
+					continue
+				}
+				if err := (*v)(pkt.Payload, pkt.Header.SSRC, pkt.Header.Timestamp, sig); err != nil {
+					r.auVerifyFailed.Add(1)
+					logger().Warn("gb28181: GB35114 AU signature rejected — dropping audio packet",
+						"camera_id", r.cameraID, "error", err)
+					continue
+				}
+			}
 			r.emitBareAudio(pkt)
 		}
 		return
@@ -673,6 +714,27 @@ func (r *Receiver) emitAccessUnitsLocked() {
 		if !endedOnMarker {
 			// Collect until the AU boundary, mirroring the PS burst model.
 			return
+		}
+		// GB35114 level B on ES sessions: the signature covers the stitched
+		// per-packet payloads (the sender's pre-fragmentation AU bytes).
+		if v := r.auVerifier.Load(); v != nil {
+			var esAU []byte
+			for _, pkt := range packets {
+				esAU = append(esAU, pkt.Payload...)
+			}
+			last := packets[len(packets)-1]
+			sig := last.Header.GetExtension(RTPExtAUSignature)
+			err := errAUSignatureMissing
+			if len(sig) > 0 {
+				err = (*v)(esAU, last.Header.SSRC, last.Header.Timestamp, sig)
+			}
+			if err != nil {
+				r.auVerifyFailed.Add(1)
+				logger().Warn("gb28181: GB35114 AU signature rejected — dropping ES access unit",
+					"camera_id", r.cameraID, "error", err)
+				r.es.DropPartial()
+				return
+			}
 		}
 		nalus := r.es.TakeAU()
 		if len(nalus) == 0 {
@@ -709,7 +771,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	// signature, or a marker AU with no signature at all (an attacker could
 	// strip the extension), drops the whole access unit. (ES-over-RTP
 	// sessions depacketize per-packet and are not signature-verified.)
-	if r.auVerifier != nil && endedOnMarker {
+	if v := r.auVerifier.Load(); v != nil && endedOnMarker {
 		sig := lastPkt.Header.GetExtension(RTPExtAUSignature)
 		if len(sig) == 0 {
 			r.auVerifyFailed.Add(1)
@@ -717,7 +779,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 				"camera_id", r.cameraID)
 			return
 		}
-		if err := r.auVerifier(auPayload, lastPkt.Header.SSRC, lastPkt.Header.Timestamp, sig); err != nil {
+		if err := (*v)(auPayload, lastPkt.Header.SSRC, lastPkt.Header.Timestamp, sig); err != nil {
 			r.auVerifyFailed.Add(1)
 			logger().Warn("gb28181: GB35114 AU signature rejected — dropping access unit",
 				"camera_id", r.cameraID, "error", err)

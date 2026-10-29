@@ -4,19 +4,20 @@ package conformance
 
 // GB 35114 level B/C end-to-end loopbacks: a real device.Server (security35114
 // Authenticator) registers against a real platform/sip.Server (security35114
-// Platform at level B or C), the platform INVITEs with an a=security offer,
-// the device answers with the negotiated attribute (level C adds the sealed
-// VEK), and real PS/RTP media flows — signed per AU at B, additionally
-// SM4-OFB encrypted at C — arriving at the platform's frame hub byte-exact.
+// Platform at level B or C). Covers every media direction at C — live
+// (UDP and TCP-passive), playback/download fetch, talk downlink + return
+// uplink — plus the level-B signed live path.
 //
 // The signaling path doubles as the downstream-integrity proof: every
 // platform→device request (catalog MESSAGE, INVITE, BYE) carries the keyed
 // Date+Note pair, and the device's default IncomingNotePolicy (Reject) fails
-// the whole test if any of them does not verify.
+// the whole suite if any of them does not verify.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -33,8 +34,8 @@ import (
 var gb35114FixtureDir = filepath.Join("..", "security35114", "testdata")
 
 // start35114Loopback brings up the digest-less 35114 pairing at the given
-// platform level.
-func start35114Loopback(t *testing.T, level security35114.Level) *loopback {
+// platform level and media transport.
+func start35114Loopback(t *testing.T, level security35114.Level, mediaTransport string) *loopback {
 	t.Helper()
 	ctx := context.Background()
 
@@ -63,7 +64,7 @@ func start35114Loopback(t *testing.T, level security35114.Level) *loopback {
 		ServerID:              lbServerID,
 		Realm:                 lbDomain,
 		PortRange:             fmt.Sprintf("%d-%d", mediaBase, mediaBase+99),
-		MediaTransport:        "udp",
+		MediaTransport:        mediaTransport,
 		RegisterAuthenticator: plat35114,
 	}
 	dm := platform.NewDeviceManager(60 * time.Second)
@@ -116,11 +117,11 @@ func start35114Loopback(t *testing.T, level security35114.Level) *loopback {
 	return &loopback{platformSrv: psrv, devices: dm, sessions: sm, deviceSrv: dsrv, frames: fh}
 }
 
-// run35114MediaFlow drives the shared B/C scenario: register, catalog,
+// run35114MediaFlow drives the shared live scenario: register, catalog,
 // INVITE, three AUs pushed through the hub, byte-exact arrival, zero
 // rejected signatures.
-func run35114MediaFlow(t *testing.T, level security35114.Level) {
-	lb := start35114Loopback(t, level)
+func run35114MediaFlow(t *testing.T, level security35114.Level, mediaTransport string) {
+	lb := start35114Loopback(t, level, mediaTransport)
 	lb.onlineDevice(t)
 	lb.channelOf(t)
 
@@ -139,12 +140,19 @@ func run35114MediaFlow(t *testing.T, level security35114.Level) {
 	lb.frames.Write(device.AccessUnit{NALUs: []device.NALU{nalu(1, lbP)}, Timestamp: time.Now()})
 	lb.frames.Write(device.AccessUnit{NALUs: []device.NALU{nalu(1, lbP)}, Timestamp: time.Now()})
 
-	require.Eventually(t, func() bool {
+	// Snapshot under the callback's mutex: reading len(gotAUs) at the
+	// Eventually call site (message args are evaluated eagerly) races the
+	// subscriber goroutine's append — the race detector poisoned this
+	// suite on CI's first run of these loopbacks.
+	auCount := func() int {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(gotAUs) >= 3
-	}, 15*time.Second, 100*time.Millisecond, "all three signed%s AUs must arrive; got %d",
-		map[bool]string{true: " and encrypted", false: ""}[level == security35114.LevelC], len(gotAUs))
+		return len(gotAUs)
+	}
+	require.Eventually(t, func() bool { return auCount() >= 3 },
+		15*time.Second, 100*time.Millisecond,
+		"all three signed%s AUs must arrive",
+		map[bool]string{true: " and encrypted", false: ""}[level == security35114.LevelC])
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -164,9 +172,229 @@ func run35114MediaFlow(t *testing.T, level security35114.Level) {
 }
 
 func TestGB35114LevelB_MediaSignatures(t *testing.T) {
-	run35114MediaFlow(t, security35114.LevelB)
+	run35114MediaFlow(t, security35114.LevelB, "udp")
 }
 
 func TestGB35114LevelC_EncryptedMedia(t *testing.T) {
-	run35114MediaFlow(t, security35114.LevelC)
+	run35114MediaFlow(t, security35114.LevelC, "udp")
+}
+
+// TestGB35114LevelC_EncryptedMediaTCP is the C-level live flow over
+// TCP-passive media: the device dials the platform's offered TCP port and
+// the encrypted payloads ride RFC 4571 framing.
+func TestGB35114LevelC_EncryptedMediaTCP(t *testing.T) {
+	run35114MediaFlow(t, security35114.LevelC, platform.MediaTCPPassive)
+}
+
+// TestGB35114LevelC_Talk covers the platform→device talk downlink and the
+// device→platform return uplink at level C: the talk INVITE offer carries
+// the sealed VEK, the device decrypts and signature-verifies the downlink
+// audio before the sink sees it, and the platform does the same for the
+// return audio before OnTalkUplink fires.
+func TestGB35114LevelC_Talk(t *testing.T) {
+	lb := start35114Loopback(t, security35114.LevelC, "udp")
+	lb.onlineDevice(t)
+	lb.channelOf(t)
+
+	downlink := make(chan []byte, 16)
+	lb.deviceSrv.SetTalkbackSink(talkSinkFunc(func(payload []byte, ssrc uint32, codec device.AudioCodec) {
+		select {
+		case downlink <- payload:
+		default:
+		}
+	}))
+	upstream := make(chan []byte, 16)
+	lb.deviceSrv.SetTalkbackSource(upstream)
+
+	uplink := make(chan []byte, 16)
+	lb.platformSrv.OnTalkUplink = func(channelID string, payload []byte) {
+		select {
+		case uplink <- payload:
+		default:
+		}
+	}
+
+	require.NoError(t, lb.platformSrv.StartTalk("cam-gb35114", lbDeviceID, lbChannelID))
+
+	// Downlink: the platform's encrypted+signed frame must surface at the
+	// device sink as the original plaintext.
+	frame := bytes.Repeat([]byte{0xD5}, 160)
+	lb.platformSrv.WriteTalkAudio(lbChannelID, frame)
+	select {
+	case got := <-downlink:
+		require.Equal(t, frame, got, "downlink frame must arrive decrypted and verified")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no downlink audio reached the device sink")
+	}
+
+	// Uplink: the device's return audio (encrypted+signed by the same
+	// session key) must surface at the platform's uplink callback as
+	// plaintext. The sender paces at 20ms ticks.
+	ret := bytes.Repeat([]byte{0x2A}, 160)
+	select {
+	case upstream <- ret:
+	case <-time.After(5 * time.Second):
+		t.Fatal("talkback source never accepted a frame")
+	}
+	select {
+	case got := <-uplink:
+		require.Equal(t, ret, got, "return audio must arrive decrypted and verified")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no return audio reached the platform uplink callback")
+	}
+
+	require.NoError(t, lb.platformSrv.StopTalk(lbChannelID))
+}
+
+// --- C-level playback fetch -------------------------------------------------
+
+// staticIndex is a device.RecordingIndex over pre-built synthetic segments.
+type staticIndex struct {
+	root string
+	segs []device.SegmentMeta
+}
+
+func (i staticIndex) Lookup(startMs, endMs int64) []device.SegmentMeta {
+	var out []device.SegmentMeta
+	for _, s := range i.segs {
+		if s.EndMS >= startMs && s.StartMS <= endMs {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (i staticIndex) Root() string { return i.root }
+
+// writeSyntheticRecording35114 writes one synthetic segment (bare Annex-B +
+// .ts.jsonl sidecar, the reference device segment format).
+func writeSyntheticRecording35114(t *testing.T, dir string) (device.SegmentMeta, time.Time) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+
+	type fr struct {
+		offset time.Duration
+		key    bool
+	}
+	frames := []fr{{0, true}, {100 * time.Millisecond, false}, {200 * time.Millisecond, false}}
+	var annexB, sidecar bytes.Buffer
+	for _, f := range frames {
+		types := []byte{1}
+		if f.key {
+			types = []byte{7, 8, 5}
+		}
+		for _, ty := range types {
+			annexB.Write([]byte{0x00, 0x00, 0x00, 0x01, ty, 0x01, 0x02, 0x03})
+		}
+		fmt.Fprintf(&sidecar, "{\"pts_ms\":%d}\n", f.offset.Milliseconds())
+	}
+	file := filepath.Join(dir, "000001.h264")
+	require.NoError(t, os.WriteFile(file, annexB.Bytes(), 0o644))
+	require.NoError(t, os.WriteFile(file+".ts.jsonl", sidecar.Bytes(), 0o644))
+	last := frames[len(frames)-1].offset
+	return device.SegmentMeta{
+		File: "000001.h264", StartMS: base.UnixMilli(),
+		EndMS: base.Add(last).UnixMilli(), Size: int64(annexB.Len()),
+		Frames: len(frames), Keyframes: 1,
+	}, base
+}
+
+// playbackEnroller stubs the CameraEnroller seam so the platform's playback
+// fetch resolves a bound camera and an AU sink.
+type playbackEnroller struct {
+	mu  sync.Mutex
+	aus [][][]byte
+}
+
+func (e *playbackEnroller) EnsureGB28181Camera(deviceID, channelID, name, sourceIP string) error {
+	return nil
+}
+
+func (e *playbackEnroller) GB28181CameraIDByChannel(deviceID, channelID string) (string, bool) {
+	return "cam-gb35114-pb", true
+}
+
+func (e *playbackEnroller) GB28181NALUWriter(cameraID string) func(au [][]byte, ptsTicks int64, isIDR bool) {
+	return nil
+}
+
+func (e *playbackEnroller) GB28181AudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
+	return nil
+}
+func (e *playbackEnroller) OnGB28181Invite(cameraID string)                       {}
+func (e *playbackEnroller) OnGB28181Bye(cameraID string)                          {}
+func (e *playbackEnroller) ArchiveGB28181Camera(deviceID, channelID string) error { return nil }
+func (e *playbackEnroller) GB28181RecordingWanted(deviceID, channelID string) bool {
+	return true
+}
+func (e *playbackEnroller) GB28181SubChannelID(deviceID, channelID string) string { return "" }
+func (e *playbackEnroller) SetGB28181SubChannel(deviceID, channelID, subChannelID string) error {
+	return nil
+}
+
+func (e *playbackEnroller) GB28181PlaybackAudioWriter(cameraID string) func(codec string, data, config []byte, ptsTicks int64, samples int) {
+	return nil
+}
+
+func (e *playbackEnroller) UpdateGB28181DeviceMeta(deviceID, manufacturer, model string) error {
+	return nil
+}
+
+func (e *playbackEnroller) NewGB28181PlaybackSink(cameraID string) (platform.AUWriter, error) {
+	return auCollector{e}, nil
+}
+
+type auCollector struct{ e *playbackEnroller }
+
+func (c auCollector) WriteNALU(au [][]byte, ptsTicks int64, isIDR bool) {
+	c.e.mu.Lock()
+	defer c.e.mu.Unlock()
+	c.e.aus = append(c.e.aus, au)
+}
+
+// TestGB35114LevelC_Playback covers the device-recording fetch at level C:
+// the s=Playback INVITE carries the a=security offer, the device's answer
+// returns the sealed VEK, and the recorded stream arrives decrypted,
+// signature-verified and byte-exact in the fetch sink.
+func TestGB35114LevelC_Playback(t *testing.T) {
+	lb := start35114Loopback(t, security35114.LevelC, "udp")
+	lb.onlineDevice(t)
+	lb.channelOf(t)
+
+	recDir := filepath.Join(t.TempDir(), "rec")
+	seg, _ := writeSyntheticRecording35114(t, recDir)
+	lb.deviceSrv.SetRecordingIndex(staticIndex{root: recDir, segs: []device.SegmentMeta{seg}})
+
+	enrol := &playbackEnroller{}
+	lb.platformSrv.SetCameraEnroller(enrol)
+
+	end := time.UnixMilli(seg.EndMS).Add(2 * time.Second)
+	require.NoError(t, lb.platformSrv.StartPlayback(lbDeviceID, lbChannelID, time.UnixMilli(seg.StartMS), end))
+
+	// auCollector guards e.aus with e.mu — read through the SAME mutex
+	// (a test-local mutex here would race the collector goroutine).
+	require.Eventually(t, func() bool {
+		enrol.mu.Lock()
+		defer enrol.mu.Unlock()
+		return len(enrol.aus) >= 1
+	}, 15*time.Second, 100*time.Millisecond, "fetched AUs must arrive at the playback sink")
+
+	enrol.mu.Lock()
+	defer enrol.mu.Unlock()
+	first := enrol.aus[0]
+	require.GreaterOrEqual(t, len(first), 3, "first AU should carry SPS/PPS/IDR NALUs")
+	require.Equal(t, byte(0x07), first[0][0], "first NALU is SPS (type 7)")
+	require.Equal(t, byte(0x08), first[1][0], "second NALU is PPS (type 8)")
+	require.Equal(t, byte(0x05), first[2][0], "third NALU is IDR (type 5)")
+	for _, nalu := range first {
+		require.Equal(t, []byte{nalu[0], 0x01, 0x02, 0x03}, nalu, "NALU payload byte-exact")
+	}
+
+	if rc := lb.sessions.GetPlaybackReceiver(lbChannelID); rc != nil {
+		decrypt, verify := rc.MediaSecurityArmed()
+		require.True(t, decrypt, "playback fetch decryptor must be armed at C")
+		require.True(t, verify, "playback fetch verifier must be armed at C")
+		require.Zero(t, rc.AUVerifyFailures(), "no fetch AU signature may be rejected")
+	}
 }

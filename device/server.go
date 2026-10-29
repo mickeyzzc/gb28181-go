@@ -61,6 +61,10 @@ type Server struct {
 	cancel       context.CancelFunc
 	mediaCancel  context.CancelFunc
 	sub          *FrameSubscription
+	// talkCryptor is the GB35114 session cryptor of an active talkback
+	// dialog (shared by its receive and upstream halves — the XOR is
+	// symmetric). Zeroed at media teardown.
+	talkCryptor RTPCryptor
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
 	// onBroadcast is the host callback for voice-broadcast notifications
@@ -208,7 +212,10 @@ func (s *Server) SetPositionSource(src PositionSource) {
 }
 
 // SetRecordingIndex injects the recording index used for RecordInfo queries.
+// Safe to call while the server runs (the read paths snapshot under s.mu).
 func (s *Server) SetRecordingIndex(idx RecordingIndex) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.recordingIndex = idx
 }
 
@@ -1261,6 +1268,10 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 // playback, or talkback receive) so a new INVITE never leaks a goroutine
 // + socket per session. Caller holds s.mu.
 func (s *Server) teardownMediaLocked() {
+	if s.talkCryptor != nil {
+		s.talkCryptor.Zero()
+		s.talkCryptor = nil
+	}
 	if s.mediaCancel != nil {
 		s.mediaCancel()
 		s.mediaCancel = nil
@@ -1320,7 +1331,10 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	var startMs, endMs int64
 	if sessionType != "Play" {
 		startMs, endMs = parseSDPTimeRange(msg.Body)
-		if idx, ok := s.recordingIndex.(PlaybackIndex); ok {
+		s.mu.Lock()
+		idxAny := s.recordingIndex
+		s.mu.Unlock()
+		if idx, ok := idxAny.(PlaybackIndex); ok {
 			playbackSegs = idx.Lookup(startMs, endMs)
 			playbackRoot = idx.Root()
 		}
@@ -1424,7 +1438,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	// the returned cryptor (level C) and the AU signer (level B) arm the
 	// pusher. A security offer the device cannot honor is refused with 488 —
 	// answering plaintext would silently violate the platform's policy.
-	var payloadEncryptor RTPPayloadCryptor
+	var payloadEncryptor RTPCryptor
 	var auSigner AUSignerFunc
 	if offer := SDPSecurityAttributeValue(msg.Body); offer != "" {
 		responder, ok := s.cfg.RegisterAuthenticator.(MediaSecurityResponder)
@@ -1451,6 +1465,24 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		}
 	}
 
+	// Subscribe to the AUHub BEFORE the 200 OK leaves. The platform's
+	// InviteChannel returns the moment the answer lands and hosts start
+	// pushing immediately; frames written between the answer and a
+	// post-answer subscribe are dropped by the hub (no subscriber yet).
+	// Slow CPUs widen that window — level-C answer sealing (SM2) plus a
+	// 2-core CI runner loses the whole first burst to it.
+	if sessionType == "Play" {
+		s.mu.Lock()
+		if s.sub != nil {
+			s.hub.Unsubscribe(s.sub.ID)
+		}
+		sub := s.hub.Subscribe(ctx)
+		s.sub = sub
+		s.remoteRTPAddr = rtpDest
+		s.mu.Unlock()
+		slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
+	}
+
 	// Send 200 OK with SDP answer
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
 	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
@@ -1469,6 +1501,12 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", mediaAddr)
 		if err != nil {
 			slog.Warn("gb28181: failed to connect to TCP media port", "addr", mediaAddr, "error", err)
+			s.mu.Lock()
+			if s.sub != nil {
+				s.hub.Unsubscribe(s.sub.ID)
+				s.sub = nil
+			}
+			s.mu.Unlock()
 			return
 		}
 		mediaTCPConn = conn.(*net.TCPConn)
@@ -1541,18 +1579,10 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: playback media goroutine started", "session", sessionType, "remote", rtpDest.String(), "transport", s.cfg.Transport, "segments", len(playbackSegs))
 		go func() {
 			defer mediaCancel()
-			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
+			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify, payloadEncryptor, auSigner)
 		}()
 		return
 	}
-
-	// Subscribe to AUHub
-	sub := s.hub.Subscribe(ctx)
-	s.mu.Lock()
-	s.sub = sub
-	s.remoteRTPAddr = rtpDest
-	s.mu.Unlock()
-	slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
 
 	// Create media context for goroutine
 	mediaCtx, mediaCancel := context.WithCancel(ctx)
@@ -1574,6 +1604,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			}
 		}
 		pusher := NewRtpPusher(mediaConn, rtpDest)
+		defer pusher.ZeroSecurity()
 		pusher.SetMetricsHooks(s.metrics)
 		if payloadEncryptor != nil {
 			pusher.SetPayloadEncryptor(payloadEncryptor)
@@ -1584,6 +1615,9 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		if tcpConn != nil {
 			pusher.SetTCPConn(tcpConn)
 		}
+		s.mu.Lock()
+		liveSub := s.sub
+		s.mu.Unlock()
 		slog.Info("gb28181: media goroutine started", "remote", rtpDest.String(), "transport", s.cfg.Transport)
 
 		for {
@@ -1591,7 +1625,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			case <-mediaCtx.Done():
 				slog.Info("gb28181: media goroutine stopped")
 				return
-			case au, ok := <-sub.Channel:
+			case au, ok := <-liveSub.Channel:
 				if !ok {
 					slog.Info("gb28181: AU channel closed")
 					return
@@ -1690,7 +1724,10 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		return
 	}
 
-	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
+	s.mu.Lock()
+	recIdx := s.recordingIndex
+	s.mu.Unlock()
+	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, recIdx)
 	if err != nil {
 		slog.Warn("gb28181: failed to dispatch MESSAGE", "error", err)
 		return
