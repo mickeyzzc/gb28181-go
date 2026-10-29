@@ -212,7 +212,10 @@ func (s *Server) SetPositionSource(src PositionSource) {
 }
 
 // SetRecordingIndex injects the recording index used for RecordInfo queries.
+// Safe to call while the server runs (the read paths snapshot under s.mu).
 func (s *Server) SetRecordingIndex(idx RecordingIndex) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.recordingIndex = idx
 }
 
@@ -1328,7 +1331,10 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	var startMs, endMs int64
 	if sessionType != "Play" {
 		startMs, endMs = parseSDPTimeRange(msg.Body)
-		if idx, ok := s.recordingIndex.(PlaybackIndex); ok {
+		s.mu.Lock()
+		idxAny := s.recordingIndex
+		s.mu.Unlock()
+		if idx, ok := idxAny.(PlaybackIndex); ok {
 			playbackSegs = idx.Lookup(startMs, endMs)
 			playbackRoot = idx.Root()
 		}
@@ -1699,7 +1705,10 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		return
 	}
 
-	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
+	s.mu.Lock()
+	recIdx := s.recordingIndex
+	s.mu.Unlock()
+	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, recIdx)
 	if err != nil {
 		slog.Warn("gb28181: failed to dispatch MESSAGE", "error", err)
 		return

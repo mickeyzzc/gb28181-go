@@ -28,6 +28,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm3"
@@ -106,8 +107,12 @@ func PacketIV(vek []byte, ssrc uint32, seq uint16) []byte {
 // session. The SM4 key schedule is expanded once at construction — per
 // packet only the IV derivation and keystream XOR run. Zero wipes the key
 // material when the session ends (best effort under Go's GC; call it from
-// teardown paths).
+// teardown paths). Crypt and Zero are mutually exclusive: teardown can
+// race a still-running media task (BYE arriving mid-burst), so both take
+// the cryptor's mutex — and a wiped cryptor fails CLOSED (Crypt returns
+// nil, dropping the packet) rather than emitting plaintext.
 type PacketCryptor struct {
+	mu    sync.Mutex
 	vek   []byte
 	block cipher.Block
 }
@@ -126,10 +131,17 @@ func NewPacketCryptor(vek []byte) (*PacketCryptor, error) {
 	return c, nil
 }
 
-// Crypt XORs one RTP payload with the per-packet SM4-OFB keystream.
+// Crypt XORs one RTP payload with the per-packet SM4-OFB keystream. After
+// Zero the cryptor is wiped: nil comes back and the caller drops the
+// packet (never a plaintext fallback).
 func (c *PacketCryptor) Crypt(payload []byte, ssrc uint32, seq uint16) []byte {
 	if c == nil || len(payload) == 0 {
 		return payload
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.vek == nil {
+		return nil
 	}
 	stream := cipher.NewOFB(c.block, PacketIV(c.vek, ssrc, seq))
 	out := make([]byte, len(payload))
@@ -142,6 +154,8 @@ func (c *PacketCryptor) Zero() {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for i := range c.vek {
 		c.vek[i] = 0
 	}

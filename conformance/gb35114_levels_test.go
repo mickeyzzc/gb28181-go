@@ -140,12 +140,19 @@ func run35114MediaFlow(t *testing.T, level security35114.Level, mediaTransport s
 	lb.frames.Write(device.AccessUnit{NALUs: []device.NALU{nalu(1, lbP)}, Timestamp: time.Now()})
 	lb.frames.Write(device.AccessUnit{NALUs: []device.NALU{nalu(1, lbP)}, Timestamp: time.Now()})
 
-	require.Eventually(t, func() bool {
+	// Snapshot under the callback's mutex: reading len(gotAUs) at the
+	// Eventually call site (message args are evaluated eagerly) races the
+	// subscriber goroutine's append — the race detector poisoned this
+	// suite on CI's first run of these loopbacks.
+	auCount := func() int {
 		mu.Lock()
 		defer mu.Unlock()
-		return len(gotAUs) >= 3
-	}, 15*time.Second, 100*time.Millisecond, "all three signed%s AUs must arrive; got %d",
-		map[bool]string{true: " and encrypted", false: ""}[level == security35114.LevelC], len(gotAUs))
+		return len(gotAUs)
+	}
+	require.Eventually(t, func() bool { return auCount() >= 3 },
+		15*time.Second, 100*time.Millisecond,
+		"all three signed%s AUs must arrive",
+		map[bool]string{true: " and encrypted", false: ""}[level == security35114.LevelC])
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -365,15 +372,16 @@ func TestGB35114LevelC_Playback(t *testing.T) {
 	end := time.UnixMilli(seg.EndMS).Add(2 * time.Second)
 	require.NoError(t, lb.platformSrv.StartPlayback(lbDeviceID, lbChannelID, time.UnixMilli(seg.StartMS), end))
 
-	var mu sync.Mutex
+	// auCollector guards e.aus with e.mu — read through the SAME mutex
+	// (a test-local mutex here would race the collector goroutine).
 	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
+		enrol.mu.Lock()
+		defer enrol.mu.Unlock()
 		return len(enrol.aus) >= 1
 	}, 15*time.Second, 100*time.Millisecond, "fetched AUs must arrive at the playback sink")
 
-	mu.Lock()
-	defer mu.Unlock()
+	enrol.mu.Lock()
+	defer enrol.mu.Unlock()
 	first := enrol.aus[0]
 	require.GreaterOrEqual(t, len(first), 3, "first AU should carry SPS/PPS/IDR NALUs")
 	require.Equal(t, byte(0x07), first[0][0], "first NALU is SPS (type 7)")
