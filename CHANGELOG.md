@@ -11,6 +11,14 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.15.0] — 2026-10-29
+
+The GB 35114 B/C package: the A-level security implementation extends to
+the standard's full software-form coverage (levels B and C across every
+media direction), hardened by the re-registration and retransmission
+fixes the new conformance loopbacks surfaced — plus GB/T 28181-2011
+device-side compatibility as a pinned, tested claim.
+
 ### Fixed
 
 - `fix(security35114)` **level-C media failed closed after device

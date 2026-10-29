@@ -27,7 +27,7 @@ windows amd64/arm64——`CGO_ENABLED=0` 纯静态，拷到树莓派、NAS、测
 从 release 取预编译包：
 
 ```bash
-gh release download v0.14.0 -R mickeyzzc/gb28181-go \
+gh release download v0.15.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz'
 tar xzf gb28181-cli_linux_amd64.tar.gz   # 里面就是单个 gb28181 二进制
 sha256sum -c SHA256SUMS                        # 校验
@@ -36,7 +36,7 @@ sha256sum -c SHA256SUMS                        # 校验
 或按版本锚定从源码装：
 
 ```bash
-go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.14.0
+go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.15.0
 ```
 
 或检出后直接 `go run ./cmd/gb28181 <子命令>`。
