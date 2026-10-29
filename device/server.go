@@ -1465,6 +1465,24 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		}
 	}
 
+	// Subscribe to the AUHub BEFORE the 200 OK leaves. The platform's
+	// InviteChannel returns the moment the answer lands and hosts start
+	// pushing immediately; frames written between the answer and a
+	// post-answer subscribe are dropped by the hub (no subscriber yet).
+	// Slow CPUs widen that window — level-C answer sealing (SM2) plus a
+	// 2-core CI runner loses the whole first burst to it.
+	if sessionType == "Play" {
+		s.mu.Lock()
+		if s.sub != nil {
+			s.hub.Unsubscribe(s.sub.ID)
+		}
+		sub := s.hub.Subscribe(ctx)
+		s.sub = sub
+		s.remoteRTPAddr = rtpDest
+		s.mu.Unlock()
+		slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
+	}
+
 	// Send 200 OK with SDP answer
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
 	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
@@ -1483,6 +1501,12 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", mediaAddr)
 		if err != nil {
 			slog.Warn("gb28181: failed to connect to TCP media port", "addr", mediaAddr, "error", err)
+			s.mu.Lock()
+			if s.sub != nil {
+				s.hub.Unsubscribe(s.sub.ID)
+				s.sub = nil
+			}
+			s.mu.Unlock()
 			return
 		}
 		mediaTCPConn = conn.(*net.TCPConn)
@@ -1560,14 +1584,6 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		return
 	}
 
-	// Subscribe to AUHub
-	sub := s.hub.Subscribe(ctx)
-	s.mu.Lock()
-	s.sub = sub
-	s.remoteRTPAddr = rtpDest
-	s.mu.Unlock()
-	slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
-
 	// Create media context for goroutine
 	mediaCtx, mediaCancel := context.WithCancel(ctx)
 	s.mu.Lock()
@@ -1599,6 +1615,9 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		if tcpConn != nil {
 			pusher.SetTCPConn(tcpConn)
 		}
+		s.mu.Lock()
+		liveSub := s.sub
+		s.mu.Unlock()
 		slog.Info("gb28181: media goroutine started", "remote", rtpDest.String(), "transport", s.cfg.Transport)
 
 		for {
@@ -1606,7 +1625,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			case <-mediaCtx.Done():
 				slog.Info("gb28181: media goroutine stopped")
 				return
-			case au, ok := <-sub.Channel:
+			case au, ok := <-liveSub.Channel:
 				if !ok {
 					slog.Info("gb28181: AU channel closed")
 					return
