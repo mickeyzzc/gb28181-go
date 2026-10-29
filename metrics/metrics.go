@@ -31,16 +31,22 @@ type Hooks interface {
 	// PSBytesOut fires with the MPEG-PS bytes handed to the wire
 	// (device: RTP/PS out; platform: media forwarded).
 	PSBytesOut(n int64)
+	// GB35114AUVerifyFailed fires when a GB 35114 level-B/C media access
+	// unit was dropped — its signature was missing or did not verify
+	// (live/playback receivers and talk legs alike; channelID identifies
+	// the GB channel). Treat every firing as potential stream tampering.
+	GB35114AUVerifyFailed(channelID string)
 }
 
 // NoopHooks is the default Hooks: every method is a no-op.
 type NoopHooks struct{}
 
-func (NoopHooks) RegisterAttempt()      {}
-func (NoopHooks) RegisterOK()           {}
-func (NoopHooks) RegisterFail()         {}
-func (NoopHooks) KeepaliveFail()        {}
-func (NoopHooks) InviteSessionStarted() {}
-func (NoopHooks) InviteSessionStopped() {}
-func (NoopHooks) InviteFail()           {}
-func (NoopHooks) PSBytesOut(int64)      {}
+func (NoopHooks) RegisterAttempt()             {}
+func (NoopHooks) RegisterOK()                  {}
+func (NoopHooks) RegisterFail()                {}
+func (NoopHooks) KeepaliveFail()               {}
+func (NoopHooks) InviteSessionStarted()        {}
+func (NoopHooks) InviteSessionStopped()        {}
+func (NoopHooks) InviteFail()                  {}
+func (NoopHooks) PSBytesOut(int64)             {}
+func (NoopHooks) GB35114AUVerifyFailed(string) {}

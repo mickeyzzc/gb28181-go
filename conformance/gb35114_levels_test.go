@@ -398,3 +398,46 @@ func TestGB35114LevelC_Playback(t *testing.T) {
 		require.Zero(t, rc.AUVerifyFailures(), "no fetch AU signature may be rejected")
 	}
 }
+
+// TestGB35114LevelC_VoiceBroadcast covers the device-initiated broadcast
+// dialog at level C: the device INVITEs (信令5), the platform's 200-OK
+// answer carries the sealed VEK, and the platform's audio arrives at the
+// device sink decrypted, signature-verified and byte-exact. The handle's
+// Secured() proves the sender actually armed (non-vacuous).
+func TestGB35114LevelC_VoiceBroadcast(t *testing.T) {
+	lb := start35114Loopback(t, security35114.LevelC, "udp")
+	lb.onlineDevice(t)
+	lb.channelOf(t)
+
+	got := make(chan []byte, 8)
+	lb.deviceSrv.SetTalkbackSink(talkSinkFunc(func(payload []byte, ssrc uint32, codec device.AudioCodec) {
+		select {
+		case got <- append([]byte(nil), payload...):
+		default:
+		}
+	}))
+
+	audio := make(chan []byte, 8)
+	h, err := lb.platformSrv.StartBroadcast(lbDeviceID, lbServerID, audio)
+	require.NoError(t, err)
+
+	select {
+	case <-h.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("broadcast session never came up (device INVITE not answered)")
+	}
+	require.True(t, h.Secured(), "broadcast sender must be GB35114-armed at level C")
+
+	audio <- []byte{0xD5, 0x5A, 0xA5, 0x37}
+	audio <- []byte{0x0F}
+	for i := 0; i < 2; i++ {
+		select {
+		case p := <-got:
+			require.Equal(t, [][]byte{{0xD5, 0x5A, 0xA5, 0x37}, {0x0F}}[i], p,
+				"broadcast frame must arrive decrypted and verified")
+		case <-time.After(10 * time.Second):
+			t.Fatalf("broadcast frame %d never reached the sink", i)
+		}
+	}
+	require.NoError(t, lb.platformSrv.StopBroadcast(lbDeviceID))
+}

@@ -27,6 +27,7 @@ func (b *PrometheusBridge) InviteSessionStarted() {}
 func (b *PrometheusBridge) InviteSessionStopped() {}
 func (b *PrometheusBridge) InviteFail()           {}
 func (b *PrometheusBridge) PSBytesOut(n int64)    { b.psBytes.Add(n) }
+func (b *PrometheusBridge) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*PrometheusBridge)(nil)
 

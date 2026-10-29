@@ -23,6 +23,7 @@ func (c *countingHooks) InviteSessionStarted() {}
 func (c *countingHooks) InviteSessionStopped() {}
 func (c *countingHooks) InviteFail()           {}
 func (c *countingHooks) PSBytesOut(n int64)    { c.psBytes.Add(int32(n)) }
+func (c *countingHooks) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*countingHooks)(nil)
 

@@ -34,6 +34,9 @@ type broadcastSession struct {
 	inviteResp sip.Response
 	cancel     context.CancelFunc
 	ready      chan struct{}
+	// secured marks a GB35114-armed sender (level B/C negotiated on this
+	// dialog).
+	secured bool
 }
 
 // BroadcastHandle exposes the asynchronous voice-broadcast session.
@@ -53,6 +56,15 @@ func (h *BroadcastHandle) Ready() <-chan struct{} {
 		return ch
 	}
 	return bs.ready
+}
+
+// Secured reports whether this broadcast session negotiated GB35114
+// media security (level B/C) with the device.
+func (h *BroadcastHandle) Secured() bool {
+	h.s.mu.Lock()
+	bs := h.s.broadcasts[h.deviceID]
+	h.s.mu.Unlock()
+	return bs != nil && bs.secured
 }
 
 // bcastSN numbers the Broadcast notification MESSAGEs.
@@ -166,6 +178,7 @@ func (s *Server) answerBroadcastInvite(req sip.Request, tx sip.ServerTransaction
 		if answerValue != "" {
 			sdp += "a=security:" + answerValue + "\r\n"
 			bcCryptor, bcSigner = encrypt, sign
+			bs.secured = true
 		}
 	}
 	resp := sip.NewResponseFromRequest("", req, sip.StatusCode(200), "OK", sdp)

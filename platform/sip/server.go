@@ -892,6 +892,7 @@ func (s *Server) armMediaSecurity(deviceID, channelID, answerBody string, rc *pl
 	}
 	if verifyAU != nil {
 		rc.SetAUVerifier(verifyAU)
+		rc.SetAUVerifyFailedHook(func() { s.metrics.GB35114AUVerifyFailed(channelID) })
 		slog.Info("gb28181: GB35114 level-B AU signature verification armed", "channel", channelID, "device", deviceID)
 	}
 }

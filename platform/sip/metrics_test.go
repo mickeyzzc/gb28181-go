@@ -24,6 +24,7 @@ func (c *countingSipHooks) InviteSessionStarted() { c.started.Add(1) }
 func (c *countingSipHooks) InviteSessionStopped() { c.stopped.Add(1) }
 func (c *countingSipHooks) InviteFail()           {}
 func (c *countingSipHooks) PSBytesOut(int64)      {}
+func (c *countingSipHooks) GB35114AUVerifyFailed(string) {}
 
 var _ metrics.Hooks = (*countingSipHooks)(nil)
 
