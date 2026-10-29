@@ -66,6 +66,13 @@ type Authenticator struct {
 	random2 string
 	vkek    []byte
 	vkekVer int // handshake generation of vkek (mirrors the platform's counter)
+	// handshakeVer is the platform-assigned generation from the
+	// SecurityInfo's vkekver parameter (>0). It is authoritative for the
+	// INVITE answer's vkekver label — a device-local counter restarts at 1
+	// on every process restart and collides with the platform's
+	// historical key ring (issue #157). 0 = the platform did not send one
+	// (fallback to the local count).
+	handshakeVer int
 }
 
 // New validates the options and returns a ready Authenticator.
@@ -179,6 +186,7 @@ func (a *Authenticator) VerifyOK(securityInfo string) error {
 	a.mu.Lock()
 	a.vkekVer++
 	a.vkek = vkek
+	a.handshakeVer = si.VKEKVer
 	a.mu.Unlock()
 	return nil
 }
@@ -314,10 +322,16 @@ func (a *Authenticator) VerifyMediaSignature(au []byte, ssrc, timestamp uint32, 
 	return VerifyAU(a.opts.PlatformCert, au, ssrc, timestamp, sigDER)
 }
 
-// vkekVersion snapshots the handshake generation counter.
+// vkekVersion snapshots the handshake generation for the INVITE answer's
+// vkekver label: the platform-assigned number when the SecurityInfo carried
+// one (authoritative — it indexes the platform's key ring), else the local
+// handshake count (older/foreign platforms).
 func (a *Authenticator) vkekVersion() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.handshakeVer > 0 {
+		return a.handshakeVer
+	}
 	return a.vkekVer
 }
 

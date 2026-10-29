@@ -18,6 +18,7 @@
 package security35114
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -52,8 +53,11 @@ func GenerateVEK(r io.Reader) ([]byte, error) {
 }
 
 // SealVEK wraps a VEK with SM4-ECB under the session VKEK — the key
-// envelope. A 16-byte key under a 16-byte block cipher is exactly one
-// block, so no padding is defined or needed.
+// envelope. The plaintext is VEK ‖ SM3(VEK)[:16], two blocks: the SM3
+// prefix is an integrity check so OpenVEK under a WRONG VKEK generation
+// fails loudly instead of silently yielding a garbage VEK that arms a
+// wrong-key decryptor (issue #157's silent-failure mode — every AU then
+// died to signature verification with no diagnostic at arming time).
 func SealVEK(vkek, vek []byte) (string, error) {
 	if len(vkek) != sm4.BlockSize {
 		return "", fmt.Errorf("security35114: VKEK is %d bytes, want %d", len(vkek), sm4.BlockSize)
@@ -65,12 +69,21 @@ func SealVEK(vkek, vek []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("security35114: SM4: %w", err)
 	}
-	out := make([]byte, VEKLen)
-	block.Encrypt(out, vek)
+	plain := append(append([]byte{}, vek...), sm3Tag(vek)...)
+	out := make([]byte, len(plain))
+	block.Encrypt(out[:sm4.BlockSize], plain[:sm4.BlockSize])
+	block.Encrypt(out[sm4.BlockSize:], plain[sm4.BlockSize:])
 	return base64.StdEncoding.EncodeToString(out), nil
 }
 
-// OpenVEK unwraps a SealVEK envelope.
+// sm3Tag is the envelope integrity tag: the first SM4 block of SM3(key).
+func sm3Tag(key []byte) []byte {
+	sum := sm3.Sum(key)
+	return sum[:sm4.BlockSize]
+}
+
+// OpenVEK unwraps a SealVEK envelope; a wrong VKEK (e.g. a stale
+// generation) fails the embedded SM3 check with an explicit error.
 func OpenVEK(vkek []byte, envelope string) ([]byte, error) {
 	if len(vkek) != sm4.BlockSize {
 		return nil, fmt.Errorf("security35114: VKEK is %d bytes, want %d", len(vkek), sm4.BlockSize)
@@ -79,16 +92,20 @@ func OpenVEK(vkek []byte, envelope string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("security35114: VEK envelope is not base64: %w", err)
 	}
-	if len(raw) != VEKLen {
-		return nil, fmt.Errorf("security35114: VEK envelope is %d bytes, want %d", len(raw), VEKLen)
+	if len(raw) != 2*VEKLen {
+		return nil, fmt.Errorf("security35114: VEK envelope is %d bytes, want %d (wrong library generation?)", len(raw), 2*VEKLen)
 	}
 	block, err := sm4.NewCipher(vkek)
 	if err != nil {
 		return nil, fmt.Errorf("security35114: SM4: %w", err)
 	}
-	vek := make([]byte, VEKLen)
-	block.Decrypt(vek, raw)
-	return vek, nil
+	plain := make([]byte, 2*VEKLen)
+	block.Decrypt(plain[:VEKLen], raw[:VEKLen])
+	block.Decrypt(plain[VEKLen:], raw[VEKLen:])
+	if !bytes.Equal(plain[VEKLen:], sm3Tag(plain[:VEKLen])) {
+		return nil, fmt.Errorf("security35114: VEK envelope integrity check failed — wrong VKEK (stale generation?)")
+	}
+	return plain[:VEKLen], nil
 }
 
 // PacketIV derives the per-RTP-packet SM4-OFB IV: SM3(VEK ‖ SSRC ‖ seq)

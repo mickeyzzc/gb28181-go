@@ -23,8 +23,8 @@ func TestVEKEnvelopeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealVEK: %v", err)
 	}
-	if len(env) != 24 { // 16 bytes → base64 = 24 chars
-		t.Fatalf("envelope length = %d, want 24", len(env))
+	if len(env) != 44 { // 32 bytes (VEK ‖ SM3 tag) → base64 = 44 chars
+		t.Fatalf("envelope length = %d, want 44", len(env))
 	}
 	opened, err := OpenVEK(vkek, env)
 	if err != nil {
@@ -34,12 +34,13 @@ func TestVEKEnvelopeRoundTrip(t *testing.T) {
 		t.Fatalf("opened VEK %x != original %x", opened, vek)
 	}
 
-	// A wrong VKEK yields a wrong VEK without error (ECB is malleable here);
-	// wrong lengths must fail outright.
+	// A wrong VKEK (e.g. a stale generation) FAILS the embedded SM3 tag —
+	// the loud, arming-time error issue #157 asked for (the old single-block
+	// envelope silently yielded a garbage VEK).
 	bad := append([]byte(nil), vkek...)
 	bad[0] ^= 0xFF
-	if other, err := OpenVEK(bad, env); err != nil || bytes.Equal(other, vek) {
-		t.Fatalf("wrong VKEK must open a different VEK (other==orig: %v, err: %v)", bytes.Equal(other, vek), err)
+	if other, err := OpenVEK(bad, env); err == nil || other != nil {
+		t.Fatalf("wrong VKEK must fail the integrity check (other: %v, err: %v)", other, err)
 	}
 	if _, err := OpenVEK(vkek[:15], env); err == nil {
 		t.Fatal("short VKEK must fail")
