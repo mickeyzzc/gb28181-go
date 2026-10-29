@@ -5,7 +5,7 @@
 [![CI](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
-![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-700%2B%20passing-brightgreen.svg)
 
 GB/T 28181-2011/2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard. The device role interoperates with 2011-era platforms (see [GB/T 28181-2011 device-side compatibility](#gbt-28181-2011-device-side-compatibility)).
 

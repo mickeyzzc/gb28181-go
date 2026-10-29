@@ -13,11 +13,11 @@ source. Full flag reference per subcommand:
 
 ```bash
 # 1) Prebuilt bundle (recommended: copy to any Linux/Windows/macOS box)
-gh release download v0.14.0 -R mickeyzzc/gb28181-go \
+gh release download v0.15.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz' && tar xzf gb28181-cli_linux_amd64.tar.gz
 
 # 2) Version-pinned install
-go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.14.0
+go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.15.0
 
 # 3) From a checkout
 go run ./cmd/gb28181 <subcommand>

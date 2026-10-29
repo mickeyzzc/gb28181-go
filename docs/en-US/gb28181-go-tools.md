@@ -31,7 +31,7 @@ each library ships tools for its own stack.
 Prebuilt bundle from a release:
 
 ```bash
-gh release download v0.14.0 -R mickeyzzc/gb28181-go \
+gh release download v0.15.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz'
 tar xzf gb28181-cli_linux_amd64.tar.gz   # the single gb28181 binary inside
 sha256sum -c SHA256SUMS                        # verify
@@ -40,7 +40,7 @@ sha256sum -c SHA256SUMS                        # verify
 Or install from source, version-anchored:
 
 ```bash
-go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.14.0
+go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.15.0
 ```
 
 Or from a checkout: `go run ./cmd/gb28181 <subcommand>`.

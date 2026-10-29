@@ -12,11 +12,11 @@
 
 ```bash
 # 1) 预编译包（推荐：拷到任意 Linux/Windows/macOS 机器即用）
-gh release download v0.14.0 -R mickeyzzc/gb28181-go \
+gh release download v0.15.0 -R mickeyzzc/gb28181-go \
   -p 'gb28181-cli_linux_amd64.tar.gz' && tar xzf gb28181-cli_linux_amd64.tar.gz
 
 # 2) 按版本锚定安装
-go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.14.0
+go install github.com/mickeyzzc/gb28181-go/cmd/gb28181@v0.15.0
 
 # 3) 检出仓库直接跑
 go run ./cmd/gb28181 <子命令>
