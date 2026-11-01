@@ -61,8 +61,16 @@ type Server struct {
 	cancel       context.CancelFunc
 	mediaCancel  context.CancelFunc
 	sub          *FrameSubscription
+	// talkCryptor is the GB35114 session cryptor of an active talkback
+	// dialog (shared by its receive and upstream halves — the XOR is
+	// symmetric). Zeroed at media teardown.
+	talkCryptor RTPCryptor
 	// Remote address for RTP streaming
 	remoteRTPAddr *net.UDPAddr
+	// inviteAnswerCache serves RFC 3261 §13.3.1.4 INVITE-retransmission
+	// idempotency: Call-ID+" "+CSeq → the serialized 200 OK to replay.
+	// Cleared on teardown (BYE) and superseded by the next new INVITE.
+	inviteAnswerCache map[string][]byte
 	// onBroadcast is the host callback for voice-broadcast notifications
 	// (§9.12.1), copied into devCtx at Start.
 	onBroadcast func(sourceID, targetID string)
@@ -141,15 +149,16 @@ type Server struct {
 // New creates a new GB28181 server.
 func New(cfg Config, deviceCfg DeviceInfo, hub FrameSource) *Server {
 	s := &Server{
-		cfg:            cfg,
-		deviceCfg:      deviceCfg,
-		hub:            hub,
-		regRespCh:      make(chan SipMessage, 4),
-		inviteRespCh:   make(chan SipMessage, 4),
-		reRegisterCh:   make(chan struct{}, 1),
-		metrics:        metrics.NoopHooks{},
-		notifier:       newDeviceNotifier(),
-		positionCancel: make(chan struct{}),
+		cfg:               cfg,
+		deviceCfg:         deviceCfg,
+		hub:               hub,
+		regRespCh:         make(chan SipMessage, 4),
+		inviteRespCh:      make(chan SipMessage, 4),
+		reRegisterCh:      make(chan struct{}, 1),
+		metrics:           metrics.NoopHooks{},
+		notifier:          newDeviceNotifier(),
+		positionCancel:    make(chan struct{}),
+		inviteAnswerCache: make(map[string][]byte),
 	}
 	// Upstream law defaults to PCMA — see the upstreamLaw field note.
 	s.upstreamLaw.Store(int32(AudioPCMA))
@@ -208,7 +217,10 @@ func (s *Server) SetPositionSource(src PositionSource) {
 }
 
 // SetRecordingIndex injects the recording index used for RecordInfo queries.
+// Safe to call while the server runs (the read paths snapshot under s.mu).
 func (s *Server) SetRecordingIndex(idx RecordingIndex) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.recordingIndex = idx
 }
 
@@ -230,6 +242,7 @@ func (s *Server) Start(ctx context.Context) error {
 		LocalIP:       localIP(),
 		LocalPort:     s.cfg.LocalSIPPort,
 		ExtraChannels: s.cfg.ExtraChannels,
+		PTZType:       s.deviceCfg.PTZType,
 
 		OnBroadcast: s.onBroadcast,
 	}
@@ -336,6 +349,15 @@ func (s *Server) Start(ctx context.Context) error {
 			// Handle based on method
 			switch msg.Method {
 			case "INVITE":
+				// RFC 3261 §13.3.1.4: a retransmitted INVITE (same
+				// Call-ID + CSeq) must re-receive the cached 200 OK —
+				// re-running the handler would re-negotiate media
+				// security (a fresh VEK per answer) and start a second
+				// media task, desyncing the platform's armed key
+				// permanently (#157's retransmission face).
+				if s.replayInviteAnswer(msg, addr) {
+					continue
+				}
 				s.handleInvite(ctx, msg, addr)
 			case "BYE":
 				s.handleBye(ctx, msg, addr)
@@ -387,19 +409,32 @@ func (s *Server) allowIncomingNote(msg SipMessage) bool {
 	if note == "" {
 		return true
 	}
-	err := verifier.VerifyIncomingNote(msg.Method, msg.From, msg.To, msg.CallID,
-		msg.ExtensionHeader("Date"), note, msg.Body)
-	if err == nil {
-		return true
+	// The platform can only Note-sign after ITS side of the handshake —
+	// whose 200 OK precedes this request on the same wire — but our
+	// REGISTER-response processing is asynchronous (regRespCh), so the
+	// VKEK install can lag this request by scheduling. A Note arriving
+	// before the key materialized is almost certainly that lag, not an
+	// attack: wait briefly for the handshake to land before failing.
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		err := verifier.VerifyIncomingNote(msg.Method, msg.From, msg.To, msg.CallID,
+			msg.ExtensionHeader("Date"), note, msg.Body)
+		if err == nil {
+			return true
+		}
+		if !strings.Contains(err.Error(), "before the handshake completed") ||
+			time.Now().After(deadline) {
+			if s.cfg.IncomingNotePolicy == GB35114NoteWarn {
+				slog.Warn("gb28181: incoming Note verification failed (warn policy, serving anyway)",
+					"method", msg.Method, "error", err)
+				return true
+			}
+			slog.Warn("gb28181: incoming Note verification failed, rejecting",
+				"method", msg.Method, "error", err)
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if s.cfg.IncomingNotePolicy == GB35114NoteWarn {
-		slog.Warn("gb28181: incoming Note verification failed (warn policy, serving anyway)",
-			"method", msg.Method, "error", err)
-		return true
-	}
-	slog.Warn("gb28181: incoming Note verification failed, rejecting",
-		"method", msg.Method, "error", err)
-	return false
 }
 
 // Stop stops the server.
@@ -1261,6 +1296,10 @@ func (s *Server) sendKeepalive(ctx context.Context) error {
 // playback, or talkback receive) so a new INVITE never leaks a goroutine
 // + socket per session. Caller holds s.mu.
 func (s *Server) teardownMediaLocked() {
+	if s.talkCryptor != nil {
+		s.talkCryptor.Zero()
+		s.talkCryptor = nil
+	}
 	if s.mediaCancel != nil {
 		s.mediaCancel()
 		s.mediaCancel = nil
@@ -1282,6 +1321,38 @@ func (s *Server) teardownMediaLocked() {
 		s.mediaTCPListener = nil
 	}
 	s.playbackCtl = nil
+}
+
+// inviteCacheKey identifies one INVITE transaction (dialog + CSeq).
+func inviteCacheKey(msg SipMessage) string {
+	return msg.CallID + " " + msg.CSeq
+}
+
+// replayInviteAnswer re-serves the cached 200 OK of an already-answered
+// INVITE retransmission. true = served, caller must not re-handle.
+func (s *Server) replayInviteAnswer(msg SipMessage, addr net.Addr) bool {
+	s.mu.Lock()
+	cached, ok := s.inviteAnswerCache[inviteCacheKey(msg)]
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	slog.Info("gb28181: retransmitted INVITE — replaying cached 200 OK", "call_id", msg.CallID)
+	_ = s.sendSIP(cached, addr)
+	return true
+}
+
+// cacheInviteAnswer stores the 200 OK bytes for retransmission replay.
+func (s *Server) cacheInviteAnswer(msg SipMessage, answer []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inviteAnswerCache == nil {
+		s.inviteAnswerCache = make(map[string][]byte)
+	}
+	if len(s.inviteAnswerCache) > 4 {
+		s.inviteAnswerCache = make(map[string][]byte)
+	}
+	s.inviteAnswerCache[inviteCacheKey(msg)] = answer
 }
 
 // handleInvite handles INVITE requests - parses SDP, binds media, sends 200 OK with device SDP, subscribes to AUHub.
@@ -1320,7 +1391,10 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	var startMs, endMs int64
 	if sessionType != "Play" {
 		startMs, endMs = parseSDPTimeRange(msg.Body)
-		if idx, ok := s.recordingIndex.(PlaybackIndex); ok {
+		s.mu.Lock()
+		idxAny := s.recordingIndex
+		s.mu.Unlock()
+		if idx, ok := idxAny.(PlaybackIndex); ok {
 			playbackSegs = idx.Lookup(startMs, endMs)
 			playbackRoot = idx.Root()
 		}
@@ -1419,9 +1493,63 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 	}
 	deviceSDP := buildDeviceSDP(s.cfg.DeviceID, localIPAddr, answerPort, ssrc, answerTransport, sessionType, answerSetup)
 
-	// Send 200 OK with SDP answer
+	// GB35114 B/C media security: when the offer carries a=security, the
+	// configured responder negotiates. The answer attribute rides the SDP;
+	// the returned cryptor (level C) and the AU signer (level B) arm the
+	// pusher. A security offer the device cannot honor is refused with 488 —
+	// answering plaintext would silently violate the platform's policy.
+	var payloadEncryptor RTPCryptor
+	var auSigner AUSignerFunc
+	if offer := SDPSecurityAttributeValue(msg.Body); offer != "" {
+		responder, ok := s.cfg.RegisterAuthenticator.(MediaSecurityResponder)
+		if !ok || responder == nil {
+			slog.Warn("gb28181: INVITE requested GB35114 media security but no responder is configured — rejecting", "offer", offer)
+			s.rejectInvite(msg, fromAddr)
+			return
+		}
+		answerValue, encrypt, err := responder.AnswerMediaSecurity(offer)
+		if err != nil {
+			slog.Warn("gb28181: GB35114 media negotiation failed — rejecting INVITE", "error", err)
+			s.rejectInvite(msg, fromAddr)
+			return
+		}
+		if answerValue != "" {
+			deviceSDP += "\na=security:" + answerValue
+			payloadEncryptor = encrypt
+			if signer, ok := s.cfg.RegisterAuthenticator.(interface {
+				SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error)
+			}); ok {
+				auSigner = signer.SignAU
+			}
+			slog.Info("gb28181: GB35114 media security negotiated", "answer", answerValue)
+		}
+	}
+
+	// Subscribe to the AUHub BEFORE the 200 OK leaves. The platform's
+	// InviteChannel returns the moment the answer lands and hosts start
+	// pushing immediately; frames written between the answer and a
+	// post-answer subscribe are dropped by the hub (no subscriber yet).
+	// Slow CPUs widen that window — level-C answer sealing (SM2) plus a
+	// 2-core CI runner loses the whole first burst to it.
+	if sessionType == "Play" {
+		s.mu.Lock()
+		if s.sub != nil {
+			s.hub.Unsubscribe(s.sub.ID)
+		}
+		sub := s.hub.Subscribe(ctx)
+		s.sub = sub
+		s.remoteRTPAddr = rtpDest
+		s.mu.Unlock()
+		slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
+	}
+
+	// Send 200 OK with SDP answer (cached for §13.3.1.4 retransmission
+	// replay — a re-run would re-negotiate a fresh VEK and desync the
+	// platform's armed key).
 	ok200 := Build200OK(msg, "application/sdp", deviceSDP)
-	if err := s.sendSIP(ok200.Serialize(), fromAddr); err != nil {
+	answer := ok200.Serialize()
+	s.cacheInviteAnswer(msg, answer)
+	if err := s.sendSIP(answer, fromAddr); err != nil {
 		slog.Warn("gb28181: failed to send 200 OK", "error", err)
 		return
 	}
@@ -1437,6 +1565,12 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", mediaAddr)
 		if err != nil {
 			slog.Warn("gb28181: failed to connect to TCP media port", "addr", mediaAddr, "error", err)
+			s.mu.Lock()
+			if s.sub != nil {
+				s.hub.Unsubscribe(s.sub.ID)
+				s.sub = nil
+			}
+			s.mu.Unlock()
 			return
 		}
 		mediaTCPConn = conn.(*net.TCPConn)
@@ -1509,18 +1643,10 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 		slog.Info("gb28181: playback media goroutine started", "session", sessionType, "remote", rtpDest.String(), "transport", s.cfg.Transport, "segments", len(playbackSegs))
 		go func() {
 			defer mediaCancel()
-			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify)
+			s.runPlayback(mediaCtx, mediaConn, mediaTCPConn, acceptTCP, rtpDest, ssrc, playbackSegs, playbackRoot, startMs, endMs, sessionType, ctlCh, endNotify, payloadEncryptor, auSigner)
 		}()
 		return
 	}
-
-	// Subscribe to AUHub
-	sub := s.hub.Subscribe(ctx)
-	s.mu.Lock()
-	s.sub = sub
-	s.remoteRTPAddr = rtpDest
-	s.mu.Unlock()
-	slog.Info("gb28181: subscribed to AUHub", "sub_id", sub.ID)
 
 	// Create media context for goroutine
 	mediaCtx, mediaCancel := context.WithCancel(ctx)
@@ -1542,10 +1668,20 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			}
 		}
 		pusher := NewRtpPusher(mediaConn, rtpDest)
+		defer pusher.ZeroSecurity()
 		pusher.SetMetricsHooks(s.metrics)
+		if payloadEncryptor != nil {
+			pusher.SetPayloadEncryptor(payloadEncryptor)
+		}
+		if auSigner != nil {
+			pusher.SetAUSigner(auSigner)
+		}
 		if tcpConn != nil {
 			pusher.SetTCPConn(tcpConn)
 		}
+		s.mu.Lock()
+		liveSub := s.sub
+		s.mu.Unlock()
 		slog.Info("gb28181: media goroutine started", "remote", rtpDest.String(), "transport", s.cfg.Transport)
 
 		for {
@@ -1553,7 +1689,7 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			case <-mediaCtx.Done():
 				slog.Info("gb28181: media goroutine stopped")
 				return
-			case au, ok := <-sub.Channel:
+			case au, ok := <-liveSub.Channel:
 				if !ok {
 					slog.Info("gb28181: AU channel closed")
 					return
@@ -1572,6 +1708,28 @@ func (s *Server) handleInvite(ctx context.Context, msg SipMessage, fromAddr net.
 			}
 		}
 	}()
+}
+
+// rejectInvite answers an INVITE with 488 Not Acceptable Here — used when
+// the offer cannot be honored (no covering recordings, or a GB35114 media
+// security request the device cannot satisfy).
+func (s *Server) rejectInvite(msg SipMessage, fromAddr net.Addr) {
+	to := msg.To
+	if !strings.Contains(to, "tag=") {
+		to = to + ";tag=" + dialogTag
+	}
+	reject := SipMessage{
+		StatusCode: 488,
+		Via:        msg.Via,
+		From:       msg.From,
+		To:         to,
+		CallID:     msg.CallID,
+		CSeq:       msg.CSeq,
+		Headers:    make(map[string]string),
+	}
+	if err := s.sendSIP(reject.Serialize(), fromAddr); err != nil {
+		slog.Warn("gb28181: failed to send 488", "error", err)
+	}
 }
 
 // handleBye handles BYE requests - unsubscribe from AUHub and close media socket.
@@ -1630,7 +1788,10 @@ func (s *Server) handleMessage(ctx context.Context, msg SipMessage, fromAddr net
 		return
 	}
 
-	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, s.recordingIndex)
+	s.mu.Lock()
+	recIdx := s.recordingIndex
+	s.mu.Unlock()
+	ok200, queuedPages, err := DispatchInboundMessage(msg, s.devCtx, recIdx)
 	if err != nil {
 		slog.Warn("gb28181: failed to dispatch MESSAGE", "error", err)
 		return

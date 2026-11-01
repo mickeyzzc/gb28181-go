@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pion/rtp"
 )
 
 // AudioCodec is the G.711 variant negotiated for talkback: the RTP
@@ -241,9 +243,39 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 
 	slog.Info("gb28181: talkback INVITE", "from", fromAddr.String(), "codec", offer.codec.Name(), "ssrc", offer.ssrc)
 
+	// GB35114 B/C on platform-sent audio: when the offer carries
+	// a=security, the configured receiver arms the session. A security
+	// offer the device cannot honor is refused 488 (never plaintext). The
+	// single cryptor serves both halves — the XOR is symmetric.
+	var talkCryptor RTPCryptor
+	var talkVerifier AUVerifierFunc
+	var talkSigner AUSignerFunc
+	if offerSec := SDPSecurityAttributeValue(msg.Body); offerSec != "" {
+		opener, ok := s.cfg.RegisterAuthenticator.(MediaSecurityReceiver)
+		if !ok || opener == nil {
+			slog.Warn("gb28181: talkback INVITE requested GB35114 media security but no receiver is configured — 488", "offer", offerSec)
+			s.rejectInvite488(msg, fromAddr)
+			return
+		}
+		decrypt, verify, err := opener.OpenMediaSecurity(offerSec)
+		if err != nil {
+			slog.Warn("gb28181: GB35114 talk media negotiation failed — 488", "error", err)
+			s.rejectInvite488(msg, fromAddr)
+			return
+		}
+		talkCryptor, talkVerifier = decrypt, verify
+		if signer, ok := s.cfg.RegisterAuthenticator.(interface {
+			SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error)
+		}); ok {
+			talkSigner = signer.SignAU
+		}
+		slog.Info("gb28181: GB35114 talk media security negotiated", "offer", offerSec)
+	}
+
 	// Recycle any previous media session (shared single-dialog slot).
 	s.mu.Lock()
 	s.teardownMediaLocked()
+	s.talkCryptor = talkCryptor
 	s.mu.Unlock()
 
 	mediaConn, err := net.ListenUDP("udp", nil)
@@ -298,7 +330,7 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 			// Publish the negotiated law to the host encoder's polling
 			// seam — only meaningful while upstream is actually enabled.
 			s.upstreamLaw.Store(int32(offer.codec))
-			go runTalkbackSender(mediaCtx, mediaConn, dst, offer.codec, source)
+			go runTalkbackSender(mediaCtx, mediaConn, dst, offer.codec, source, talkCryptor, talkSigner)
 		} else {
 			slog.Warn("gb28181: talkback offer lacks a usable c=/m= media address — upstream disabled")
 		}
@@ -307,7 +339,7 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 	slog.Info("gb28181: talkback session receiving", "call_id", msg.CallID, "codec", offer.codec.Name(), "port", mediaPort)
 	go func() {
 		defer mediaCancel()
-		runTalkbackReceiver(mediaConn, sink, offer.ssrc, offer.codec)
+		runTalkbackReceiver(mediaConn, sink, offer.ssrc, offer.codec, talkCryptor, talkVerifier)
 	}()
 }
 
@@ -317,9 +349,8 @@ func (s *Server) handleTalkbackInvite(ctx context.Context, msg SipMessage, offer
 // timestamp advances by the payload length), random per-session
 // SSRC/sequence/timestamp bases. Exits when the media context is
 // cancelled (BYE / session recycle / server stop) or the socket breaks.
-func runTalkbackSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr, codec AudioCodec, frames <-chan []byte) {
-	pt := byte(codec.PayloadType())
-	buf := make([]byte, 12+2048)
+func runTalkbackSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr, codec AudioCodec, frames <-chan []byte, cryptor RTPCryptor, signer AUSignerFunc) {
+	pt := uint8(codec.PayloadType())
 	ssrc := randUint32()
 	seq := uint16(randUint32())
 	ts := randUint32()
@@ -335,13 +366,45 @@ func runTalkbackSender(ctx context.Context, conn *net.UDPConn, dst *net.UDPAddr,
 				if len(frame) == 0 || len(frame) > 2048 {
 					continue
 				}
-				buf[0] = 0x80 // V=2, no padding/extension/CSRC
-				buf[1] = pt   // M=0 — continuous G.711 stream
-				binary.BigEndian.PutUint16(buf[2:], seq)
-				binary.BigEndian.PutUint32(buf[4:], ts)
-				binary.BigEndian.PutUint32(buf[8:], ssrc)
-				copy(buf[12:], frame)
-				if _, err := conn.WriteToUDP(buf[:12+len(frame)], dst); err != nil {
+				// GB35114: sign the plaintext frame (level B), then encrypt
+				// (level C) — the platform decrypts first and verifies the
+				// signature over plaintext, mirroring this stack's live path.
+				var sigDER []byte
+				if signer != nil {
+					sig, err := signer(frame, ssrc, ts)
+					if err != nil {
+						slog.Debug("gb28181: talkback AU signing failed", "error", err)
+						continue
+					}
+					sigDER = sig
+				}
+				payload := frame
+				if cryptor != nil {
+					payload = cryptor.Crypt(frame, ssrc, seq)
+				}
+				packet := &rtp.Packet{
+					Header: rtp.Header{
+						Version:        2,
+						PayloadType:    pt,
+						SequenceNumber: seq,
+						Timestamp:      ts,
+						SSRC:           ssrc,
+					},
+					Payload: payload,
+				}
+				if sigDER != nil {
+					packet.Header.ExtensionProfile = rtp.ExtensionProfileTwoByte
+					if err := packet.SetExtension(RTPExtAUSignature, sigDER); err != nil {
+						slog.Debug("gb28181: talkback RTP extension failed", "error", err)
+						continue
+					}
+				}
+				wire, err := packet.Marshal()
+				if err != nil {
+					slog.Debug("gb28181: talkback RTP marshal failed", "error", err)
+					continue
+				}
+				if _, err := conn.WriteToUDP(wire, dst); err != nil {
 					slog.Debug("gb28181: talkback send loop ended", "error", err)
 					return
 				}
@@ -382,12 +445,15 @@ func (s *Server) rejectInvite488(msg SipMessage, fromAddr net.Addr) {
 	}
 }
 
-// runTalkbackReceiver pumps RTP audio off the session socket: strips the
-// fixed 12-byte header plus any CSRC list and hands the payload to the
-// sink. It exits when the socket closes (BYE teardown / session recycle
-// / server stop) or on a hard receive error.
-func runTalkbackReceiver(conn *net.UDPConn, sink TalkbackSink, sessionSSRC uint32, codec AudioCodec) {
+// runTalkbackReceiver pumps RTP audio off the session socket: parses the
+// packet (pion — RFC 8285 extensions included), applies GB35114 media
+// security when armed (decrypt the payload, verify the per-packet
+// signature — fail closed drops the packet), and hands the plaintext to
+// the sink. It exits when the socket closes (BYE teardown / session
+// recycle / server stop) or on a hard receive error.
+func runTalkbackReceiver(conn *net.UDPConn, sink TalkbackSink, sessionSSRC uint32, codec AudioCodec, cryptor RTPCryptor, verifier AUVerifierFunc) {
 	buf := make([]byte, 2048)
+	var pkt rtp.Packet
 	for {
 		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -398,16 +464,28 @@ func runTalkbackReceiver(conn *net.UDPConn, sink TalkbackSink, sessionSSRC uint3
 		if n < 12 {
 			continue
 		}
-		csrcCount := int(buf[0] & 0x0F)
-		headerLen := 12 + csrcCount*4
-		if n <= headerLen {
+		if err := pkt.Unmarshal(buf[:n]); err != nil {
 			continue
 		}
-		ssrc := binary.BigEndian.Uint32(buf[8:12])
+		ssrc := pkt.Header.SSRC
 		if ssrc == 0 {
 			ssrc = sessionSSRC
 		}
-		payload := append([]byte(nil), buf[headerLen:n]...)
+		payload := append([]byte(nil), pkt.Payload...)
+		if cryptor != nil {
+			payload = cryptor.Crypt(payload, ssrc, pkt.Header.SequenceNumber)
+		}
+		if verifier != nil {
+			sig := pkt.Header.GetExtension(RTPExtAUSignature)
+			if len(sig) == 0 {
+				slog.Warn("gb28181: GB35114 talk AU signature missing — dropping packet")
+				continue
+			}
+			if err := verifier(payload, ssrc, pkt.Header.Timestamp, sig); err != nil {
+				slog.Warn("gb28181: GB35114 talk AU signature rejected — dropping packet", "error", err)
+				continue
+			}
+		}
 		sink.OnAudio(payload, ssrc, codec)
 	}
 }

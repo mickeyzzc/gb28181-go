@@ -5,9 +5,9 @@
 [![CI](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
-![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-700%2B%20passing-brightgreen.svg)
 
-**GB/T 28181-2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。
+**GB/T 28181-2011/2016/2022 Go 库族** —— 中国国标视频监控的设备端（UAC）与平台端（UAS）双角色。设备角色可与 2011 世代平台互操作（见 [GB/T 28181-2011 设备侧兼容](#gbt-28181-2011-设备侧兼容)）。
 
 手写 SIP（设备端不依赖任何 SIP 框架；平台端构建于 [ghettovoice/gosip](https://github.com/ghettovoice/gosip) 之上）、MANSCDP XML 编解码、RTP/PS 媒体与会话编排。代码从 Mi-Bee Studio 生产实现逐字抽取，经真实国标平台打磨（摘要 qop=auth、Via branch 唯一性、本机 IP 探测、MANSCDP 属性形式、SIP over TCP、TCP 媒体）。
 
@@ -23,7 +23,7 @@
 | `nalutil/` | NALU 工具（IDR 判定、参数集提取/比较）—— 平台收流与未来设备侧共用 | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform 自回环 conformance 套件 —— 真实 `device.Server` 对真实平台 SIP 服务器（localhost）：REGISTER+摘要认证 → 目录 → 保活存活 → INVITE 直播 → 字节级 RTP/PS 往返 → BYE；另有 SIPS（TLS 信令）变体。两个角色必须在每次 CI 上对每一条协议理解达成一致。 | 新增（issue #13） |
 | `platform/cascade/` | 级联客户端 —— 本平台作为下级平台向上级平台注册：聚合目录上报（GB 通道 ID 首见分配、跨重启稳定）、INVITE 转发拉流（FrameHub 订阅 → psmux → RTP）、录像段回放、BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS 处理、协议级回环测试。本地摄像头经 `CameraSource` 注入、持久化经 `Store`、录像段读取经 `SegmentParser` —— 全部宿主接缝。 | MiBeeNvr `internal/gb28181/cascade` |
-| `security35114/` | **可选，build tag 隔离（`-tags gb35114`）** —— GB 35114-2017 **A级** 安全，**设备/平台两侧**：设备侧基于 SM2 数字证书的 REGISTER 双向认证（`device.Config.RegisterAuthenticator`），平台侧挑战/验签/Note 校验状态机（`security35114.Platform`，经 `platform/sip` 的 `Config.RegisterAuthenticator` 接入）。`cryptkey` SM2 信封内的 VKEK 协商、后续信令的 keyed-SM3 `Note` 头完整性。 | 新增（v0.4.0，平台侧 v0.5.0） |
+| `security35114/` | **可选，build tag 隔离（`-tags gb35114`）** —— GB 35114-2017 **A/B/C 三级**安全，**设备/平台两侧**：设备侧基于 SM2 数字证书的 REGISTER 双向认证（`device.Config.RegisterAuthenticator`），平台侧挑战/验签/Note 校验状态机（`security35114.Platform`，经 `platform/sip` 的 `Config.RegisterAuthenticator` 接入）。`cryptkey` SM2 信封内的 VKEK 协商、后续信令的 keyed-SM3 `Note` 头完整性。 | 新增（v0.4.0，平台侧 v0.5.0） |
 
 ## 使用（设备端）
 
@@ -53,9 +53,9 @@ err := srv.Start(ctx)
 
 录像段使用 `device.OpenSegment` 读取的参考格式：裸 Annex-B H.264 + 每帧 `.ts.jsonl` sidecar。测试可使用现成的 `device.FrameHub`（有界通道、满则丢弃语义的 `FrameSource` 实现）。
 
-## GB35114 A 级安全（v0.4.0 设备侧 / v0.5.0 平台侧，可选）
+## GB35114 国密安全（A/B/C 三级，可选）
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层。本库只实现 **A级** —— B/C 级额外依赖 SVAC 媒体（GB/T 25724，硬件编解码器），设计上不在范围内。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖：
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) 在 GB/T 28181 之上叠加基于 SM2 数字证书的安全层——**A/B/C 三级全部实现**（B/C 媒体侧为 PS-over-RTP 软件形态：B 级逐 AU SM2 签名，C 级 VKEK 信封 VEK + SM4-OFB 载荷加密，经 INVITE SDP `a=security` 属性按会话协商；全部媒体方向覆盖——直播、回放/下载、双向对讲、语音广播、级联）。SVAC 原生（GB/T 25724 硬件编码器）流仍设计性不在范围。该包位于 `gb35114` build tag 之后，默认构建保持零额外依赖。专题手册（握手线格式、两侧接线、B/C 媒体安全、密钥管理、证书供给）：**[GB35114 国密手册](docs/zh-CN/gb28181-go-gb35114.md)**。
 
 ```go
 // go build -tags gb35114
@@ -108,22 +108,45 @@ sipCfg.RegisterAuthenticator = plat35114 // platform/sip.Config；Digest 路径�
 
 - **SVAC 音频 stream_type 修正为 `0x9B`**（附录 C 表；原实现误为 `0x81`，对照标准原文核查时发现的线格式 bug），PS 复用器新增 AAC 音频（`0x0F`）声明。
 
+## GB/T 28181-2011 设备侧兼容
+
+设备角色可与 2011 世代平台互操作。依据 GB/T 28181-2016 前言的官方技术变化清单，2011 平台会行使的信令是 2016/2022 的严格子集——TCP 媒体、语音广播/对讲、IFrameCmd/DragZoom/看守位、DeviceConfig、配置/预置位查询、多 MESSAGE 传输与订阅族全部是 2016 新增；设备角色对它们"来了才处理、未实现显式拒绝"，从不要求。设备发出侧天然 2011 可消费：INVITE 应答 SDP 带 `y=`、不带 `f=`/`a=setup`（2016 扩展），REGISTER 默认不带 `X-GB-Ver`（既有测试钉板）。
+
+本发布修复了一个真实的 2011 互操作缺口：2011 平台按 §9.4.1 以 **GB2312 声明**发出 MANSCDP 报文（Catalog/DeviceInfo 查询尤甚），而设备侧双形式解析器用裸 `encoding/xml`——Go 的 XML 解码器在无 `CharsetReader` 时直接拒析非 UTF-8 声明的文档，查询会被 WARN + 静默丢弃。现统一经共享编解码的 `manscdp.UTF8Body` 归一（字节转码 + 声明剥离）后解析，GB2312/GBK/GB18030 声明在库内全部路由（设备侧与平台侧）可读。2011 形状（GB2312 声明的子元素查询 → 属性形式应答、无 2016 扩展的应答 SDP）由 `device/gb2011_compat_test.go` 钉板。
+
 ## 文档
 
-专题手册已迁移至 MiBee 文档中心——库手册唯一真源（双语）：
+主题手册**就在本仓库内**，双语：
+[`docs/README.md`](docs/README.md) 是索引（`docs/en-US/` 与
+`docs/zh-CN/` 存放各页——快速开始、架构、协议概念、CLI 手册、
+[无硬件联调全链路教程](docs/zh-CN/gb28181-go-interop-lab.md)、
+[GB35114 国密手册](docs/zh-CN/gb28181-go-gb35114.md)、测试）。
+修订与新页以 PR 落本仓。
+## 互操作 CLI
 
-> **https://www.mlsbs.top/docs/mibeelibs**
+[`cmd/gb28181`](cmd/gb28181) 是单一互操作命令行——一个二进制、三个子
+命令——每个子命令文件同时是对应库半边的可运行集成样例：
 
-手册修改向文档中心提 PR（流程见该仓 GOVERNANCE）。本仓 [`docs/README.md`](docs/README.md) 保留引导页。
-## 示例
-
-[`examples/`](examples/) 下可直接 `go run` 的完整示例：
-
-| 示例 | 角色 | 演示 |
+| 子命令 | 角色 | 演示 |
 |---|---|---|
-| [`device-register`](examples/device-register/main.go) | 设备端（UAC） | SIP 注册、保活、目录应答、经 `device.FrameHub` 喂帧、INVITE 拉流 |
-| [`platform-uas`](examples/platform-uas/main.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
-| [`psmux-rtp`](examples/psmux-rtp/main.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
+| [`device-register`](cmd/gb28181/device_register.go) | 设备端（UAC） | SIP 注册、保活、目录应答、经 `device.FrameHub` 喂帧、INVITE 拉流 |
+| [`platform-uas`](cmd/gb28181/platform_uas.go) | 平台端（UAS） | 摘要鉴权 SIP 服务器、内存版 `DeviceStore` 接缝、告警 `EventBus` 订阅、INVITE/ByeChannel 流程 |
+| [`psmux-rtp`](cmd/gb28181/psmux_rtp.go) | 媒体链路 | H.264 Annex-B → MPEG-PS → RTP 打包发送到 UDP 接收端 |
+
+全部配置走旗标（旧的预编译示例把配置硬编码在源码里，发布出去的二进制
+根本没法用）：
+
+```sh
+gb28181 device-register -platform 192.168.1.10:5060 -password secret -transport tcp
+gb28181 platform-uas -listen :5060 -password secret
+gb28181 psmux-rtp
+```
+
+[每次发布](https://github.com/mickeyzzc/gb28181-go/releases)都以预编译零
+依赖包提供该 CLI（`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` +
+`SHA256SUMS`，七平台）。逐子命令手册（含场景）见本仓 docs
+（[文档](#文档)）；把三个子命令串成"虚拟相机 + 最小平台 + conformance
+自证"的完整玩法，见**[无硬件联调国标全链路教程](docs/zh-CN/gb28181-go-interop-lab.md)**。
 
 ## 开发
 

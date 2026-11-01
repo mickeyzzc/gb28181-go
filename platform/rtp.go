@@ -57,6 +57,18 @@ type Receiver struct {
 	maxJitterPackets int    // default: 32
 	packetsDroppedU  uint64 // count of gap-skipped packets (diagnostics)
 
+	// GB35114 B/C media security (nil = plaintext session). payloadDecryptor
+	// un-XORs each incoming payload (level C); auVerifier
+	// checks the level-B per-AU signature carried in the marker packet's
+	// RTP header extension and drops the AU on failure (fail closed).
+	// Both are armed concurrently with the running packet loop (a
+	// playback fetch arms its receiver from the INVITE answer, after
+	// Start) — hence the atomics.
+	payloadDecryptor atomic.Pointer[RTPCryptor]
+	auVerifier       atomic.Pointer[auVerifierFn]
+	auVerifyFailed   atomic.Uint64
+	onAUVerifyFailed func()
+
 	// Stage 2: PS demux — or ES depacketization when the session's
 	// payloads are bare NAL units (GB/T 28181-2022 ES over RTP, issue
 	// #110). The mode latches on the first classified payload.
@@ -64,6 +76,11 @@ type Receiver struct {
 	es         *ESDemuxer
 	esLatch    atomic.Bool
 	classified atomic.Bool // payload mode decided once per session
+	// expectDecryptor holds emissions until the level-C decryptor arms:
+	// the INVITE offer promised GB35114-C, so pre-arm packets are
+	// ciphertext — buffering them without draining keeps the stream
+	// complete; arming retro-decrypts and releases the run.
+	expectDecryptor atomic.Bool
 	// audioOnlyHint arms bare-audio mode for voice-input channels (#135):
 	// the first payload that is neither PS nor NAL-shaped is treated as
 	// bare G.711 (PT 8) instead of garbage PS.
@@ -191,6 +208,12 @@ func (r *Receiver) Stop() error {
 		_ = r.conn.Close()
 	}
 
+	if p := r.payloadDecryptor.Load(); p != nil {
+		(*p).Zero()
+		r.payloadDecryptor.Store(nil)
+	}
+	r.auVerifier.Store(nil)
+
 	if r.done != nil {
 		close(r.done)
 	}
@@ -226,6 +249,107 @@ func (r *Receiver) Running() bool {
 // (Table E.1 type 136, issue #135): payloads that are neither PS nor
 // NAL-shaped classify as bare G.711 RTP. Call before the first packet.
 func (r *Receiver) SetAudioOnly(v bool) { r.audioOnlyHint.Store(v) }
+
+// RTPExtAUSignature is the RFC 8285 extension ID carrying the GB35114
+// level-B per-AU SM2 signature on the AU's marker packet.
+const RTPExtAUSignature = 1
+
+// errAUSignatureMissing marks a marker AU that carried no level-B signature.
+var errAUSignatureMissing = errors.New("AU signature extension missing")
+
+// RTPCryptor applies the GB35114 level-C per-packet payload protection
+// (SM4-OFB); Zero wipes key material at session end. Structurally identical
+// to device.RTPCryptor and security35114.PacketCryptor satisfies both.
+type RTPCryptor interface {
+	Crypt(payload []byte, ssrc uint32, seq uint16) []byte
+	Zero()
+}
+
+// auVerifierFn is the level-B per-AU signature verifier signature.
+type auVerifierFn func(au []byte, ssrc, timestamp uint32, sig []byte) error
+
+// SetExpectPayloadDecryptor declares that this session's INVITE offered
+// GB35114-C media security: packets arriving before the decryptor arms
+// are buffered without draining (they are ciphertext); the arming call
+// retro-decrypts and releases them. false releases the hold (answer
+// downgrade / teardown).
+func (r *Receiver) SetExpectPayloadDecryptor(expect bool) {
+	r.expectDecryptor.Store(expect)
+}
+
+// SetPayloadDecryptor arms level-C SM4-OFB payload decryption. Ideally
+// called before Start; a late arming (the INVITE answer racing the
+// device's first packets — the device streams the instant it answers) is
+// handled: anything buffered so far is UNDECRYPTED ciphertext, and the
+// one-shot classification latch may already have misread it (encrypted
+// bytes false-positive as ES ~1/3 of the time, latching the whole
+// session into the wrong demuxer). Late arming drops the buffered
+// pre-arm packets and re-opens classification. nil clears the hook
+// without touching session state.
+func (r *Receiver) SetPayloadDecryptor(c RTPCryptor) {
+	r.payloadDecryptor.Store(&c)
+	if c == nil {
+		return
+	}
+	r.jitterBufferMu.Lock()
+	defer r.jitterBufferMu.Unlock()
+	held := r.expectDecryptor.Swap(false)
+	if !held && !r.classified.Load() && len(r.jitterBuffer) == 0 {
+		return // armed before any packet — nothing to salvage
+	}
+	// Late arming (the INVITE answer racing the device's first packets —
+	// the device streams the instant it answers, and the platform's
+	// OpenVEK arming runs SM2/SM4 after the answer transit). The buffered
+	// packets are UNDECRYPTED ciphertext, and the one-shot classification
+	// latch may already have misread them (encrypted bytes false-positive
+	// as ES ~1/3 of the time). Per-packet IVs (SM3(VEK‖SSRC‖seq)) make
+	// the transform position-independent: RETRO-DECRYPT the buffered run
+	// instead of dropping it — nothing is lost, the stream stays complete
+	// from its first packet.
+	for seq, pkt := range r.jitterBuffer {
+		if len(pkt.Payload) > 0 {
+			pkt.Payload = c.Crypt(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
+			r.jitterBuffer[seq] = pkt
+		}
+	}
+	// Classification and the demuxer may have consumed ciphertext —
+	// re-open both; the (now plaintext) buffered run re-classifies on its
+	// next drain. baseSeq/baseSeqSet stay: the sequence stream itself is
+	// intact.
+	if r.esLatch.Load() || r.bareAudio.Load() {
+		logger().Info("gb28181: GB35114 decryptor armed after classification — retro-decrypting buffered packets and re-classifying",
+			"camera_id", r.cameraID, "buffered", len(r.jitterBuffer))
+	}
+	r.classified.Store(false)
+	r.esLatch.Store(false)
+	r.bareAudio.Store(false)
+	r.es = nil
+	r.demuxer = NewPSDemuxer()
+	// Release the held run (retro-decrypted above) — classification and
+	// AU emission proceed from the stream's true first packet.
+	r.emitAccessUnitsLocked()
+}
+
+// SetAUVerifier arms level-B per-AU signature verification (nil disables).
+func (r *Receiver) SetAUVerifier(fn auVerifierFn) {
+	r.auVerifier.Store(&fn)
+}
+
+// SetAUVerifyFailedHook installs the observability callback fired on every
+// access unit dropped by signature verification (metrics/alarm bridging).
+func (r *Receiver) SetAUVerifyFailedHook(fn func()) {
+	r.onAUVerifyFailed = fn
+}
+
+// AUVerifyFailures reports how many access units were dropped by signature
+// verification (level-B diagnostics).
+func (r *Receiver) AUVerifyFailures() uint64 { return r.auVerifyFailed.Load() }
+
+// MediaSecurityArmed reports which GB35114 media-security hooks are active
+// (payload decryption at level C, AU-signature verification at level B/C).
+func (r *Receiver) MediaSecurityArmed() (decrypt, verify bool) {
+	return r.payloadDecryptor.Load() != nil, r.auVerifier.Load() != nil
+}
 
 // AudioOnly reports whether this receiver serves an audio-only session —
 // the keyframe watchdog exempts such sessions (no IDR ever arrives).
@@ -381,6 +505,13 @@ func (r *Receiver) readLoop(ctx context.Context) {
 
 		pkt.Payload = append([]byte(nil), pkt.Payload...)
 
+		// GB35114 level C: un-XOR the payload before reassembly so the PS
+		// demuxer sees plaintext. Per-packet IVs keep the keystream
+		// independent of packet loss.
+		if p := r.payloadDecryptor.Load(); p != nil {
+			pkt.Payload = (*p).Crypt(pkt.Payload, pkt.Header.SSRC, pkt.Header.SequenceNumber)
+		}
+
 		// Feed to jitter buffer for reassembly
 		if err := r.feedJitterBuffer(&pkt); err != nil {
 			logger().Debug("gb28181: jitter buffer error", "camera_id", r.cameraID, "error", err)
@@ -507,6 +638,13 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 	r.jitterBuffer[seq] = pkt
 	r.lastSeq = seq
 
+	// GB35114-C session awaiting its decryptor: hold the run (ciphertext)
+	// until arming retro-decrypts and releases it — draining now would
+	// misclassify and feed garbage.
+	if r.expectDecryptor.Load() && r.payloadDecryptor.Load() == nil {
+		return nil
+	}
+
 	// Marker bit indicates AU boundary - emit complete AU
 	if pkt.Header.Marker {
 		r.emitAccessUnitsLocked()
@@ -526,10 +664,29 @@ func (r *Receiver) feedJitterBuffer(pkt *rtp.Packet) error {
 // continues (the partial AU is dropped, which the PS demuxer tolerates)
 // instead of freezing and growing the buffer without bound.
 func (r *Receiver) emitAccessUnitsLocked() {
-	if len(r.jitterBuffer) == 0 {
-		return
+	for {
+		packets := r.drainContiguousRunLocked()
+		if len(packets) == 0 {
+			return
+		}
+		// Split the run at MARKER boundaries: a contiguous run can span
+		// several complete AUs (held packets released on decryptor arming,
+		// gap-skip re-runs, force flushes) — stitching them into one AU
+		// would hand consumers mis-framed multi-frame emissions.
+		start := 0
+		for i, pkt := range packets {
+			if pkt.Header.Marker || i == len(packets)-1 {
+				r.processRunLocked(packets[start : i+1])
+				start = i + 1
+			}
+		}
 	}
+}
 
+// drainContiguousRunLocked collects the ordered contiguous run of packets
+// from baseSeq (deleting as it goes), skipping a leading sequence gap when
+// baseSeq itself is missing. An empty result means nothing is drainable.
+func (r *Receiver) drainContiguousRunLocked() []*rtp.Packet {
 	// Build the ordered, CONTIGUOUS run of packets by sequence number starting
 	// at baseSeq. The loop runs until the run breaks at a gap — comparing
 	// against len(r.jitterBuffer) as the bound would be wrong: entries are
@@ -554,7 +711,7 @@ func (r *Receiver) emitAccessUnitsLocked() {
 		// that is AHEAD of baseSeq (positive 16-bit distance — wrap-safe).
 		next, ok := r.nextBufferedSeqLocked()
 		if !ok {
-			return
+			return nil
 		}
 		r.packetsDroppedU++
 		logger().Debug("gb28181: RTP packet loss — skipping gap",
@@ -568,12 +725,16 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			r.es.DropPartial()
 		}
 		r.baseSeq = next
-		// Re-run so the buffered packets above the gap are emitted now.
-		r.emitAccessUnitsLocked()
-		return
+		// Drain the buffered packets above the gap.
+		return r.drainContiguousRunLocked()
 	}
+	return packets
+}
 
-	// Advance base sequence to account for emitted packets
+// processRunLocked reassembles one packet run (ending on its AU's marker
+// when complete) and emits its access units.
+func (r *Receiver) processRunLocked(packets []*rtp.Packet) {
+	// Advance base sequence to account for drained packets
 	r.baseSeq += uint16(len(packets))
 
 	// A real AU boundary exists only when the drained run ENDS on the marker
@@ -619,6 +780,30 @@ func (r *Receiver) emitAccessUnitsLocked() {
 			if len(pkt.Payload) == 0 {
 				continue
 			}
+			// GB35114 level B on bare-audio sessions: each packet is its
+			// own access unit, so its signature rides the packet itself.
+			// Fail closed (drop the packet) like the PS path drops AUs.
+			if v := r.auVerifier.Load(); v != nil {
+				sig := pkt.Header.GetExtension(RTPExtAUSignature)
+				if len(sig) == 0 {
+					r.auVerifyFailed.Add(1)
+					if r.onAUVerifyFailed != nil {
+						r.onAUVerifyFailed()
+					}
+					logger().Warn("gb28181: GB35114 AU signature missing — dropping audio packet",
+						"camera_id", r.cameraID)
+					continue
+				}
+				if err := (*v)(pkt.Payload, pkt.Header.SSRC, pkt.Header.Timestamp, sig); err != nil {
+					r.auVerifyFailed.Add(1)
+					if r.onAUVerifyFailed != nil {
+						r.onAUVerifyFailed()
+					}
+					logger().Warn("gb28181: GB35114 AU signature rejected — dropping audio packet",
+						"camera_id", r.cameraID, "error", err)
+					continue
+				}
+			}
 			r.emitBareAudio(pkt)
 		}
 		return
@@ -633,6 +818,30 @@ func (r *Receiver) emitAccessUnitsLocked() {
 		if !endedOnMarker {
 			// Collect until the AU boundary, mirroring the PS burst model.
 			return
+		}
+		// GB35114 level B on ES sessions: the signature covers the stitched
+		// per-packet payloads (the sender's pre-fragmentation AU bytes).
+		if v := r.auVerifier.Load(); v != nil {
+			var esAU []byte
+			for _, pkt := range packets {
+				esAU = append(esAU, pkt.Payload...)
+			}
+			last := packets[len(packets)-1]
+			sig := last.Header.GetExtension(RTPExtAUSignature)
+			err := errAUSignatureMissing
+			if len(sig) > 0 {
+				err = (*v)(esAU, last.Header.SSRC, last.Header.Timestamp, sig)
+			}
+			if err != nil {
+				r.auVerifyFailed.Add(1)
+				if r.onAUVerifyFailed != nil {
+					r.onAUVerifyFailed()
+				}
+				logger().Warn("gb28181: GB35114 AU signature rejected — dropping ES access unit",
+					"camera_id", r.cameraID, "error", err)
+				r.es.DropPartial()
+				return
+			}
 		}
 		nalus := r.es.TakeAU()
 		if len(nalus) == 0 {
@@ -662,6 +871,34 @@ func (r *Receiver) emitAccessUnitsLocked() {
 	lastPkt := packets[len(packets)-1]
 	ptsTicks := int64(lastPkt.Header.Timestamp)
 	r.ptsClock.Store(ptsTicks)
+
+	// GB35114 level B: verify the AU signature carried in the marker
+	// packet's RTP header extension. The signature covers the stitched PS
+	// bytes plus the SSRC/timestamp binding. Fail closed: an invalid
+	// signature, or a marker AU with no signature at all (an attacker could
+	// strip the extension), drops the whole access unit. (ES-over-RTP
+	// sessions depacketize per-packet and are not signature-verified.)
+	if v := r.auVerifier.Load(); v != nil && endedOnMarker {
+		sig := lastPkt.Header.GetExtension(RTPExtAUSignature)
+		if len(sig) == 0 {
+			r.auVerifyFailed.Add(1)
+			if r.onAUVerifyFailed != nil {
+				r.onAUVerifyFailed()
+			}
+			logger().Warn("gb28181: GB35114 AU signature missing — dropping access unit",
+				"camera_id", r.cameraID)
+			return
+		}
+		if err := (*v)(auPayload, lastPkt.Header.SSRC, lastPkt.Header.Timestamp, sig); err != nil {
+			r.auVerifyFailed.Add(1)
+			if r.onAUVerifyFailed != nil {
+				r.onAUVerifyFailed()
+			}
+			logger().Warn("gb28181: GB35114 AU signature rejected — dropping access unit",
+				"camera_id", r.cameraID, "error", err)
+			return
+		}
+	}
 
 	// Feed to Stage 2: PS demuxer
 	nalus, err := r.demuxer.FeedAU(auPayload, ptsTicks, endedOnMarker)

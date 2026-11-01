@@ -117,6 +117,12 @@ type DeviceInfo struct {
 	Firmware     string `yaml:"firmware"`      // Firmware version
 	HardwareID   string `yaml:"hardware_id"`   // Device hardware identifier
 	SerialNumber string `yaml:"serial_number"` // Device serial number
+	// PTZType is the GB/T 28181-2016 §5.4.12 PTZ capability code
+	// (3 = pan/tilt/zoom) emitted as the device channel's <PTZType> in
+	// catalog answers and change NOTIFYs; platforms gate PTZCmd dispatch
+	// on a non-zero value. nil omits the element (byte-identical
+	// historical wire). Mirrors the Rust twin's ptz_type.
+	PTZType *int `yaml:"ptz_type,omitempty"`
 }
 
 // UserAgent is the SIP User-Agent stamped on every message the device

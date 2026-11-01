@@ -1,5 +1,7 @@
 package sip
 
+import "github.com/mickeyzzc/gb28181-go/platform"
+
 // RegisterAuthenticator authenticates REGISTERs that carry a non-Digest
 // Authorization scheme — GB 35114 A-level today. The concrete
 // implementation lives behind the gb35114 build tag (security35114.Platform)
@@ -17,4 +19,37 @@ type RegisterAuthenticator interface {
 	// VerifyNote validates the Note header of an incoming non-REGISTER
 	// request ("" = absent — implementations treat it as pass-through).
 	VerifyNote(deviceID, note, method, from, to, callID, date, body string) error
+}
+
+// DownstreamSigner stamps integrity headers onto platform→device requests
+// (the GB35114 Date + keyed-SM3 Note pair; the standard's §9.4 digest is
+// bidirectional). Implementations return empty strings to leave a request
+// untouched (no security session for the device).
+type DownstreamSigner interface {
+	DecorateDownstream(deviceID, method, from, to, callID, body string) (date, note string)
+}
+
+// MediaSecurityNegotiator negotiates GB35114 B/C media security on INVITE
+// dialogs. MediaSDPOffer feeds the offer's a=security attribute ("" = no
+// media security); ArmMediaSecurity inspects the device's answer SDP for
+// device-sent media (live/playback) and returns the receiver hooks — the
+// RTP payload decryptor (level C) and the per-AU signature verifier
+// (level B). Both nil = plaintext session. NewMediaEncryptor arms
+// platform-sent media (talk downlink): the offer attribute value carrying
+// the sealed VEK, the payload encryptor, and the platform-identity AU
+// signer.
+type MediaSecurityNegotiator interface {
+	MediaSDPOffer() string
+	ArmMediaSecurity(deviceID string, answerSDP []byte) (
+		decrypt platform.RTPCryptor,
+		verifyAU func(au []byte, ssrc, timestamp uint32, sig []byte) error,
+		err error)
+	NewMediaEncryptor(deviceID string) (
+		offerValue string,
+		encrypt platform.RTPCryptor,
+		sign func(au []byte, ssrc, timestamp uint32) ([]byte, error),
+		err error)
+	// VerifyMediaSignature checks a device-signed media AU (talk uplink)
+	// against the trusted device certificate.
+	VerifyMediaSignature(deviceID string, au []byte, ssrc, timestamp uint32, sig []byte) error
 }

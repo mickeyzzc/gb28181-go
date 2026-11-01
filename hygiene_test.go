@@ -14,7 +14,7 @@ import (
 	"github.com/mickeyzzc/gb28181-go/platform/sip"
 )
 
-// libraryDirs are the importable packages of the module (examples/, tmp/,
+// libraryDirs are the importable packages of the module (tmp/,
 // and conformance scratch harnesses are excluded).
 var libraryDirs = []string{"device", "manscdp", "platform", "psmux", "nalutil"}
 

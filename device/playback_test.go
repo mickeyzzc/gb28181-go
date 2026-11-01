@@ -168,6 +168,7 @@ func TestParseSDPTimeRange(t *testing.T) {
 		wantEndMs   int64
 	}{
 		{"explicit", "v=0\ns=Playback\nt=1750000000 1750003600\n", 1750000000000, 1750003600000},
+		{"ntp seconds", "v=0\ns=Playback\nt=3958988800 3958992400\n", 1750000000000, 1750003600000},
 		{"zero zero means all", "v=0\ns=Playback\nt=0 0\n", 0, int64(^uint64(0) >> 1)},
 		{"missing means all", "v=0\ns=Playback\n", 0, int64(^uint64(0) >> 1)},
 		{"malformed means all", "v=0\ns=Playback\nt=abc def\n", 0, int64(^uint64(0) >> 1)},

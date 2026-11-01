@@ -90,6 +90,11 @@ type ChannelItem struct {
 	Port         int     `xml:"Port"`
 	Longitude    float64 `xml:"Longitude"`
 	Latitude     float64 `xml:"Latitude"`
+	// PTZType is the GB/T 28181-2016 §5.4.12 PTZ capability code
+	// (3 = pan/tilt/zoom); platforms gate PTZCmd dispatch on a non-zero
+	// value. nil omits the element — historical deployments stay
+	// byte-identical (same semantics as the Rust twin's Option<u8>).
+	PTZType *int `xml:"PTZType,omitempty"`
 	// PhotoelectricImagingType is the GB/T 28181-2022 光电成像类型 marking:
 	// 1 = visible light, 2 = thermal imaging (dual-spectrum devices mark
 	// their thermal channel; further values reserved by the standard).
@@ -98,9 +103,13 @@ type ChannelItem struct {
 }
 
 // DeviceItem represents basic device information.
+// The name element is DeviceName per the DeviceInfo-response schema
+// (GB/T 28181-2022 A.2.6.5 / 2016 §9.5.3.2 foreword addition) — <Name>
+// belongs to the BasicParam config schema, and real platforms parse
+// DeviceName (a <Name> element reads as no name at all).
 type DeviceItem struct {
 	DeviceID     string `xml:"DeviceID"`
-	Name         string `xml:"Name"`
+	Name         string `xml:"DeviceName"`
 	Manufacturer string `xml:"Manufacturer"`
 	Model        string `xml:"Model"`
 	Firmware     string `xml:"Firmware"`
@@ -127,14 +136,22 @@ type NotifyElem struct {
 // parseQueryDual tries to parse a Query body in both attribute and child-element format.
 // Returns the normalized Query struct and a bool indicating success.
 func parseQueryDual(body string) (Query, bool) {
+	// GB/T 28181 §9.4.1: platforms (2011-era ones especially) declare
+	// GB2312 on their MANSCDP bodies — encoding/xml refuses such
+	// documents without a CharsetReader, so normalize through the
+	// shared codec first (bytes → UTF-8, declaration stripped).
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return Query{}, false
+	}
 	// Try attribute format first (existing struct)
 	var query Query
-	if err := xml.Unmarshal([]byte(body), &query); err == nil && query.CmdType != "" {
+	if err := xml.Unmarshal(data, &query); err == nil && query.CmdType != "" {
 		return query, true
 	}
 	// Try child-element format
 	var queryElem QueryElem
-	if err := xml.Unmarshal([]byte(body), &queryElem); err == nil && queryElem.CmdType != "" {
+	if err := xml.Unmarshal(data, &queryElem); err == nil && queryElem.CmdType != "" {
 		// Normalize to Query struct
 		return Query{
 			CmdType:    queryElem.CmdType,
@@ -154,14 +171,18 @@ func parseQueryDual(body string) (Query, bool) {
 // parseNotifyDual tries to parse a Notify body in both attribute and child-element format.
 // Returns the normalized Notify struct and a bool indicating success.
 func parseNotifyDual(body string) (Notify, bool) {
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return Notify{}, false
+	}
 	// Try attribute format first (existing struct)
 	var notify Notify
-	if err := xml.Unmarshal([]byte(body), &notify); err == nil && notify.CmdType != "" {
+	if err := xml.Unmarshal(data, &notify); err == nil && notify.CmdType != "" {
 		return notify, true
 	}
 	// Try child-element format
 	var notifyElem NotifyElem
-	if err := xml.Unmarshal([]byte(body), &notifyElem); err == nil && notifyElem.CmdType != "" {
+	if err := xml.Unmarshal(data, &notifyElem); err == nil && notifyElem.CmdType != "" {
 		// Normalize to Notify struct
 		return Notify{
 			CmdType:  notifyElem.CmdType,
@@ -306,8 +327,12 @@ type ControlElem struct {
 // may come from either <Speed> or <Scale>. Returns ok=false when the body
 // is not a PlaybackControl command.
 func parsePlaybackControl(body string) (PlaybackControl, bool) {
+	data, err := manscdp.UTF8Body([]byte(body))
+	if err != nil {
+		return PlaybackControl{}, false
+	}
 	var ctl ControlElem
-	if err := xml.Unmarshal([]byte(body), &ctl); err != nil || ctl.CmdType != "PlaybackControl" {
+	if err := xml.Unmarshal(data, &ctl); err != nil || ctl.CmdType != "PlaybackControl" {
 		return PlaybackControl{}, false
 	}
 	pc := PlaybackControl{Value: ctl.Info.ControlValue}
@@ -349,6 +374,11 @@ type DeviceContext struct {
 	// queries (A.2.6.12-16); nil keeps the minimal answers. Installed via
 	// Server.SetInfoQueryProvider.
 	InfoQueries InfoQueryProvider
+	// PTZType, when non-nil, is emitted as the device's own catalog
+	// channel's <PTZType> (2016 §5.4.12); nil keeps the catalog
+	// byte-identical to the historical wire form. Extra channels carry
+	// their own value on ChannelItem directly.
+	PTZType *int
 	// OnBroadcast fires when a voice-broadcast notification (语音广播,
 	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
 	// SourceID → TargetID and follows with a talk INVITE. Preparing the
@@ -383,6 +413,7 @@ func buildChannel(dev DeviceContext) ChannelItem {
 		DeviceID:     dev.ChannelID,
 		Name:         dev.ChannelID,
 		Status:       "ON",
+		PTZType:      dev.PTZType,
 		Manufacturer: dev.Manufacturer,
 		Model:        dev.Model,
 		Owner:        dev.DeviceID,
@@ -430,14 +461,34 @@ func BuildCatalogResponseMessagePaged(sn, deviceID string, items []ChannelItem, 
 }
 
 // BuildDeviceInfoResponseMessage creates a SIP MESSAGE with DeviceInfo response.
+// deviceInfoResponseBody is the flat DeviceInfo response (A.2.6.5): the
+// identity fields are DIRECT children of Response — the nested <Device>
+// form this builder previously emitted reads as an empty device on every
+// standards-conformant platform — and Result is 必选. Element order
+// mirrors the Rust twin's builder byte-for-byte.
+type deviceInfoResponseBody struct {
+	XMLName      xml.Name `xml:"Response"`
+	CmdType      string   `xml:"CmdType,attr"`
+	SN           string   `xml:"SN,attr"`
+	DeviceID     string   `xml:"DeviceID"`
+	Result       string   `xml:"Result"`
+	DeviceName   string   `xml:"DeviceName"`
+	Manufacturer string   `xml:"Manufacturer"`
+	Model        string   `xml:"Model"`
+	Firmware     string   `xml:"Firmware"`
+}
+
 func BuildDeviceInfoResponseMessage(sn, deviceID string, info DeviceItem) SipMessage {
-	resp := Response{
-		CmdType:  "DeviceInfo",
-		SN:       sn,
-		DeviceID: deviceID,
-		Device:   &info,
-	}
-	xmlData, err := xml.Marshal(resp)
+	xmlData, err := xml.Marshal(deviceInfoResponseBody{
+		CmdType:      "DeviceInfo",
+		SN:           sn,
+		DeviceID:     deviceID,
+		Result:       "OK",
+		DeviceName:   info.Name,
+		Manufacturer: info.Manufacturer,
+		Model:        info.Model,
+		Firmware:     info.Firmware,
+	})
 	if err != nil {
 		slog.Error("Failed to marshal DeviceInfo response", "error", err)
 		return SipMessage{}

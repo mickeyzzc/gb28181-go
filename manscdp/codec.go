@@ -46,6 +46,21 @@ func Decode(data []byte) (CmdType, any, error) {
 	return decodeOnce(converted)
 }
 
+// UTF8Body prepares a MANSCDP document for encoding/xml: content that is
+// already valid UTF-8 passes through, GBK/GB18030 bytes are converted, and
+// the <?xml …?> prolog is stripped. The strip matters even for ASCII
+// bodies — GB/T 28181 §9.4.1 mandates encoding="GB2312" declarations, and
+// encoding/xml refuses a non-UTF-8 declared document unless a
+// CharsetReader is installed. Callers that parse with xml.Unmarshal
+// directly (dual-form device-side parsers) must go through here.
+func UTF8Body(data []byte) ([]byte, error) {
+	converted, err := CharsetDecode(data)
+	if err != nil {
+		return nil, err
+	}
+	return stripXMLDecl(converted), nil
+}
+
 // SSRC builds the GB/T 28181-2016 § 9.3.1.3 (Annex C.2.4) 10-digit decimal
 // media stream SSRC: digit 1 = live(0)/playback(1), digits 2-6 = digits 4-8 of
 // the 20-digit platform (server) ID, digits 7-10 = a per-stream sequence.

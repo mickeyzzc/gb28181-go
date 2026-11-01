@@ -298,6 +298,7 @@ func (s *Server) sendPlaybackInvite(deviceID, channelID, netAddr string, sdp []b
 	if err != nil {
 		return fmt.Errorf("gb28181: build playback INVITE: %w", err)
 	}
+	s.decorateOutgoing(deviceID, req)
 	tx, err := srv.Request(req)
 	if err != nil {
 		return fmt.Errorf("gb28181: send playback INVITE: %w", err)
@@ -307,6 +308,9 @@ func (s *Server) sendPlaybackInvite(deviceID, channelID, netAddr string, sdp []b
 		return fmt.Errorf("gb28181: playback INVITE to %s: %w", channelID, err)
 	}
 	if resp != nil {
+		// GB35114 B/C: arm the fetch receiver from the answer before the
+		// ACK — the device starts streaming the recorded media right away.
+		s.armMediaSecurity(deviceID, channelID, resp.Body(), s.sessionMgr.GetPlaybackReceiver(channelID))
 		ack := sip.NewAckRequest("", req, resp, "", nil)
 		if err := srv.Send(ack); err != nil {
 			slog.Warn("gb28181: playback ACK send failed", "channel", channelID, "error", err)

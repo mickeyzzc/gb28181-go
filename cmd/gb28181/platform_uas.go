@@ -1,13 +1,16 @@
-// Platform-side (UAS) minimal example: the GB/T 28181 SIP server devices
-// REGISTER to, with digest auth, keepalive liveness, catalog handling and
-// INVITE-driven live streaming into a FrameHub fan-out. Persistence is a
-// host seam (DeviceStore); this example uses an in-memory stub.
 package main
+
+// platform-uas: the minimal platform-side (UAS) server — the same sample
+// that lived at examples/platform-uas, with the hardcoded configuration
+// promoted to flags.
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,18 +112,42 @@ func (m *memStore) DeleteGB28181Channel(_ context.Context, channelID string) err
 	return nil
 }
 
-func main() {
+func runPlatformUAS(args []string) {
+	fs := flag.NewFlagSet("platform-uas", flag.ExitOnError)
+	listen := fs.String("listen", ":5060", "SIP listen address")
+	serverID := fs.String("server-id", "34020000002000000001", "20-digit platform (server) ID")
+	realm := fs.String("realm", "3402000000", "digest realm (usually the domain)")
+	password := fs.String("password", "", "digest-auth secret devices must present (required)")
+	mediaPorts := fs.String("media-ports", "30000-30050", "RTP media port range lo-hi")
+	keepalive := fs.Uint("keepalive-window", 60, "device liveness window, seconds")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		log.Fatal("platform-uas: -password is required (the digest secret devices will use)")
+	}
+	parts := strings.SplitN(*mediaPorts, "-", 2)
+	lo, err := strconv.Atoi(parts[0])
+	if err != nil {
+		log.Fatalf("platform-uas: -media-ports must be lo-hi, got %q: %v", *mediaPorts, err)
+	}
+	hi := lo
+	if len(parts) == 2 {
+		if hi, err = strconv.Atoi(parts[1]); err != nil || hi < lo {
+			log.Fatalf("platform-uas: -media-ports hi must be numeric ≥ lo, got %q: %v", *mediaPorts, err)
+		}
+	}
+
 	cfg := gbsip.Config{
 		Enabled:        true,
-		SIPListen:      ":5060",
-		ServerID:       "34020000002000000001",
-		Realm:          "3402000000",
-		Password:       "your-platform-password", // digest-auth secret — set your own
-		PortRange:      "30000-30050",
+		SIPListen:      *listen,
+		ServerID:       *serverID,
+		Realm:          *realm,
+		Password:       *password,
+		PortRange:      fmt.Sprintf("%d-%d", lo, hi),
 		MediaTransport: "udp",
 	}
 
-	dm := platform.NewDeviceManager(60 * time.Second) // keepalive window
+	dm := platform.NewDeviceManager(time.Duration(*keepalive) * time.Second) // keepalive window
 	bus := gbsip.NewEventBus(64)
 
 	// Subscribe to device alarms (published on TopicGB28181Alarm).
@@ -134,7 +161,7 @@ func main() {
 
 	// RTP port pool + session manager drive INVITE media sessions; the
 	// server wires BYE/first-RTP hooks itself inside NewServer.
-	ports := platform.NewPortManager(30000, 30050)
+	ports := platform.NewPortManager(uint16(lo), uint16(hi))
 	sessions := platform.NewSessionManager(ports, cfg.ServerID)
 
 	srv := gbsip.NewServer(cfg, dm, sessions, newMemStore())

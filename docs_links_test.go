@@ -3,6 +3,7 @@ package hygiene_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -113,22 +114,92 @@ func relativeLinkTargets(text string) []string {
 	return out
 }
 
-// TestDocsIsSingleRedirectPage pins the post-migration contract
-// (mibee-docs#6): docs/ holds exactly one redirect page pointing at the
-// documentation hub, so manuals cannot drift back into this repository.
-func TestDocsIsSingleRedirectPage(t *testing.T) {
+// TestDocsAreInRepo pins the self-contained-docs contract (2026-10-24
+// policy): docs/ holds the bilingual manual set plus its index, and every
+// URL in docs/ must point at an allowlisted host — the project's own
+// hosting and the standards bodies it cites. Any other host (an external
+// docs-site pointer) fails the build, whatever domain it uses.
+func TestDocsAreInRepo(t *testing.T) {
 	entries, err := os.ReadDir("docs")
 	if err != nil {
 		t.Fatalf("read docs/: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "README.md" {
-		t.Fatalf("docs/ must contain only the redirect README.md, found %d entries", len(entries))
+	dirs := map[string]bool{}
+	for _, e := range entries {
+		dirs[e.Name()] = e.IsDir()
 	}
-	raw, err := os.ReadFile(filepath.Join("docs", "README.md"))
-	if err != nil {
-		t.Fatalf("read docs/README.md: %v", err)
+	if !dirs["en-US"] || !dirs["zh-CN"] {
+		t.Fatalf("docs/ must hold en-US/ and zh-CN/ manual dirs, found %v", entries)
 	}
-	if !strings.Contains(string(raw), "https://www.mlsbs.top/docs/mibeelibs") {
-		t.Fatal("docs/README.md must link the documentation hub")
+	for _, lang := range []string{"en-US", "zh-CN"} {
+		pages, err := os.ReadDir(filepath.Join("docs", lang))
+		if err != nil || len(pages) == 0 {
+			t.Fatalf("docs/%s must exist and hold manual pages", lang)
+		}
 	}
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			p := filepath.Join(dir, e.Name())
+			if e.IsDir() {
+				if err := walk(p); err != nil {
+					return err
+				}
+				continue
+			}
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			for _, host := range docsLinkHosts(string(raw)) {
+				if !docsHostAllowed(host) {
+					t.Fatalf("%s links to non-allowlisted host %q — docs must be self-contained", p, host)
+				}
+			}
+		}
+		return nil
+	}
+	if err := walk("docs"); err != nil {
+		t.Fatalf("walk docs/: %v", err)
+	}
+}
+
+// docsLinkHostRe captures the host of every http(s) URL.
+var docsLinkHostRe = regexp.MustCompile(`https?://([a-zA-Z0-9.-]+)`)
+
+func docsLinkHosts(text string) []string {
+	var out []string
+	for _, m := range docsLinkHostRe.FindAllStringSubmatch(text, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// docsAllowedHosts: the only real hosts documentation may point at.
+var docsAllowedHosts = map[string]bool{
+	"github.com":          true,
+	"onvif.org":           true,
+	"www.onvif.org":       true,
+	"w3.org":              true,
+	"www.w3.org":          true,
+	"pkg.go.dev":          true,
+	"openstd.samr.gov.cn": true, // the GB standards body — official record of GB 35114-2017
+}
+
+// docsHostAllowed also admits the example endpoint placeholders that
+// appear in CLI usage snippets (LAN IPs, literal "host").
+func docsHostAllowed(host string) bool {
+	h := strings.ToLower(host)
+	if docsAllowedHosts[h] {
+		return true
+	}
+	switch h {
+	case "host", "localhost":
+		return true
+	}
+	return strings.HasPrefix(h, "192.168.")
 }

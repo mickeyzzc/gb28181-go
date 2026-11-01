@@ -177,6 +177,19 @@ func TestLoopback_RegisterCatalogKeepalive(t *testing.T) {
 	ch := lb.channelOf(t)
 	require.Equal(t, lbChannelID, ch.ID)
 
+	// The device's DeviceInfo answer must reach the platform record:
+	// A.2.6.5 names the element DeviceName — an element mismatch between
+	// the two roles would surface here as an empty name.
+	require.Eventually(t, func() bool {
+		d, ok := lb.devices.Device(lbDeviceID)
+		if !ok {
+			return false
+		}
+		d.Mu.Lock()
+		defer d.Mu.Unlock()
+		return d.Name == "Conformance Cam"
+	}, 5*time.Second, 50*time.Millisecond, "device name must propagate via the DeviceInfo answer")
+
 	// The heartbeat interval is 2s with 3-strike offline: surviving 8s means
 	// at least two keepalives landed.
 	time.Sleep(8 * time.Second)

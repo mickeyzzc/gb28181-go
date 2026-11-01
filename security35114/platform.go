@@ -21,9 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/emmansun/gmsm/smx509"
+	"github.com/mickeyzzc/gb28181-go/platform"
 )
 
 // Platform-side failure modes, mapped by SIP servers onto 4xx responses.
@@ -73,6 +76,11 @@ type PlatformConfig struct {
 	Rand io.Reader
 	// VKEKLen is the negotiated key length in bytes (default 16).
 	VKEKLen int
+	// Level selects the GB 35114 security level (default A). Level B/C
+	// additionally arm per-AU signature verification and, at C, media
+	// decryption — both consulted by the media layers through NewMediaDecryptor
+	// and VerifyAUSignature.
+	Level Level
 }
 
 // platformSession is the per-device handshake state.
@@ -81,8 +89,17 @@ type platformSession struct {
 	random1          string
 	announcedCert    *smx509.Certificate // from Capability cnonce, if any
 	vkek             []byte              // active once a handshake completed
+	vkekVer          int                 // handshake generation of vkek (0 = none yet)
+	vkekPrev         []vkekEntry         // superseded keys, newest first (capped)
 	lastAuth         string              // completed Authorization (retransmission cache)
 	lastSecurityInfo string
+}
+
+// vkekEntry is one superseded VKEK kept briefly so envelopes sealed under a
+// key that re-keyed mid-INVITE still open.
+type vkekEntry struct {
+	ver int
+	key []byte
 }
 
 // Platform implements the platform (UAS) side of GB35114 A-level. Its
@@ -123,7 +140,189 @@ func NewPlatform(cfg PlatformConfig) (*Platform, error) {
 	if cfg.Rand == nil {
 		cfg.Rand = rand.Reader
 	}
+	level, err := ParseLevel(string(cfg.Level))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Level = level
 	return &Platform{cfg: cfg, sessions: map[string]*platformSession{}}, nil
+}
+
+// Level reports the configured security level.
+func (p *Platform) Level() Level { return p.cfg.Level }
+
+// DecorateDownstream stamps the Date and keyed-SM3 Note headers onto a
+// platform→device request (the standard makes the §9.4 digest bidirectional;
+// this is the platform-side mirror of the device's OutgoingSigner). Requests
+// for a device without a completed handshake, and REGISTERs, pass through
+// untouched.
+func (p *Platform) DecorateDownstream(deviceID, method, from, to, callID, body string) (date string, note string) {
+	vkek := p.VKEK(deviceID)
+	if vkek == nil || method == "REGISTER" {
+		return "", ""
+	}
+	date = FormatDate(time.Now())
+	return date, BuildNoteHeader(method, from, to, callID, date, vkek, body, p.cfg.VKEKEncoding)
+}
+
+// MediaSDPOffer returns the "a=security:" SDP value for INVITE offers at the
+// configured level, or "" at level A (no media security negotiated).
+func (p *Platform) MediaSDPOffer() string {
+	if !p.cfg.Level.AtLeast(LevelB) {
+		return ""
+	}
+	return SDPSecurityOffer(p.cfg.Level)
+}
+
+// NewMediaDecryptor opens the VEK envelope from a level-C SDP answer with
+// the device's VKEK and returns the RTP-payload decryptor. vkekVer selects
+// the handshake generation the envelope was sealed under (0 = current) — a
+// device that re-registered while its INVITE was in flight sealed under the
+// previous key.
+func (p *Platform) NewMediaDecryptor(deviceID, envelope string, vkekVer int) (*PacketCryptor, error) {
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	var vkek []byte
+	if s != nil {
+		vkek = vkekForVersionLocked(s, vkekVer)
+	}
+	p.mu.Unlock()
+	if vkek == nil {
+		return nil, fmt.Errorf("%w: %s (vkekver=%d)", ErrNoSession, deviceID, vkekVer)
+	}
+	vek, err := OpenVEK(vkek, envelope)
+	if err != nil {
+		return nil, fmt.Errorf("gb35114: opening VEK envelope for %s: %w", deviceID, err)
+	}
+	return NewPacketCryptor(vek)
+}
+
+// vkekForVersionLocked resolves the VKEK of one handshake generation:
+// 0/absent = the active key; otherwise the matching historical entry, or
+// nil when that generation has aged out of the ring.
+func vkekForVersionLocked(s *platformSession, ver int) []byte {
+	if s == nil || s.vkek == nil {
+		return nil
+	}
+	if ver <= 0 || ver == s.vkekVer {
+		return s.vkek
+	}
+	for _, e := range s.vkekPrev {
+		if e.ver == ver {
+			return e.key
+		}
+	}
+	return nil
+}
+
+// VerifyMediaSignature is the MediaSecurityNegotiator-seam name for
+// VerifyAUSignature (talk-uplink media signed by the device).
+func (p *Platform) VerifyMediaSignature(deviceID string, au []byte, ssrc, timestamp uint32, sigDER []byte) error {
+	return p.VerifyAUSignature(deviceID, au, ssrc, timestamp, sigDER)
+}
+
+// VerifyAUSignature checks a level-B per-AU signature against the device's
+// trusted certificate (pre-provisioned, or announced via the Capability
+// cnonce at registration).
+func (p *Platform) VerifyAUSignature(deviceID string, au []byte, ssrc, timestamp uint32, sigDER []byte) error {
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	p.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+	}
+	cert := p.resolveCert(deviceID, s)
+	if cert == nil {
+		return fmt.Errorf("%w: %s", ErrDeviceCert, deviceID)
+	}
+	return VerifyAU(cert, au, ssrc, timestamp, sigDER)
+}
+
+// NewMediaEncryptor prepares platform-sent media (talk downlink) at the
+// configured level: the "a=security:" offer value carrying the sealed VEK
+// (level C), the payload encryptor, and the per-AU signer bound to the
+// platform identity. Level A yields empty values; C before the device's
+// handshake completed is an error (fail closed rather than plaintext).
+func (p *Platform) NewMediaEncryptor(deviceID string) (offerValue string, encrypt platform.RTPCryptor, sign func(au []byte, ssrc, timestamp uint32) ([]byte, error), err error) {
+	if !p.cfg.Level.AtLeast(LevelB) {
+		return "", nil, nil, nil
+	}
+	sign = func(au []byte, ssrc, timestamp uint32) ([]byte, error) {
+		return SignAU(p.cfg.Identity.PrivateKey, au, ssrc, timestamp)
+	}
+	if !p.cfg.Level.AtLeast(LevelC) {
+		return SDPSecurityOffer(LevelB), nil, sign, nil
+	}
+	p.mu.Lock()
+	s := p.sessions[deviceID]
+	var vkek []byte
+	var ver int
+	if s != nil {
+		vkek, ver = s.vkek, s.vkekVer
+	}
+	p.mu.Unlock()
+	if vkek == nil {
+		return "", nil, nil, fmt.Errorf("%w: %s", ErrNoSession, deviceID)
+	}
+	vek, err := GenerateVEK(p.cfg.Rand)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	envelope, err := SealVEK(vkek, vek)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	encrypt, err = NewPacketCryptor(vek)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return SDPSecurityAnswer(LevelC, envelope, ver), encrypt, sign, nil
+}
+
+// ArmMediaSecurity implements the platform/sip MediaSecurityNegotiator
+// seam: it inspects a device's INVITE answer SDP and returns the receiver
+// hooks for the negotiated level — the AU-signature verifier at B, plus the
+// payload decryptor at C. Nil hooks mean a plaintext session (no
+// a=security attribute, or level A).
+func (p *Platform) ArmMediaSecurity(deviceID string, answerSDP []byte) (
+	decrypt platform.RTPCryptor,
+	verifyAU func(au []byte, ssrc, timestamp uint32, sig []byte) error,
+	err error,
+) {
+	value := sdpsAttributeValue(string(answerSDP))
+	if value == "" {
+		return nil, nil, nil
+	}
+	sec, err := ParseSDPSecurity(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !sec.Level.AtLeast(LevelB) {
+		return nil, nil, nil
+	}
+	verifyAU = func(au []byte, ssrc, timestamp uint32, sig []byte) error {
+		return p.VerifyAUSignature(deviceID, au, ssrc, timestamp, sig)
+	}
+	if !sec.Level.AtLeast(LevelC) || sec.VEKEnvelope == "" {
+		return nil, verifyAU, nil
+	}
+	decrypt, err = p.NewMediaDecryptor(deviceID, sec.VEKEnvelope, sec.VKEKVer)
+	if err != nil {
+		return nil, nil, err
+	}
+	return decrypt, verifyAU, nil
+}
+
+// sdpsAttributeValue extracts the first a=security value from an SDP body.
+func sdpsAttributeValue(sdp string) string {
+	for _, line := range strings.Split(sdp, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "a=security:"); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // Challenge records the Capability announcement (parsing an optional cnonce
@@ -229,10 +428,22 @@ func (p *Platform) VerifyRegister(deviceID, authorization string) (string, error
 		}
 		si.Sign2 = sign2
 	}
-	securityInfo := BuildSecurityInfo(si)
 
 	p.mu.Lock()
+	if s.vkek != nil {
+		s.vkekPrev = append([]vkekEntry{{ver: s.vkekVer, key: s.vkek}}, s.vkekPrev...)
+		if len(s.vkekPrev) > 2 {
+			s.vkekPrev = s.vkekPrev[:2]
+		}
+	}
+	s.vkekVer++
 	s.vkek = vkek
+	// The platform-assigned generation is authoritative: stamp it into
+	// the SecurityInfo so the device echoes THIS number as its vkekver
+	// (a device-local counter restarts at 1 every process and collides
+	// with historical ring entries — issue #157).
+	si.VKEKVer = s.vkekVer
+	securityInfo := BuildSecurityInfo(si)
 	s.lastAuth, s.lastSecurityInfo = authorization, securityInfo
 	p.mu.Unlock()
 	return securityInfo, nil

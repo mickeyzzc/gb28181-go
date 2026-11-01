@@ -24,6 +24,156 @@ are released out of band.
   `omitempty` keeps emitters that never set it byte-identical to pre-2022
   wire formats.
 
+## [v0.15.0] — 2026-10-29
+
+The GB 35114 B/C package: the A-level security implementation extends to
+the standard's full software-form coverage (levels B and C across every
+media direction), hardened by the re-registration and retransmission
+fixes the new conformance loopbacks surfaced — plus GB/T 28181-2011
+device-side compatibility as a pinned, tested claim.
+
+### Fixed
+
+- `fix(security35114)` **level-C media failed closed after device
+  re-registration against a long-lived platform** (#157): the INVITE
+  answer's `vkekver` label was the DEVICE's local handshake count — which
+  restarts at 1 on every process restart — while the platform's key ring
+  is per-identity and keeps counting up. From the second re-registration
+  the label collided with a historical ring entry, the platform opened
+  the VEK envelope with a stale VKEK, and (the envelope having no
+  integrity check) silently armed a wrong-key decryptor: every AU then
+  died to signature verification, zero video, no self-healing. Two-layer
+  fix, both suggested in the issue: (1) the platform now stamps its
+  authoritative generation into the SecurityInfo (`vkekver=` parameter)
+  and the device echoes THAT number — labels index the ring exactly
+  (device falls back to its local count for platforms that send none);
+  (2) the VEK envelope gains an SM3 integrity tag (plaintext is now
+  VEK‖SM3(VEK)[:16], two SM4 blocks) — a wrong-generation VKEK fails
+  OpenVEK loudly at arming time instead of arming garbage. The issue's
+  deterministic reproducer (four device generations against one platform,
+  real-size frames) lands in `conformance/` as the regression pin:
+  generations 1–4 all clean; level B unaffected throughout.
+
+### Added
+
+- `feat(security35114)` **GB 35114 levels B and C** (#152): the A-only
+  implementation extends to the standard's full software-form coverage.
+  Level B adds per-access-unit SM2 signatures (the signature rides the
+  AU's marker packet as an RFC 8285 two-byte-header RTP extension) and
+  makes the §9.4 digest bidirectional. Level C adds media encryption:
+  per-session 128-bit VEK sealed SM4-ECB under the negotiated VKEK,
+  distributed via the INVITE SDP `a=security` attribute, RTP payloads
+  encrypted SM4-OFB under per-packet IVs `SM3(VEK‖SSRC‖seq)[:16]`
+  (packet loss never desyncs the keystream). Seams are tag-free
+  (`device.MediaSecurityResponder`, `platform/sip.MediaSecurityNegotiator`),
+  so default builds stay crypto-free; a security offer the device cannot
+  honor answers 488 (fail closed).
+- `feat(security35114)` **B/C completion — every media direction, VKEK
+  versioning, hardening** (#155, closes #153): playback/download fetch,
+  talk in both directions, voice broadcast, and cascade
+  (`Upstream.RegisterAuthenticator` with keyed Date+Note verification);
+  ES-over-RTP stitched-burst and bare-audio per-packet signature
+  verification; VKEK version ring (`vkekver`) so mid-INVITE re-keys still
+  open; SM4 key schedule expanded once per session and key material
+  zeroized at teardown. Also fixes two latent bugs found by the new
+  loopbacks (seam interface signatures must match exactly or the tag-free
+  assertions silently degrade to plaintext; playback SDP `t=` treated
+  NTP seconds as unix — ~70-year window shift), three data races
+  (PacketCryptor Zero-vs-Crypt, Receiver hook arming vs packet loop,
+  SetRecordingIndex), and the live path subscribing to the AUHub only
+  after the INVITE 200 OK — hosts pushing immediately lost the first
+  burst on slow machines.
+- `feat(device)` **PTZType catalog capability emission** (2016 §5.4.12):
+  `device.DeviceInfo.PTZType` (nil = omit, byte-identical historical
+  wire) threads to the device channel's `<PTZType>` in catalog answers —
+  platforms gate PTZCmd dispatch on a non-zero value. Parity with the
+  Rust twin's `ptz_type`.
+
+- `docs` **GB35114 manual (levels A/B/C)** (`docs/{zh-CN,en-US}/gb28181-go-gb35114.md`):
+  the SM-crypto story as a standalone page — handshake wire format,
+  device/platform wiring, the three interop knobs (`RandomEncoding`,
+  `Sign2Order`, `VKEKEncoding`), certificate provisioning, operational
+  properties of the platform state machine, and a procurement-oriented
+  selection cheat sheet. Linked from both READMEs' GB35114 sections.
+- `docs` **No-hardware interop lab** (`docs/{zh-CN,en-US}/gb28181-go-interop-lab.md`):
+  the full-chain tutorial the release tools were missing — a virtual
+  camera against a minimal platform in two terminals, the conformance
+  loopback suite as the developer self-attestation step, `psmux-rtp`
+  as the media smoke test, variant and troubleshooting tables.
+- `feat(device)` **GB/T 28181-2011 device-side compatibility, pinned**:
+  the device role's 2011 story is now a claim with teeth —
+  `device/gb2011_compat_test.go` pins the shapes a 2011-era platform
+  exercises (GB2312-declared child-element queries → attribute-form
+  answers, extension-free answer SDP: `y=` present, `f=`/`a=setup`
+  absent). Source for the 2011/2016 delta is the GB/T 28181-2016
+  foreword's official change list.
+
+### Fixed
+
+- `fix(device)` **DeviceInfo response was wire-broken three ways** —
+  caught by smoke-testing the new interop lab against the library's own
+  platform: the response nested the identity fields under a `<Device>`
+  wrapper that exists in no standard version (A.2.6.5 makes them direct
+  children of Response), named the device `<Name>` (the BasicParam
+  element — A.2.6.5 says `DeviceName`), and omitted the required
+  `<Result>` element. Every standards-conformant platform read an empty
+  device name; the Rust twin's hand-built body was already flat +
+  `DeviceName` + `Result` and is now byte-matched. The unit test became
+  a cross-role contract (builder output decoded through the shared
+  codec, exactly the platform's parse path) and the conformance loopback
+  asserts the name reaches the platform's device record.
+- `fix(cli)` **device-register branded the wire again** — the unified
+  CLI hardcoded `Manufacturer: "MiBee Studio"` / `Model: "MiBee Eye"`,
+  regressing the v0.3.0 wire-neutrality hardening through both the
+  DeviceInfo and catalog answers. Both are now `-manufacturer` /
+  `-model` flags defaulting to `Unknown` (same neutral default the
+  cascade catalog uses).
+- `fix(device)` **GB2312-declared MANSCDP bodies were dropped by the
+  device-side dual-form parsers** — a real 2011-interop gap surfaced by
+  the new pins: Go's `encoding/xml` refuses a non-UTF-8 XML declaration
+  without a `CharsetReader`, so a GB2312-declared Catalog/DeviceInfo
+  query (exactly what a 2011 platform sends per §9.4.1) drew a WARN and
+  silence. `parseQueryDual` / `parseNotifyDual` / `parsePlaybackControl`
+  now normalize through the shared codec's new exported
+  `manscdp.UTF8Body` (byte transcoding + declaration strip); the
+  platform side already parsed exclusively through the codec, so both
+  roles now read GB2312/GBK/GB18030 declarations on every route.
+
+## [v0.14.0] — 2026-10-24
+
+The unified-CLI package: the release tools become one flag-driven
+binary (`cmd/gb28181`), plus the platform-side audio follow-ons and
+transport/watchdog fixes that accumulated since v0.13.0.
+
+- **BREAKING-packaging**: the release tools are now **one binary** —
+  `cmd/gb28181` with the subcommands `device-register` / `platform-uas`
+  / `psmux-rtp`. The three prebuilt `examples/` binaries hard-coded
+  their configuration in source, so the shipped binaries could not be
+  pointed at anything without a recompile; every subcommand is
+  flag-driven now (`-platform`, `-device-id`, `-password`,
+  `-transport`, …). Release bundles change from
+  `gb28181-go-tools_<os>_<arch>` (three binaries inside) to a single
+  `gb28181-cli_<os>_<arch>` archive per platform. `examples/` is gone —
+  the subcommand files are the runnable integration samples.
+- `feat(platform)` **emission watchdog + session stall supervisor +
+  classification observability** (#144): `audio_frames_emitted` counts
+  both demux paths, per-session `Classification()` and
+  `SinceLastEmission()` answer "why is nothing produced", and
+  `SessionManager.SetStallWatchdog` recycles wedged sessions (BYE
+  first, teardown, optional immediate re-INVITE hook). Closes the
+  "six hours of misclassification went unnoticed" class from the
+  2026-10-23 pickup incident.
+- `fix(platform)` **bare G.711 classification wins over the ES
+  heuristic** (#143): on audio-only sessions the first-packet
+  classifier now tries the bare-G.711 hint before the H.264 ES
+  heuristic — a quiet A-law start (0x55 bytes reading as NAL-21) no
+  longer feeds the whole session into the ES demuxer with zero output.
+- `fix(platform)` **platform-initiated requests ride the device's
+  REGISTER transport** (#145): a TCP-registered device now receives
+  INVITE/BYE/MESSAGE/SUBSCRIBE over its pooled TCP connection
+  (`;transport=tcp` recipients; observed fix for Hikvision TCP-mode
+  INVITEs dying unanswered, MiBeeNvr #1058) — talk/playback/subscribe
+  recipients previously carried no transport param at all.
 - `feat(platform)`: voice-intercom uplink receive leg (#141) — the § 9.4
   sendrecv offer advertises the talk socket and upstream-capable devices
   stream return PCMA to it; a per-session read loop now drains the socket

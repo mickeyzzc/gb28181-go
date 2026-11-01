@@ -5,9 +5,9 @@
 [![CI](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml/badge.svg)](https://github.com/mickeyzzc/gb28181-go/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Language: Go](https://img.shields.io/badge/language-Go-00ADD8.svg)
-![Tests](https://img.shields.io/badge/tests-300%2B%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-700%2B%20passing-brightgreen.svg)
 
-GB/T 28181-2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard.
+GB/T 28181-2011/2016/2022 libraries for Go — device (UAC) and platform (UAS) roles for the Chinese national video-surveillance standard. The device role interoperates with 2011-era platforms (see [GB/T 28181-2011 device-side compatibility](#gbt-28181-2011-device-side-compatibility)).
 
 Hand-written SIP (no SIP framework on the device side; the platform side builds on [ghettovoice/gosip](https://github.com/ghettovoice/gosip)), MANSCDP XML codec, RTP/PS media, and session orchestration. Extracted verbatim from Mi-Bee Studio production code, hardened against real GB28181 platforms (digest qop=auth, unique Via branches, local-IP detection, MANSCDP attribute form, SIP-over-TCP, TCP media).
 
@@ -23,7 +23,7 @@ Hand-written SIP (no SIP framework on the device side; the platform side builds 
 | `nalutil/` | NALU utilities (IDR detection, parameter-set extraction/comparison) — shared by platform receive and the future device side | MiBeeNvr `internal/model/nalutil` |
 | `conformance/` | device↔platform loopback conformance suite — a real `device.Server` against a real platform SIP server on localhost: REGISTER+digest → catalog → keepalive liveness → INVITE live → byte-exact RTP/PS round-trip → BYE; plus the SIPS (TLS signaling) variant. Both roles must agree on every protocol reading, on every CI run. | new (issue #13) |
 | `platform/cascade/` | Cascade client — this platform registers as a LOWER platform to an upper platform: aggregated catalog upload with stable first-seen channel IDs, INVITE forwarding (FrameHub subscribe → psmux → RTP), playback from recorded segments, BYE/SUBSCRIBE/MESSAGE/INFO/OPTIONS handling, protocol-level loopback tests. Local cameras via `CameraSource`, persistence via `Store`, segment reading via `SegmentParser` — all host-injected. | MiBeeNvr `internal/gb28181/cascade` |
-| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 **A-level** security for **both sides**: device-side SM2-certificate mutual authentication over the REGISTER flow (`device.Config.RegisterAuthenticator`) and platform-side challenge/verify/Note state machine (`security35114.Platform`, wired through `platform/sip`'s `Config.RegisterAuthenticator`). VKEK negotiation inside the `cryptkey` SM2 envelope, keyed-SM3 `Note`-header integrity for subsequent signaling. | new (v0.4.0, platform side v0.5.0) |
+| `security35114/` | **opt-in, build-tagged (`-tags gb35114`)** — GB 35114-2017 security **levels A/B/C** for **both sides**: device-side SM2-certificate mutual authentication over the REGISTER flow (`device.Config.RegisterAuthenticator`) and platform-side challenge/verify/Note state machine (`security35114.Platform`, wired through `platform/sip`'s `Config.RegisterAuthenticator`). VKEK negotiation inside the `cryptkey` SM2 envelope, keyed-SM3 `Note`-header integrity for subsequent signaling. | new (v0.4.0, platform side v0.5.0) |
 
 ## Usage (device)
 
@@ -52,9 +52,9 @@ Host seams (interfaces, host-injected):
 
 Segment files use the reference format read by `device.OpenSegment`: bare Annex-B H.264 + per-frame `.ts.jsonl` sidecar. A ready-made `device.FrameHub` implements `FrameSource` with bounded-channel, drop-on-full semantics for tests.
 
-## GB35114 A-level security (v0.4.0 device / v0.5.0 platform, opt-in)
+## GB35114 security, levels A/B/C (opt-in)
 
-[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181. Only **A-level** is implemented — levels B/C additionally require SVAC media (GB/T 25724, a hardware codec), which is out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light:
+[GB 35114-2017](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B7F5589329EF98B32F0EB8ACEC341C81) layers SM2-certificate security on top of GB/T 28181 — **levels A/B/C are all implemented** (the B/C media side in the PS-over-RTP software form: per-AU SM2 signatures at B, SM4-OFB payload encryption under a VKEK-sealed VEK at C, negotiated per session over the INVITE SDP `a=security` attribute; every media direction covered — live, playback/download, talk both ways, voice broadcast, cascade). SVAC-native (GB/T 25724 hardware-codec) streams remain out of scope by design. The package lives behind the `gb35114` build tag so default builds stay dependency-light. Deep-dive manual (handshake wire format, wiring for both roles, levels B/C media security, key management, certificate provisioning): **[the GB35114 manual](docs/en-US/gb28181-go-gb35114.md)**.
 
 ```go
 // go build -tags gb35114
@@ -107,24 +107,49 @@ The 2022 image-snapshot command rides the device-config channel (issue #107: a `
 
 - **SVAC-audio stream_type corrected to `0x9B`** (Annex C table; was `0x81`, a wire bug found by diffing the implementation against the standard text) and AAC audio (`0x0F`) is now settable on the PS muxer.
 
+## GB/T 28181-2011 device-side compatibility
+
+The device role interoperates with 2011-era platforms. Per the GB/T 28181-2016 foreword's official change list, everything a 2011 platform exercises is a strict subset of what this device answers — TCP media, voice broadcast/intercom, IFrameCmd/DragZoom/HomePosition, DeviceConfig, config/preset queries, multi-MESSAGE transport and the subscription families are all 2016 additions; the device handles them when they arrive (explicit rejects where unhandled) and never requires them. What the device emits is 2011-consumable as-is: the INVITE answer SDP carries `y=` and no `f=`/`a=setup` (2016 extensions), and REGISTER carries no `X-GB-Ver` by default (pinned by an existing test).
+
+This release fixes a real 2011 interop gap found while pinning those shapes: 2011 platforms declare their MANSCDP bodies **GB2312** (§9.4.1 — Catalog/DeviceInfo queries especially), and the device-side dual-form parsers fed them to raw `encoding/xml`, which refuses a non-UTF-8 declaration without a `CharsetReader` — the query drew a WARN and was silently dropped. All parsing routes now normalize through the shared codec's `manscdp.UTF8Body` (byte transcoding + declaration strip), so GB2312/GBK/GB18030 declarations read on every route of both roles. The 2011 shapes (GB2312-declared child-element queries → attribute-form answers, extension-free answer SDP) are pinned by `device/gb2011_compat_test.go`.
+
 ## Documentation
 
-Topic guides now live in the MiBee documentation hub — the single
-source of truth for library manuals, bilingual:
+Topic guides live **in this repository**, bilingual:
+[`docs/README.md`](docs/README.md) is the index (`docs/en-US/` and
+`docs/zh-CN/` hold the pages — quickstart, architecture, protocol
+concepts, CLI manuals, the [no-hardware full-chain lab](docs/en-US/gb28181-go-interop-lab.md),
+the [GB35114 SM-crypto manual](docs/en-US/gb28181-go-gb35114.md), testing).
+Fixes and new pages land
+here by PR.
+## Interop CLI
 
-> **https://www.mlsbs.top/docs/mibeelibs**
+[`cmd/gb28181`](cmd/gb28181) is a single interop CLI — one binary,
+three subcommands — and each subcommand file doubles as the runnable
+integration sample for its half of the library:
 
-Manual changes go there by PR (review flow in the hub repo's GOVERNANCE).
-[`docs/README.md`](docs/README.md) keeps the redirect.
-## Examples
-
-Runnable examples under [`examples/`](examples/) — each is a `main` package you can `go run`:
-
-| Example | Role | Shows |
+| Subcommand | Role | Shows |
 |---|---|---|
-| [`device-register`](examples/device-register/main.go) | Device (UAC) | SIP registration, keepalive, catalog answers, synthetic frames through `device.FrameHub`, INVITE-driven streaming |
-| [`platform-uas`](examples/platform-uas/main.go) | Platform (UAS) | SIP server with digest auth, in-memory `DeviceStore` seam, alarm `EventBus` subscription, INVITE/ByeChannel flow |
-| [`psmux-rtp`](examples/psmux-rtp/main.go) | Media path | H.264 Annex-B → MPEG-PS → RTP packetization to a UDP receiver |
+| [`device-register`](cmd/gb28181/device_register.go) | Device (UAC) | SIP registration, keepalive, catalog answers, synthetic frames through `device.FrameHub`, INVITE-driven streaming |
+| [`platform-uas`](cmd/gb28181/platform_uas.go) | Platform (UAS) | SIP server with digest auth, in-memory `DeviceStore` seam, alarm `EventBus` subscription, INVITE/ByeChannel flow |
+| [`psmux-rtp`](cmd/gb28181/psmux_rtp.go) | Media path | H.264 Annex-B → MPEG-PS → RTP packetization to a UDP receiver |
+
+Everything is flag-driven (the old prebuilt examples hardcoded their
+configuration, which made the shipped binaries unusable):
+
+```sh
+gb28181 device-register -platform 192.168.1.10:5060 -password secret -transport tcp
+gb28181 platform-uas -listen :5060 -password secret
+gb28181 psmux-rtp
+```
+
+Every [release](https://github.com/mickeyzzc/gb28181-go/releases)
+ships the CLI as a prebuilt, zero-dependency bundle
+(`gb28181-cli_<os>_<arch>.tar.gz` / `.zip` + `SHA256SUMS`, seven
+platforms). Per-subcommand manuals with scenarios live in this repository's
+docs ([Documentation](#documentation)); chaining the three subcommands
+into "virtual camera + minimal platform + conformance self-attestation"
+is written up as **[the full-chain, no-hardware lab](docs/en-US/gb28181-go-interop-lab.md)**.
 
 ## Development
 

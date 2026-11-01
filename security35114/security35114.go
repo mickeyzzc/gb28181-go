@@ -1,13 +1,16 @@
 //go:build gb35114
 
-// Package security35114 implements the GB 35114-2017 A-level device-side
-// security capability for GB/T 28181: SM2-certificate mutual authentication
+// Package security35114 implements the GB 35114-2017 security capability
+// for GB/T 28181 at all three levels: SM2-certificate mutual authentication
 // during REGISTER and the keyed-SM3 integrity header for subsequent SIP
-// signaling.
+// signaling (A); per-access-unit SM2 video signatures plus bidirectional
+// signaling integrity (B); and SM4-OFB media encryption under a
+// VKEK-sealed VEK negotiated through the INVITE SDP (C).
 //
-// Only level A is implemented. Levels B/C additionally require signed and
-// encrypted media built on GB/T 25724 (SVAC), which is a hardware codec —
-// out of scope by design.
+// The B/C media features are the PS-over-RTP software form of the
+// standard's SVAC (GB/T 25724) capabilities — algorithms and key hierarchy
+// per the standard, with the two SVAC-delegated wire details defined in
+// media.go. SVAC-native signed streams remain a hardware-codec ecosystem.
 //
 // Build with the gb35114 tag:
 //

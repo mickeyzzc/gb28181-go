@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -43,6 +44,14 @@ type SecurityInfo struct {
 	ServerID  string // echoed (bidirection)
 	CryptKey  string // base64 DER SM2 envelope carrying the VKEK
 	Sign2     string // base64 DER SM2 signature (bidirection)
+	// VKEKVer is the platform-assigned VKEK generation this SecurityInfo
+	// established (>0). The device echoes it as the INVITE answer's
+	// vkekver so the platform's key ring resolves the exact handshake —
+	// a device-local counter restarts at 1 on every process restart and
+	// collides with historical ring entries (issue #157). 0 = absent
+	// (older/foreign platforms); the device then falls back to its local
+	// count.
+	VKEKVer int
 }
 
 // paramPattern matches key="value" and key=value pairs inside the
@@ -241,6 +250,13 @@ func ParseSecurityInfo(header string) (SecurityInfo, error) {
 	si.ServerID = params["serverid"]
 	si.CryptKey = params["cryptkey"]
 	si.Sign2 = params["sign2"]
+	if v := params["vkekver"]; v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return SecurityInfo{}, fmt.Errorf("%s SecurityInfo bad vkekver %q", scheme, v)
+		}
+		si.VKEKVer = n
+	}
 	if si.CryptKey == "" {
 		return SecurityInfo{}, fmt.Errorf("%s SecurityInfo missing cryptkey", scheme)
 	}
@@ -262,6 +278,7 @@ func BuildSecurityInfo(si SecurityInfo) string {
 		b.WriteString(`", algorithm="`)
 		b.WriteString(si.Algorithm)
 		b.WriteString(`"`)
+		b.WriteString(securityInfoVKEKVer(si.VKEKVer))
 		return b.String()
 	}
 	b.WriteString(`Bidirection algorithm="`)
@@ -279,7 +296,17 @@ func BuildSecurityInfo(si SecurityInfo) string {
 	b.WriteString(`",sign2="`)
 	b.WriteString(si.Sign2)
 	b.WriteString(`"`)
+	b.WriteString(securityInfoVKEKVer(si.VKEKVer))
 	return b.String()
+}
+
+// securityInfoVKEKVer renders the optional platform-assigned generation
+// parameter ("" when absent).
+func securityInfoVKEKVer(ver int) string {
+	if ver <= 0 {
+		return ""
+	}
+	return `, vkekver="` + strconv.Itoa(ver) + `"`
 }
 
 // splitScheme separates "Scheme rest-of-header".

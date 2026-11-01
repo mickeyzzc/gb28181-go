@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ghettovoice/gosip/sip"
+	"github.com/mickeyzzc/gb28181-go/device"
 	"github.com/mickeyzzc/gb28181-go/psmux"
 )
 
@@ -122,6 +123,38 @@ func (s *Service) onPlaybackInvite(req sip.Request, callID, channelID string, sd
 		"v=0\r\no=- 0 0 IN IP4 %s\r\ns=%s\r\nc=IN IP4 %s\r\nt=%s %s\r\n"+
 			"m=video %d RTP/AVP 96\r\na=sendonly\r\na=rtpmap:96 PS/90000\r\ny=%d\r\n",
 		ps.localHost(), sdpName, ps.localHost(), sd.rawT0, sd.rawT1, ps.localPort(), sd.ssrc)
+	// GB35114 B/C toward the upper platform (playback/download fetch): same
+	// negotiation as the live forward; a security offer that cannot be
+	// honored is refused 488.
+	if u != nil && u.cfg.RegisterAuthenticator != nil {
+		if offerSec := device.SDPSecurityAttributeValue(req.Body()); offerSec != "" {
+			responder, ok := u.cfg.RegisterAuthenticator.(device.MediaSecurityResponder)
+			if !ok {
+				_, _ = s.srv.RespondOnRequest(req, 488, "Not Acceptable Here", "", nil)
+				return
+			}
+			answerValue, encrypt, err := responder.AnswerMediaSecurity(offerSec)
+			if err != nil {
+				slog.Warn("gb28181-cascade: GB35114 media negotiation failed (fetch) — 488", "error", err)
+				_, _ = s.srv.RespondOnRequest(req, 488, "Not Acceptable Here", "", nil)
+				return
+			}
+			if answerValue != "" {
+				ps.sdpBody += "a=security:" + answerValue + "\r\n"
+				var cryptFn func(payload []byte, ssrc uint32, seq uint16) []byte
+				if encrypt != nil {
+					cryptFn = encrypt.Crypt
+				}
+				var signFn func(au []byte, ssrc uint32, tsTicks uint32) ([]byte, error)
+				if signer, ok := u.cfg.RegisterAuthenticator.(interface {
+					SignAU(au []byte, ssrc, timestamp uint32) ([]byte, error)
+				}); ok {
+					signFn = signer.SignAU
+				}
+				ps.rtp.SetSecurity(cryptFn, signFn)
+			}
+		}
+	}
 
 	s.mu.Lock()
 	s.playbacks[callID] = ps

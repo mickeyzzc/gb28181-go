@@ -1,10 +1,11 @@
-// Media-path example: mux H.264 access units into MPEG-PS and packetize
-// as RTP to a receiver (the same path the device role uses for live push
-// and the cascade role uses for stream forwarding). A UDP listener
-// imitates the receiver and prints packet stats.
 package main
 
+// psmux-rtp: the media-path self-check — the same sample that lived at
+// examples/psmux-rtp, self-contained by design (no flags beyond an
+// optional packet-report interval knob).
+
 import (
+	"flag"
 	"fmt"
 	"net"
 	"time"
@@ -22,7 +23,11 @@ func annexB(nalus [][]byte) []byte {
 	return out
 }
 
-func main() {
+func runPsmuxRTP(args []string) {
+	fs := flag.NewFlagSet("psmux-rtp", flag.ExitOnError)
+	every := fs.Uint("report-every", 50, "print receiver statistics every N packets")
+	_ = fs.Parse(args)
+
 	// Receiver side: one UDP socket, counts packets/bytes.
 	recv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -41,7 +46,7 @@ func main() {
 			}
 			packets++
 			bytes += n
-			if packets%50 == 0 {
+			if packets%int(*every) == 0 {
 				fmt.Printf("receiver: %d packets, %d bytes\n", packets, bytes)
 			}
 		}
