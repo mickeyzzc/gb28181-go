@@ -90,6 +90,11 @@ type ChannelItem struct {
 	Port         int     `xml:"Port"`
 	Longitude    float64 `xml:"Longitude"`
 	Latitude     float64 `xml:"Latitude"`
+	// PhotoelectricImagingType is the GB/T 28181-2022 光电成像类型 marking:
+	// 1 = visible light, 2 = thermal imaging (dual-spectrum devices mark
+	// their thermal channel; further values reserved by the standard).
+	// 0/absent = unspecified — omitempty keeps pre-2022 wire bytes unchanged.
+	PhotoelectricImagingType int `xml:"PhotoelectricImagingType,omitempty"`
 }
 
 // DeviceItem represents basic device information.

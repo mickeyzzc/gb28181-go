@@ -89,6 +89,9 @@ func (s *Service) catalogItemsFor(u *upper) ([]manscdp.Item, error) {
 			// PTZ (404 "PTZ not supported") when this is 0. The cascade
 			// forwards DeviceControl to whatever the local camera supports.
 			PTZType: 3,
+			// GB/T 28181-2022 光电成像类型: passthrough annotation — the
+			// element is omitted when the host leaves it 0.
+			PhotoelectricImagingType: cam.PhotoelectricImagingType,
 		})
 	}
 	return items, nil

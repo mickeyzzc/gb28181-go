@@ -91,6 +91,14 @@ type Item struct {
 	EndTime      string   `xml:"EndTime"`
 	Secrecy      int      `xml:"Secrecy"`
 	PTZType      int      `xml:"PTZType"`
+	// PhotoelectricImagingType is the GB/T 28181-2022 光电成像类型 marking:
+	// 1 = visible light, 2 = thermal imaging. Dual-spectrum devices (thermal
+	// + visible-light lenses, one SIP device) mark their thermal channel so a
+	// platform can tell it from the visible-light sibling without probing.
+	// Further values are reserved by the standard and pass through verbatim;
+	// 0/absent = unspecified. omitempty keeps emitters that never set it
+	// byte-identical to pre-2022 wire formats.
+	PhotoelectricImagingType int `xml:"PhotoelectricImagingType,omitempty"`
 }
 
 // Keepalive is a device heartbeat sent periodically to the platform.

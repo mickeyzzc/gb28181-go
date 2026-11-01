@@ -1643,10 +1643,11 @@ func (s *Server) mergeCatalogChannels(deviceID string, items []manscdp.Item) {
 			status = existing.Status.Load()
 		}
 		ch := &platform.Channel{
-			ID:       item.DeviceID,
-			Name:     item.Name,
-			Parental: item.Parental,
-			PTZType:  item.PTZType,
+			ID:                       item.DeviceID,
+			Name:                     item.Name,
+			Parental:                 item.Parental,
+			PTZType:                  item.PTZType,
+			PhotoelectricImagingType: item.PhotoelectricImagingType,
 		}
 		ch.Status.Store(status)
 		s.deviceMgr.RegisterChannel(deviceID, ch)

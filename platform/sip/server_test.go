@@ -1065,3 +1065,26 @@ func TestServer_Message_UploadSnapShotFinished(t *testing.T) {
 		t.Fatal("no snapshot-finished event published")
 	}
 }
+
+// TestMergeCatalog_PhotoelectricImagingType: the GB/T 28181-2022 光电成像类型
+// catalog marking (1 = visible light, 2 = thermal imaging) flows from the
+// catalog item onto the Channel, so consumers can label/filter thermal
+// channels of dual-spectrum devices without re-parsing MANSCDP.
+func TestMergeCatalog_PhotoelectricImagingType(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	srv.SetCameraEnroller(&fakeEnroller{})
+
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: "127.0.0.1:60010"})
+	srv.mergeCatalogChannels(testDeviceID, []manscdp.Item{
+		{DeviceID: testDeviceID + "1", Name: "Visible"},
+		{DeviceID: testDeviceID + "2", Name: "Thermal", PhotoelectricImagingType: 2},
+	})
+
+	ch1, ok := dm.FindChannel(testDeviceID, testDeviceID+"1")
+	require.True(t, ok)
+	require.Zero(t, ch1.PhotoelectricImagingType, "unmarked channel = unspecified")
+	ch2, ok := dm.FindChannel(testDeviceID, testDeviceID+"2")
+	require.True(t, ok)
+	require.Equal(t, 2, ch2.PhotoelectricImagingType)
+}

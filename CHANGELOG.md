@@ -11,6 +11,19 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat`: Catalog Item `PhotoelectricImagingType` — the GB/T 28181-2022
+  光电成像类型 marking (issue #161): `1` = visible light, `2` = thermal
+  imaging. Dual-spectrum devices (thermal + visible-light lenses, one SIP
+  device) mark their thermal channel; the platform's channel merge now
+  carries the marking onto `Channel.PhotoelectricImagingType` so consumers
+  label/filter thermal channels without re-parsing MANSCDP. Both reporting
+  directions can annotate: `cascade.CameraInfo.PhotoelectricImagingType`
+  flows into the aggregated catalog, and the device-side
+  `ChannelItem.PhotoelectricImagingType` rides `BuildCatalogResponseMessage`.
+  Values reserved by the standard pass through verbatim (no enum validation);
+  `omitempty` keeps emitters that never set it byte-identical to pre-2022
+  wire formats.
+
 - `feat(platform)`: voice-intercom uplink receive leg (#141) — the § 9.4
   sendrecv offer advertises the talk socket and upstream-capable devices
   stream return PCMA to it; a per-session read loop now drains the socket
