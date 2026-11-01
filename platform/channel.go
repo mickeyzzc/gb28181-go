@@ -62,6 +62,11 @@ type Channel struct {
 	// PTZType is the GB/T 28181-2016 § 5.4.12 PTZ capability code from the
 	// Catalog item: 0 = no PTZ, 1 = pan/tilt, 2 = pan/tilt + zoom.
 	PTZType int
+	// PhotoelectricImagingType is the GB/T 28181-2022 光电成像类型 marking
+	// from the Catalog item: 0/absent = unspecified, 1 = visible light,
+	// 2 = thermal imaging (dual-spectrum devices mark their thermal channel;
+	// further values reserved by the standard pass through verbatim).
+	PhotoelectricImagingType int
 	// SubProbe marks a channel that was NOT in the device catalog but was
 	// registered by the sub-channel prober (#560) from the vendor-convention
 	// code offset. Catalog refreshes never list it, so the flag distinguishes

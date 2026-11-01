@@ -95,6 +95,11 @@ type ChannelItem struct {
 	// value. nil omits the element — historical deployments stay
 	// byte-identical (same semantics as the Rust twin's Option<u8>).
 	PTZType *int `xml:"PTZType,omitempty"`
+	// PhotoelectricImagingType is the GB/T 28181-2022 光电成像类型 marking:
+	// 1 = visible light, 2 = thermal imaging (dual-spectrum devices mark
+	// their thermal channel; further values reserved by the standard).
+	// 0/absent = unspecified — omitempty keeps pre-2022 wire bytes unchanged.
+	PhotoelectricImagingType int `xml:"PhotoelectricImagingType,omitempty"`
 }
 
 // DeviceItem represents basic device information.

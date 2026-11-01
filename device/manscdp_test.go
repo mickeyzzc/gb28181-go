@@ -1096,6 +1096,25 @@ func TestDispatchBroadcastNotify(t *testing.T) {
 	}
 }
 
+// TestBuildCatalogResponseMessagePhotoelectricImagingType: the GB/T 28181-2022
+// 光电成像类型 marking (1 = visible, 2 = thermal) rides the device-side
+// catalog item when set and stays absent otherwise (omitempty — pre-2022
+// wire bytes unchanged).
+func TestBuildCatalogResponseMessagePhotoelectricImagingType(t *testing.T) {
+	base := ChannelItem{DeviceID: "34020000001320000001", Name: "thermal", Status: "ON"}
+	plain := BuildCatalogResponseMessage("123", "34020000001110000001", []ChannelItem{base})
+	if strings.Contains(plain.Body, "PhotoelectricImagingType") {
+		t.Errorf("unmarked channel must omit the element, body: %s", plain.Body)
+	}
+
+	marked := base
+	marked.PhotoelectricImagingType = 2
+	msg := BuildCatalogResponseMessage("123", "34020000001110000001", []ChannelItem{marked})
+	if !strings.Contains(msg.Body, "<PhotoelectricImagingType>2</PhotoelectricImagingType>") {
+		t.Errorf("thermal marking must ride the catalog item, body: %s", msg.Body)
+	}
+}
+
 // PTZType (GB/T 28181-2016 §5.4.12): a set value emits <PTZType> on the
 // device channel in catalog answers; nil omits the element so historical
 // deployments stay byte-identical — mirroring the Rust twin's Option<u8>

@@ -59,6 +59,12 @@ type CameraInfo struct {
 	// INVITEs for its channel fail with 404 (catalog convergence: expose only
 	// a chosen subset to the upper platform).
 	CascadeHidden bool
+	// PhotoelectricImagingType annotates the aggregated catalog item with the
+	// GB/T 28181-2022 光电成像类型 marking: 1 = visible light, 2 = thermal
+	// imaging. Dual-spectrum hosts set 2 on their thermal cameras so the
+	// upper platform can tell the channel from its visible-light sibling.
+	// 0 (default) omits the element — wire bytes unchanged.
+	PhotoelectricImagingType int
 }
 
 // CameraSource supplies the local camera list and their stream hubs. The

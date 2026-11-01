@@ -424,3 +424,20 @@ func TestMediaSessionSubStreamCloseDuringAcquire(t *testing.T) {
 	require.Equal(t, 0, subHub.ConsumerCount(), "closed session must not subscribe")
 	require.Equal(t, 0, mainHub.ConsumerCount(), "closed session must not subscribe to main either")
 }
+
+// TestCatalogItemsPhotoelectricImagingType: CameraInfo.PhotoelectricImagingType
+// annotates the aggregated catalog item (GB/T 28181-2022 光电成像类型) so the
+// upper platform can tell a thermal channel from its visible-light sibling.
+func TestCatalogItemsPhotoelectricImagingType(t *testing.T) {
+	db := newCascadeTestDB(t)
+	svc := New(testCfg(), fakeSource{cams: []CameraInfo{
+		{ID: "vis", Name: "Visible"},
+		{ID: "hot", Name: "Thermal", PhotoelectricImagingType: 2},
+	}}, db)
+
+	items, err := svc.catalogItems()
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Zero(t, items[0].PhotoelectricImagingType, "unannotated camera omits the element (omitempty)")
+	require.Equal(t, 2, items[1].PhotoelectricImagingType)
+}
