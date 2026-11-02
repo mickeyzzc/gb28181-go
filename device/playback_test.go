@@ -106,7 +106,9 @@ func startPlaybackServer(t *testing.T, idx RecordingIndex) (*Server, int, contex
 		server.SetRecordingIndex(idx)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	go func() { _ = server.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = server.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
 	return server, sipPort, cancel
@@ -879,7 +881,9 @@ func TestServer_InfoOnLiveSessionAcknowledged(t *testing.T) {
 	server.SetTestMode()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	go func() { _ = server.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = server.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
 

@@ -77,7 +77,9 @@ func start35114NoteServer(t *testing.T) (*net.UDPConn, *net.UDPAddr, *sec.Authen
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(func() { cancel(); srv.Stop() })
-	go func() { _ = srv.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = srv.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// --- Unidirection handshake ---
 	reg1, peer := itRead(t, platConn)

@@ -137,7 +137,9 @@ func startTestServer(t *testing.T) (*Server, int, *FrameHub) {
 	}
 	server := New(cfg, DeviceInfo{}, hub)
 	server.SetTestMode()
-	go func() { _ = server.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = server.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 	sipPort := waitSIPPort(t, server)
 	return server, sipPort, hub
 }

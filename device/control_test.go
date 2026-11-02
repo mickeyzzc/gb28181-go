@@ -24,6 +24,20 @@ type ctrlRecorder struct {
 	calls []string
 }
 
+// waitServerGoroutine blocks until the test server's Start goroutine has
+// returned (after cancel), so no lingering recv loop outlives the test —
+// a leftover loop reads the package-level UserAgent var while building
+// responses and races any later test that mutates it (CI data race,
+// 2026-11-02: useragent_test write vs a previous test's server loop).
+func waitServerGoroutine(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("server Start did not return within 5s of cancel")
+	}
+}
+
 func (r *ctrlRecorder) add(s string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -97,7 +111,9 @@ func startWireTestServerFull(t *testing.T, configure func(*device.Server), tweak
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
-	go func() { _ = srv.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = srv.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	reg, peer := readSnapMsg(t, platConn)
 	if reg.Method != "REGISTER" {

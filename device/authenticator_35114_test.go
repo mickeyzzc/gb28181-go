@@ -104,7 +104,9 @@ func TestServerGB35114UnidirectionHandshakeAndKeepalive(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	go func() { _ = srv.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = srv.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// --- GB35114 A-level handshake (unidirection) ---
 

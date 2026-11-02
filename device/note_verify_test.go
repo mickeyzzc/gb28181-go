@@ -77,7 +77,9 @@ func startNoteTestServer(t *testing.T, policy device.GB35114NotePolicy) (*net.UD
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
-	go func() { _ = srv.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = srv.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// Quiet the register lifecycle: answer the first REGISTER with a bare
 	// 200 OK (no WWW-Authenticate — the stub authenticator is done).
