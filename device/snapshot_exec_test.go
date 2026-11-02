@@ -94,7 +94,9 @@ func startSnapTestServer(t *testing.T, exec device.SnapshotExecutor) (*net.UDPCo
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
-	go func() { _ = srv.Start(ctx) }()
+	serverDone := make(chan struct{})
+	go func() { _ = srv.Start(ctx); close(serverDone) }()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	reg, peer := readSnapMsg(t, platConn)
 	if reg.Method != "REGISTER" {

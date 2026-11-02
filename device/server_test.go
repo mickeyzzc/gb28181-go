@@ -70,6 +70,21 @@ func buildBye(callID, from, to, contact string) SipMessage {
 }
 
 // TestServer_AttachesSubscriberOnInvite verifies that the server subscribes to AUHub on INVITE and unsubscribes on BYE.
+
+// waitServerGoroutine blocks until the test server's Start goroutine has
+// returned (after cancel), so no lingering recv loop outlives the test —
+// a leftover loop reads the package-level UserAgent var while building
+// responses and races any later test that mutates it (CI data race,
+// 2026-11-02: useragent_test write vs a previous test's server loop).
+func waitServerGoroutine(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("server Start did not return within 5s of cancel")
+	}
+}
+
 func TestServer_AttachesSubscriberOnInvite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -95,11 +110,14 @@ func TestServer_AttachesSubscriberOnInvite(t *testing.T) {
 
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// Wait for server to start and get actual SIP port
 	time.Sleep(100 * time.Millisecond)
@@ -191,11 +209,14 @@ func TestServer_Sends200OKBeforeMedia(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -303,11 +324,14 @@ func TestServer_200OK_ContainsDeviceSDP(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -398,11 +422,14 @@ func TestServer_EchoesSSRC(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -480,11 +507,14 @@ func TestServer_ByeCleansUpSubscriberAndSocket(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -632,9 +662,12 @@ func TestServer_SendsRtpToSdpAddressNotSipPeer(t *testing.T) {
 	server := New(cfg, DeviceInfo{}, hub)
 	server.SetTestMode()
 
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		_ = server.Start(ctx)
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -727,9 +760,12 @@ func TestServer_ReInviteReplacesPreviousSession(t *testing.T) {
 	server := New(cfg, DeviceInfo{}, hub)
 	server.SetTestMode()
 
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		_ = server.Start(ctx)
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)
@@ -905,9 +941,12 @@ func TestServer_SelfHealsAfterKeepaliveRejection(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		_ = server.Start(ctx)
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// Wait for the initial registration to complete.
 	deadline := time.Now().Add(5 * time.Second)
@@ -953,11 +992,14 @@ func TestRecvLoop_Subscribe_Gets200(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	time.Sleep(100 * time.Millisecond)
 	sipPort := waitSIPPort(t, server)

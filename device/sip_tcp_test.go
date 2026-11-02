@@ -37,11 +37,14 @@ func TestServer_TCPTransport_HandlesFramedSIP(t *testing.T) {
 	server.SetTestMode()
 
 	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		if err := server.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			serverErr <- err
 		}
 	}()
+	t.Cleanup(func() { cancel(); waitServerGoroutine(t, serverDone) })
 
 	// Wait for the TCP listener to be up and grab its actual port.
 	var tcpPort int
