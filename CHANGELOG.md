@@ -11,6 +11,13 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.15.1] — 2026-11-02
+
+The thermal-channel marking patch: dual-spectrum devices can now label
+their thermal channel in the Catalog (GB/T 28181-2022 光电成像类型).
+
+### Added
+
 - `feat`: Catalog Item `PhotoelectricImagingType` — the GB/T 28181-2022
   光电成像类型 marking (issue #161): `1` = visible light, `2` = thermal
   imaging. Dual-spectrum devices (thermal + visible-light lenses, one SIP
