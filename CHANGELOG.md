@@ -11,6 +11,27 @@ are released out of band.
 
 ## [Unreleased]
 
+## [v0.15.2] — 2026-11-03
+
+The thermal-channel plumbing patch: the marking now travels all the way
+from a running device into the catalog, not just through builders.
+
+### Added
+
+- `feat`: `PhotoelectricImagingType` plumbed through `DeviceContext`
+  (pull #165) — the runtime field feeds `ChannelItem` during catalog
+  construction, so a single-spectrum thermal camera labels its own entry
+  without hand-building items. Companion of the v0.15.1 marking (#162);
+  requested by the NVR side to consume device-marked thermal channels
+  end to end.
+
+### Fixed
+
+- `test`: every device-test server teardown waits for `Start` to return
+  before stopping (pull #164) — removes a shutdown race that surfaced as
+  flaky `TestLoopback*` runs on loaded CI runners.
+
+
 - `feat(device)` **DeviceContext.PhotoelectricImagingType** — the device's
   own catalog channel can now carry the GB/T 28181-2022 光电成像类型
   marking (1 = visible light, 2 = thermal imaging; follow-up to the
