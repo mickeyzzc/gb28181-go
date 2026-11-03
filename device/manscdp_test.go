@@ -1146,3 +1146,40 @@ func TestCatalogChannelPTZType(t *testing.T) {
 		t.Errorf("PTZType element count = %d, want 1 (device channel only):\n%s", got, pages[0].Body)
 	}
 }
+
+// TestBuildChannelPhotoelectricImagingType pins the GB/T 28181-2022 光电成像类型
+// plumbing on the device's own catalog channel: set → emitted (dual-spectrum
+// devices mark their thermal channel), unset → byte-identical historical form.
+func TestBuildChannelPhotoelectricImagingType(t *testing.T) {
+	base := DeviceContext{
+		DeviceID: "34020000001110000001", ChannelID: "34020000001320000001",
+		Manufacturer: "MiBee", Model: "Eye-Thermal", LocalIP: "192.0.2.10", LocalPort: 5060,
+	}
+
+	marked := base
+	marked.PhotoelectricImagingType = 2
+	item := buildChannel(marked)
+	if item.PhotoelectricImagingType != 2 {
+		t.Fatalf("marked context: PhotoelectricImagingType = %d, want 2", item.PhotoelectricImagingType)
+	}
+	out, err := xml.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "<PhotoelectricImagingType>2</PhotoelectricImagingType>") {
+		t.Fatalf("catalog item must carry the thermal marking, got %s", out)
+	}
+
+	// Unset (0) omits the element — pre-2022 wire bytes unchanged.
+	plain := buildChannel(base)
+	if plain.PhotoelectricImagingType != 0 {
+		t.Fatalf("unset context: PhotoelectricImagingType = %d, want 0", plain.PhotoelectricImagingType)
+	}
+	out, err = xml.Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "PhotoelectricImagingType") {
+		t.Fatalf("unset marking must omit the element, got %s", out)
+	}
+}

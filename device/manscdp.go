@@ -379,6 +379,12 @@ type DeviceContext struct {
 	// byte-identical to the historical wire form. Extra channels carry
 	// their own value on ChannelItem directly.
 	PTZType *int
+	// PhotoelectricImagingType marks the device's own catalog channel with
+	// the GB/T 28181-2022 光电成像类型 (1 = visible light, 2 = thermal
+	// imaging) so a dual-spectrum device can flag its thermal channel; 0
+	// (unset) keeps the catalog byte-identical to the historical wire
+	// form. Extra channels carry their own value on ChannelItem directly.
+	PhotoelectricImagingType int
 	// OnBroadcast fires when a voice-broadcast notification (语音广播,
 	// GB/T 28181 §9.2.2 / 2022 refinement) arrives: the platform addresses
 	// SourceID → TargetID and follows with a talk INVITE. Preparing the
@@ -410,18 +416,19 @@ func dispatchExtraChannels(dev DeviceContext) []ChannelItem {
 
 func buildChannel(dev DeviceContext) ChannelItem {
 	return ChannelItem{
-		DeviceID:     dev.ChannelID,
-		Name:         dev.ChannelID,
-		Status:       "ON",
-		PTZType:      dev.PTZType,
-		Manufacturer: dev.Manufacturer,
-		Model:        dev.Model,
-		Owner:        dev.DeviceID,
-		ParentID:     dev.DeviceID,
-		Secrecy:      0,
-		RegisterWay:  1, // platform register
-		IPAddress:    dev.LocalIP,
-		Port:         dev.LocalPort,
+		DeviceID:                 dev.ChannelID,
+		Name:                     dev.ChannelID,
+		Status:                   "ON",
+		PTZType:                  dev.PTZType,
+		PhotoelectricImagingType: dev.PhotoelectricImagingType,
+		Manufacturer:             dev.Manufacturer,
+		Model:                    dev.Model,
+		Owner:                    dev.DeviceID,
+		ParentID:                 dev.DeviceID,
+		Secrecy:                  0,
+		RegisterWay:              1, // platform register
+		IPAddress:                dev.LocalIP,
+		Port:                     dev.LocalPort,
 	}
 }
 
