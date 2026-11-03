@@ -11,6 +11,15 @@ are released out of band.
 
 ## [Unreleased]
 
+- `feat(device)` **DeviceContext.PhotoelectricImagingType** — the device's
+  own catalog channel can now carry the GB/T 28181-2022 光电成像类型
+  marking (1 = visible light, 2 = thermal imaging; follow-up to the
+  ChannelItem wire field from v0.15.1): dual-spectrum devices flag their
+  thermal channel so platforms can tell it from the visible-light sibling
+  without probing. 0/unset keeps the catalog byte-identical to the
+  historical wire form; the value rides the Catalog response built from
+  the device context.
+
 ## [v0.15.1] — 2026-11-02
 
 The thermal-channel marking patch: dual-spectrum devices can now label
