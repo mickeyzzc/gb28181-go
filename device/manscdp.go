@@ -421,14 +421,14 @@ func buildChannel(dev DeviceContext) ChannelItem {
 		Status:                   "ON",
 		PTZType:                  dev.PTZType,
 		PhotoelectricImagingType: dev.PhotoelectricImagingType,
-		Manufacturer: dev.Manufacturer,
-		Model:        dev.Model,
-		Owner:        dev.DeviceID,
-		ParentID:     dev.DeviceID,
-		Secrecy:      0,
-		RegisterWay:  1, // platform register
-		IPAddress:    dev.LocalIP,
-		Port:         dev.LocalPort,
+		Manufacturer:             dev.Manufacturer,
+		Model:                    dev.Model,
+		Owner:                    dev.DeviceID,
+		ParentID:                 dev.DeviceID,
+		Secrecy:                  0,
+		RegisterWay:              1, // platform register
+		IPAddress:                dev.LocalIP,
+		Port:                     dev.LocalPort,
 	}
 }
 
