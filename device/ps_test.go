@@ -63,9 +63,9 @@ func TestMuxH264ToPS_PSMOnlyOnKeyframe(t *testing.T) {
 	// Mux with isKeyFrame=false (P-frame)
 	psData := MuxH264ToPS(nalus, false, pts, dts)
 
-	// PSM start code (0x000001BB) should NOT be present
-	if bytes.Contains(psData, []byte{0x00, 0x00, 0x01, 0xBB}) {
-		t.Error("PSM (0x000001BB) should not be present in non-keyframe output")
+	// PSM start code (0x000001BC) should NOT be present
+	if bytes.Contains(psData, []byte{0x00, 0x00, 0x01, 0xBC}) {
+		t.Error("PSM (0x000001BC) should not be present in non-keyframe output")
 	}
 
 	// Now test with keyframe
@@ -74,9 +74,9 @@ func TestMuxH264ToPS_PSMOnlyOnKeyframe(t *testing.T) {
 
 	psDataKey := MuxH264ToPS(nalusKey, true, pts, dts)
 
-	// PSM start code (0x000001BB) SHOULD be present
-	if !bytes.Contains(psDataKey, []byte{0x00, 0x00, 0x01, 0xBB}) {
-		t.Error("PSM (0x000001BB) should be present in keyframe output")
+	// PSM start code (0x000001BC) SHOULD be present
+	if !bytes.Contains(psDataKey, []byte{0x00, 0x00, 0x01, 0xBC}) {
+		t.Error("PSM (0x000001BC) should be present in keyframe output")
 	}
 }
 
@@ -112,22 +112,22 @@ func TestMuxH264ToPS_Roundtrip(t *testing.T) {
 		}
 		pos += offset
 
-		// PES packet structure (twin layout, see BuildPesPacket):
+		// PES packet structure (standard layout, see BuildPesPacket):
 		// bytes 0-3: start code + stream ID
 		// bytes 4-5: packet length
-		// byte 6: flags
-		// byte 7: header_data_length
-		// bytes 8..: optional header (PTS/DTS)
-		// one gap byte, then payload
-		if pos+8 > len(psData) {
+		// byte 6: '10' flags byte (0x80)
+		// byte 7: PTS_DTS_flags
+		// byte 8: header_data_length
+		// bytes 9..: optional header (PTS/DTS), then payload
+		if pos+9 > len(psData) {
 			break
 		}
-		// Get header_data_length (byte 7)
-		headerDataLen := int(psData[pos+7])
-		// Payload starts after 8 + headerDataLen bytes plus the gap byte;
-		// locate the first Annex-B start code so leading zeros (gap byte /
-		// 4-byte start codes) never offset the extraction.
-		payloadPos := pos + 8 + headerDataLen
+		// Get header_data_length (byte 8)
+		headerDataLen := int(psData[pos+8])
+		// Payload starts after 9 + headerDataLen bytes; locate the first
+		// Annex-B start code so leading zeros (4-byte start codes) never
+		// offset the extraction.
+		payloadPos := pos + 9 + headerDataLen
 		if i := bytes.Index(psData[payloadPos:], []byte{0x00, 0x00, 0x01}); i >= 0 {
 			payloadPos += i
 		}
@@ -248,14 +248,14 @@ func TestMuxH264ToPSMatchesRustTwinGolden(t *testing.T) {
 
 	// Goldens are the verbatim output of gb28181-rs mux_h264_to_ps
 	// (tests/tmp dump, 2026-08-29) — kept as single unsegmented literals.
-	keyGolden := "000001ba440016fc8401009c43f8000001bb000b01000000041be000000000000001e0002bc00a310005bf21110005bf21000000000167428028da01e00800000168ce3c80000001658884004b000100"
+	keyGolden := "000001ba440016fc8401009c43f8000001bc000ee0ff000000041be0000032141109000001e0002b80c00a310005bf21110005bf210000000167428028da01e00800000168ce3c80000001658884004b000100"
 
 	psData := MuxH264ToPS([][]byte{sps, pps, idr}, true, time.Unix(1, 0), time.Unix(1, 0))
 	if got := hex.EncodeToString(psData); got != keyGolden {
 		t.Errorf("keyframe PS diverges from gb28181-rs twin:\n got: %s\nwant: %s", got, keyGolden)
 	}
 
-	pGolden := "000001ba44002df90401009c43f8000001e00019c00a31000b7e4111000b7e410000000001658884004b000100"
+	pGolden := "000001ba44002df90401009c43f8000001e0001980c00a31000b7e4111000b7e4100000001658884004b000100"
 
 	psData = MuxH264ToPS([][]byte{idr}, false, time.Unix(2, 0), time.Unix(2, 0))
 	if got := hex.EncodeToString(psData); got != pGolden {
@@ -269,7 +269,7 @@ type pesPacket struct {
 	declared  int // PES_packet_length field value
 	actual    int // bytes written after the 6-byte prefix
 	hasTS     bool
-	headerLen int // optional-header byte count from byte 7 (twin layout)
+	headerLen int // optional-header byte count from byte 8 (standard layout)
 }
 
 // walkPESPackets walks a PS burst the way a strict receiver does: advance by
@@ -291,8 +291,8 @@ func walkPESPackets(t *testing.T, psData []byte) []pesPacket {
 		pkt := pesPacket{
 			offset:    p,
 			declared:  int(psData[p+4])<<8 | int(psData[p+5]),
-			headerLen: int(psData[p+7]),
-			hasTS:     psData[p+6]&0xC0 != 0,
+			headerLen: int(psData[p+8]),
+			hasTS:     psData[p+7]&0xC0 != 0,
 		}
 		if pkt.declared == 0 {
 			t.Fatalf("PES at %d is unbounded (length=0) — mux must never emit these", p)
