@@ -161,3 +161,58 @@ func TestPlaybackStatusForUnknownChannel(t *testing.T) {
 	require.False(t, ok, "unknown channel has no playback status")
 	require.False(t, st.Active)
 }
+
+// TestInviteChannelLiveSessionSurfacesInvite pins the wedged-channel
+// regression: when InviteChannel hits an ALREADY-UP receiver (a recorder
+// restart's BYE failed or raced the re-INVITE), the idempotent early return
+// must still surface the invite to the CURRENT recorder via the enroller —
+// otherwise the recorder that triggered the invite waits in "reconnecting"
+// forever while RTP keeps flowing into the per-call-resolving AU closure,
+// and the healthy receiver means no watchdog ever recycles the session
+// (field incident: receiver au_emitted growing, hub frames_in 0, only a
+// process restart healed it).
+func TestInviteChannelLiveSessionSurfacesInvite(t *testing.T) {
+	cfg := testConfig(t)
+	srv, dm := startTestServer(t, cfg)
+	client := newSIPClient(t, cfg.SIPListen)
+
+	enrol := &fakeEnroller{naluWriter: func(au [][]byte, ptsTicks int64, isIDR bool) {}}
+	require.NoError(t, enrol.EnsureGB28181Camera(testDeviceID, fakeChannelID, "Front Door", "127.0.0.1"))
+	srv.SetCameraEnroller(enrol)
+
+	dm.Register(&platform.Device{ID: testDeviceID, NetAddr: client.conn.LocalAddr().String()})
+	catalog, err := manscdp.Encode(manscdp.Catalog{
+		CmdType: manscdp.CmdCatalog, SN: 1, DeviceID: testDeviceID, SumNum: 1,
+		Item: []manscdp.Item{{DeviceID: fakeChannelID, Name: "Front Door", Parental: 0}},
+	})
+	require.NoError(t, err)
+	client.sendMessage(string(catalog))
+
+	// Let the catalog-driven auto-INVITE complete (answers retransmissions
+	// until the dialog is confirmed).
+	require.Eventually(t, func() bool {
+		req := client.nextRequest(150 * time.Millisecond)
+		if req != nil && req.Method() == sip.INVITE {
+			client.respondRaw(req, 200, "OK", string(req.Body()), "application/sdp")
+		}
+		srv.mu.Lock()
+		dlg := srv.dialogs[fakeChannelID]
+		srv.mu.Unlock()
+		return dlg != nil
+	}, 10*time.Second, 10*time.Millisecond, "auto-INVITE must complete its handshake")
+
+	// The session is up and the initial invite WAS surfaced.
+	require.Eventually(t, func() bool { return enrol.inviteCount() >= 1 },
+		5*time.Second, 20*time.Millisecond, "initial invite must be surfaced")
+	before := enrol.inviteCount()
+
+	// A recorder restart re-INVITEs while the old receiver is still up
+	// (BYE failed / raced): InviteChannel returns nil (idempotent) — and
+	// MUST surface the live session to the current recorder.
+	require.NoError(t, srv.InviteChannel(testDeviceID, fakeChannelID))
+	require.Eventually(t, func() bool { return enrol.inviteCount() >= before+1 },
+		3*time.Second, 20*time.Millisecond,
+		"live-session reuse must surface a fresh invite to the current recorder")
+
+	_ = srv.Stop()
+}

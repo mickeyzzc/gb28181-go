@@ -681,8 +681,26 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 		return fmt.Errorf("gb28181: SIP server not started")
 	}
 
-	// Idempotency: an active receiver means the session is already up.
+	// Idempotency: an active receiver means the session is already up — but
+	// surface the live session to the CURRENT recorder before returning. A
+	// recorder restart (host-side remediation, config reload) recycles the
+	// session with a BYE + re-INVITE; when that BYE fails or races this
+	// branch, the recorder that triggered this invite is still awaiting its
+	// OnInvite transition and would wait forever: the receiver keeps
+	// draining a healthy stream, so no watchdog ever recycles the session.
+	// The host's AU closure resolves the recorder per call (media already
+	// flows to whoever is current) — the missing piece is only this
+	// transition notification. Field shape of the wedge this closes: RTP
+	// healthy + receiver AU count growing, hub frames 0, recorder stuck
+	// reconnecting, only a process restart healed it.
 	if rcv := s.sessionMgr.GetReceiver(channelID); rcv != nil {
+		if enrol := s.enroller(); enrol != nil {
+			if boundCameraID, ok := enrol.GB28181CameraIDByChannel(deviceID, channelID); ok && boundCameraID != "" {
+				enrol.OnGB28181Invite(boundCameraID)
+				slog.Info("gb28181: live session reused — invite surfaced to current recorder",
+					"channel", channelID, "device", deviceID)
+			}
+		}
 		return nil
 	}
 
