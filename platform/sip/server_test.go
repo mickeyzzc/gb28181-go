@@ -683,11 +683,13 @@ func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { r
 func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
 	return f.audioWriter
 }
+
 func (f *fakeEnroller) OnGB28181Invite(cameraID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.invites = append(f.invites, cameraID)
 }
+
 func (f *fakeEnroller) OnGB28181Bye(string) {}
 
 func (f *fakeEnroller) inviteCount() int {
@@ -695,6 +697,7 @@ func (f *fakeEnroller) inviteCount() int {
 	defer f.mu.Unlock()
 	return len(f.invites)
 }
+
 func (f *fakeEnroller) NewGB28181PlaybackSink(string) (platform.AUWriter, error) {
 	if f.pbSink != nil {
 		return f.pbSink, nil
