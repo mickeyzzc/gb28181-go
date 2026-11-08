@@ -646,6 +646,10 @@ type fakeEnroller struct {
 	archived     []string // "deviceID/channelID"
 	subSet       []string // "deviceID/channelID->subChannelID"
 	subPersisted map[string]string
+	// invites records every OnGB28181Invite cameraID, in order (the
+	// live-session-reuse regression asserts a FRESH invite is surfaced when
+	// InviteChannel hits an already-up receiver).
+	invites []string
 	// pbSink, when non-nil, is returned by NewGB28181PlaybackSink (playback
 	// fetch tests).
 	pbSink platform.AUWriter
@@ -679,8 +683,18 @@ func (f *fakeEnroller) GB28181NALUWriter(string) func([][]byte, int64, bool) { r
 func (f *fakeEnroller) GB28181AudioWriter(string) func(string, []byte, []byte, int64, int) {
 	return f.audioWriter
 }
-func (f *fakeEnroller) OnGB28181Invite(string) {}
-func (f *fakeEnroller) OnGB28181Bye(string)    {}
+func (f *fakeEnroller) OnGB28181Invite(cameraID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invites = append(f.invites, cameraID)
+}
+func (f *fakeEnroller) OnGB28181Bye(string) {}
+
+func (f *fakeEnroller) inviteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.invites)
+}
 func (f *fakeEnroller) NewGB28181PlaybackSink(string) (platform.AUWriter, error) {
 	if f.pbSink != nil {
 		return f.pbSink, nil
