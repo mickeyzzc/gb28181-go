@@ -307,7 +307,7 @@ func TestServer_PlaybackStreamsRecordingWithPacing(t *testing.T) {
 
 	// First frame must be a keyframe: PSM (0x000001BB) is only emitted on
 	// keyframes by MuxH264ToPS.
-	if !bytes.Contains(firstPayload, []byte{0x00, 0x00, 0x01, 0xBB}) {
+	if !bytes.Contains(firstPayload, []byte{0x00, 0x00, 0x01, 0xBC}) {
 		t.Fatal("first playback frame does not contain PSM (not a keyframe)")
 	}
 
@@ -386,7 +386,7 @@ func TestServer_DownloadStreamsWithoutPacing(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("download took %v, want < 500ms (no pacing)", elapsed)
 	}
-	if !bytes.Contains(firstPayload, []byte{0x00, 0x00, 0x01, 0xBB}) {
+	if !bytes.Contains(firstPayload, []byte{0x00, 0x00, 0x01, 0xBC}) {
 		t.Fatal("first download frame does not contain PSM (not a keyframe)")
 	}
 }
@@ -506,7 +506,7 @@ func TestServer_PlaybackFastForwardsToKeyframe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read first frame: %v", err)
 	}
-	if !bytes.Contains(buf[:n], []byte{0x00, 0x00, 0x01, 0xBB}) {
+	if !bytes.Contains(buf[:n], []byte{0x00, 0x00, 0x01, 0xBC}) {
 		t.Fatal("first frame after mid-GOP start is not a keyframe (no PSM)")
 	}
 }
@@ -780,7 +780,7 @@ func TestServer_PlaybackSeekToKeyframe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read first frame after seek: %v", err)
 	}
-	if !bytes.Contains(buf[:n], []byte{0x00, 0x00, 0x01, 0xBB}) {
+	if !bytes.Contains(buf[:n], []byte{0x00, 0x00, 0x01, 0xBC}) {
 		t.Fatal("first frame after seek is not a keyframe (no PSM)")
 	}
 }
