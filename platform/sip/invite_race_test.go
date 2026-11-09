@@ -70,7 +70,7 @@ func TestInviteChannelConcurrentCallsSerialize(t *testing.T) {
 	results := make(chan error, callers)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < callers; i++ {
+	for range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
