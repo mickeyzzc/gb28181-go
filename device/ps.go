@@ -5,6 +5,7 @@
 package device
 
 import (
+	"encoding/binary"
 	"time"
 )
 
@@ -52,44 +53,53 @@ func BuildPsPackHeader(scr uint64, muxRate uint32) []byte {
 }
 
 // BuildProgramStreamMap builds a Program Stream Map (PSM).
-// Returns 17 bytes: start code + length + version + stream map + CRC placeholder.
+// Returns 20 bytes: start code (00 00 01 BC) + length + two-byte version
+// field + stream map + CRC-32/MPEG-2.
 //
-// Reference: ISO/IEC 13818-1 §2.5.3.5, translated from
-// notebook-cam/crates/protocols/src/gb28181/ps.rs build_program_stream_map
+// Reference: ISO/IEC 13818-1 §2.5.3.5, translated from gb28181-rs
+// build_program_stream_map (twin of gb28181-go #167 / gb28181-rs #111).
 func BuildProgramStreamMap() []byte {
-	psm := make([]byte, 17)
-	// Start code
-	psm[0] = 0x00
-	psm[1] = 0x00
-	psm[2] = 0x01
-	psm[3] = 0xBB
+	// Body after the length field: version(2) + program_stream_info_length(2)
+	// + elementary_stream_map_length(2) + stream entry(4) + CRC_32(4) = 14.
+	body := make([]byte, 0, 14)
+	// current_next_indicator(1)=1 + reserved(2)=11 + version(5)=00000 → 0xE0,
+	// then reserved(7)=1111111 + marker(1)=1 → 0xFF (§2.5.3.5).
+	body = append(body, 0xE0, 0xFF)
 
-	// Length = 11 (bytes after length field)
-	psm[4] = 0x00
-	psm[5] = 0x0B
-
-	// Version: current_next_indicator=1, version=0
-	psm[6] = 0x01
-
-	// program_stream_info_length = 0
-	psm[7] = 0x00
-	psm[8] = 0x00
+	// program_stream_info_length = 0 (no program stream info)
+	body = append(body, 0x00, 0x00)
 
 	// elementary_stream_map_length = 4 (one stream entry)
-	psm[9] = 0x00
-	psm[10] = 0x04
+	body = append(body, 0x00, 0x04)
 
 	// Stream entry: H.264 video
-	psm[11] = 0x1B // stream_type: H.264 (MPEG-4 AVC)
-	psm[12] = 0xE0 // elementary_stream_id: video
-	psm[13] = 0x00 // es_info_length high byte
-	psm[14] = 0x00 // es_info_length low byte
+	body = append(body, 0x1B)       // stream_type: H.264 (MPEG-4 AVC)
+	body = append(body, 0xE0)       // elementary_stream_id: video
+	body = append(body, 0x00, 0x00) // es_info_length = 0
 
-	// CRC32 truncated to 16 bits (GB28181 platforms tolerate)
-	psm[15] = 0x00
-	psm[16] = 0x00
+	// CRC_32 over everything after the length field (§2.5.3.5, Annex A)
+	body = binary.BigEndian.AppendUint32(body, crc32MPEG(body))
 
-	return psm
+	psm := append([]byte{0x00, 0x00, 0x01, 0xBC}, byte(len(body)>>8), byte(len(body)))
+	return append(psm, body...)
+}
+
+// crc32MPEG computes CRC-32/MPEG-2 (poly 0x04C11DB7, init all-ones, no
+// reflection) as required for the PSM CRC_32 field — identical to
+// psmux.crc32MPEG.
+func crc32MPEG(data []byte) uint32 {
+	crc := uint32(0xFFFFFFFF)
+	for _, b := range data {
+		crc ^= uint32(b) << 24
+		for range 8 {
+			if crc&0x80000000 != 0 {
+				crc = (crc << 1) ^ 0x04C11DB7
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc
 }
 
 // encodePtsDts encodes a PTS or DTS value into 5 bytes per ISO/IEC 13818-1 2.4.3.7.
@@ -116,15 +126,16 @@ func encodePtsDts(value uint64, prefix byte) [5]byte {
 // Layout (byte-identical to gb28181-rs build_pes_packet, the reference
 // implementation validated against the NVR platform):
 //
-//	[00 00 01 streamID] [PES_packet_length] [flags] [header_data_length]
-//	[PTS/DTS optional fields] [0x00 gap] [payload]
+//	[00 00 01 streamID] [PES_packet_length] [0x80] [flags] [header_data_length]
+//	[PTS/DTS optional fields] [payload]
 //
-// The header carries TWO explicit bytes (flags + header_data_length) followed
-// by the optional fields and ONE gap byte, while PES_packet_length counts
-// three header bytes: 3 + header_data_length + len(payload). The gap byte is
-// the third byte the length field counts — omitting it leaves every PES one
-// byte longer than its bytes, and strict receivers honoring the 16-bit length
-// never complete reassembly (issue #15: "AU ended mid-PES" frame drops).
+// The header carries the standard THREE bytes (§2.4.3.6): the '10' flags
+// byte (0x80 — no scrambling/alignment/copyright flags), PTS_DTS_flags, and
+// PES_header_data_length; PES_packet_length counts those 3 header bytes:
+// 3 + header_data_length + len(payload). The pre-#167 layout wrote the flags
+// one byte early and compensated with a filler byte after the optional
+// fields — byte count identical, but strict receivers (ffprobe/ZLMediaKit)
+// read the header fields at the wrong offsets and reject the packet.
 //
 // Reference: ISO/IEC 13818-1 §2.4.3.6, translated from
 // gb28181-rs/src/ps.rs build_pes_packet
@@ -157,8 +168,9 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 	}
 	pes = append(pes, byte(packetLen>>8), byte(packetLen))
 
-	// PES header flags byte (data[6])
-	// Bits 7-6: PTS_DTS_flags ('00' none, '10' PTS only, '11' PTS+DTS)
+	// Standard 3-byte PES header (§2.4.3.6): the '10' flags byte first (no
+	// scrambling, no alignment/copyright/original flags), then PTS_DTS_flags
+	// (bits 7-6 of the second byte), then PES_header_data_length.
 	var ptsDtsFlags byte
 	switch {
 	case hasPts && hasDts:
@@ -170,7 +182,7 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 	default:
 		ptsDtsFlags = 0b00
 	}
-	pes = append(pes, ptsDtsFlags<<6, optionalHeaderLen)
+	pes = append(pes, 0x80, ptsDtsFlags<<6, optionalHeaderLen)
 
 	// Add PTS/DTS if present
 	if hasPts {
@@ -187,13 +199,7 @@ func BuildPesPacket(streamID byte, payload []byte, pts, dts time.Time) []byte {
 		pes = append(pes, enc[:]...)
 	}
 
-	// Gap byte: the third header byte PES_packet_length counts (twin layout —
-	// see the function comment). For a PES without timestamps it doubles as a
-	// zero PES_header_data_length at the standard byte-8 position, so
-	// standard-layout receivers locate the payload at 9 + 0 as well.
-	pes = append(pes, 0x00)
-
-	// Add payload
+	// Add payload — at 9 + PES_header_data_length, the standard position.
 	pes = append(pes, payload...)
 
 	return pes
