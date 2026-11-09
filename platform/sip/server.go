@@ -171,6 +171,7 @@ type Server struct {
 	talkSeq      int
 
 	perDeviceMu  map[string]*sync.Mutex // serialize SIP handling per device
+	inviteMu     map[string]*sync.Mutex // serialize InviteChannel per channel (issue #169)
 	authFailures *authFailureTracker    // REGISTER brute-force backstop (issue #38)
 
 	// gbLoc pins the zone for naive GB/T 28181 device-clock timestamps
@@ -219,6 +220,7 @@ func NewServer(cfg Config, deviceMgr *platform.DeviceManager, sessionMgr *platfo
 		talks:         make(map[string]*talkSession),
 		broadcasts:    make(map[string]*broadcastSession),
 		perDeviceMu:   make(map[string]*sync.Mutex),
+		inviteMu:      make(map[string]*sync.Mutex),
 	}
 	s.alarmLinkage = newAlarmLinkage(
 		s.InviteChannel, s.ByeChannel,
@@ -680,6 +682,18 @@ func (s *Server) InviteChannel(deviceID, channelID string) error {
 	if srv == nil {
 		return fmt.Errorf("gb28181: SIP server not started")
 	}
+
+	// Serialize per channel (issue #169): concurrent InviteChannel calls
+	// (auto-INVITE on every device re-REGISTER, recorder start, alarm
+	// linkage) used to race the receiver check below — both saw no receiver,
+	// both ran inviteCore, and the second sessionMgr.Invite recycled the
+	// first's half-open session mid-handshake (Invite's idempotency guard
+	// BYEs whatever it finds), tearing each other's media down. Under the
+	// gate the check-then-invite sequence is atomic; a caller that waited
+	// finds the winner's receiver and no-ops.
+	inviteMu := s.getInviteMu(channelID)
+	inviteMu.Lock()
+	defer inviteMu.Unlock()
 
 	// Idempotency: an active receiver means the session is already up — but
 	// surface the live session to the CURRENT recorder before returning. A
@@ -2217,6 +2231,19 @@ func (s *Server) getDeviceMu(deviceID string) *sync.Mutex {
 	if !ok {
 		mu = &sync.Mutex{}
 		s.perDeviceMu[deviceID] = mu
+	}
+	return mu
+}
+
+// getInviteMu returns (creating if needed) the per-channel INVITE mutex
+// (issue #169).
+func (s *Server) getInviteMu(channelID string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mu, ok := s.inviteMu[channelID]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.inviteMu[channelID] = mu
 	}
 	return mu
 }

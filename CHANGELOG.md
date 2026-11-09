@@ -11,6 +11,22 @@ are released out of band.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Fixed
+
+- **`platform/sip`: concurrent `InviteChannel` calls serialize per channel
+  (#169)**: the receiver idempotency check and `inviteCore` were not atomic —
+  two racing callers (auto-INVITE on re-REGISTER, recorder start, alarm
+  linkage) both saw no receiver and both ran the handshake, and the second
+  `SessionManager.Invite` recycled the first's half-open session
+  mid-handshake (Invite's idempotency guard BYEs whatever it finds), tearing
+  each other's media down. A per-channel keyed mutex (the `perDeviceMu`
+  idiom) makes check-then-invite atomic; a caller that waited finds the
+  winner's receiver and no-ops. Regression test: three concurrent invites
+  collapse into exactly one INVITE transaction with zero mid-flight BYEs
+  (fails on the pre-fix code).
+
 ## [v0.15.2] — 2026-11-03
 
 The thermal-channel plumbing patch: the marking now travels all the way
