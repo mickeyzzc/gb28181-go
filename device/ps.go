@@ -73,8 +73,8 @@ func BuildProgramStreamMap() []byte {
 	body = append(body, 0x00, 0x04)
 
 	// Stream entry: H.264 video
-	body = append(body, 0x1B) // stream_type: H.264 (MPEG-4 AVC)
-	body = append(body, 0xE0) // elementary_stream_id: video
+	body = append(body, 0x1B)       // stream_type: H.264 (MPEG-4 AVC)
+	body = append(body, 0xE0)       // elementary_stream_id: video
 	body = append(body, 0x00, 0x00) // es_info_length = 0
 
 	// CRC_32 over everything after the length field (§2.5.3.5, Annex A)
@@ -91,7 +91,7 @@ func crc32MPEG(data []byte) uint32 {
 	crc := uint32(0xFFFFFFFF)
 	for _, b := range data {
 		crc ^= uint32(b) << 24
-		for i := 0; i < 8; i++ {
+		for range 8 {
 			if crc&0x80000000 != 0 {
 				crc = (crc << 1) ^ 0x04C11DB7
 			} else {
