@@ -80,7 +80,6 @@ func TestInviteChannelConcurrentCallsSerialize(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	close(stopResponder)
 	close(results)
 	for err := range results {
 		require.NoError(t, err, "every concurrent InviteChannel must succeed")
@@ -96,5 +95,16 @@ func TestInviteChannelConcurrentCallsSerialize(t *testing.T) {
 	srv.mu.Unlock()
 	require.NotNil(t, dlg, "the winning INVITE must complete its dialog")
 
+	// Tear the session down while the responder still answers the BYE (the
+	// established live-loop pattern): stopping the responder BEFORE Stop left
+	// Stop's BYE handshake unanswered once — a wedged transaction hung the
+	// whole package on CI (10m timeout) while passing locally by timing luck.
+	byed := make(chan error, 1)
+	go func() { byed <- srv.ByeChannelByID(fakeChannelID) }()
+	require.Eventually(t, func() bool { return byes.Load() >= 1 },
+		10*time.Second, 20*time.Millisecond, "teardown BYE must reach the device")
+	require.NoError(t, <-byed)
+
 	_ = srv.Stop()
+	close(stopResponder)
 }
