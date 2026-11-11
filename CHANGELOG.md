@@ -9,9 +9,7 @@ Releases are capability packages: merges accumulate on `main` silently
 and ship with the next tag (merge ≠ release). Only urgent security fixes
 are released out of band.
 
-## [Unreleased]
-
-## [Unreleased]
+## [v0.16.0] — 2026-11-11
 
 ### Fixed
 
