@@ -6,7 +6,7 @@
 ## 安装
 
 ```bash
-go get github.com/mickeyzzc/gb28181-go@v0.11.0
+go get github.com/mickeyzzc/gb28181-go@v0.16.1
 ```
 
 ## Config

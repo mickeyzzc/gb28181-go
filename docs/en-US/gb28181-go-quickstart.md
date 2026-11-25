@@ -8,7 +8,7 @@ minimal compilable example; per-module depth follows in later chapters.
 ## Install
 
 ```bash
-go get github.com/mickeyzzc/gb28181-go@v0.11.0
+go get github.com/mickeyzzc/gb28181-go@v0.16.1
 ```
 
 ## Minimal example

@@ -9,7 +9,7 @@ intercom flow has a decoded wire path plus a host seam.
 ## Install
 
 ```bash
-go get github.com/mickeyzzc/gb28181-go@v0.11.0
+go get github.com/mickeyzzc/gb28181-go@v0.16.1
 ```
 
 ## Config reference
