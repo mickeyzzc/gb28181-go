@@ -9,6 +9,22 @@ Releases are capability packages: merges accumulate on `main` silently
 and ship with the next tag (merge ≠ release). Only urgent security fixes
 are released out of band.
 
+## [Unreleased]
+
+### Fixed
+
+- **`platform`: catalog `PTZType` is advisory again (#174)**: a real pan/tilt
+  camera (Hikvision DS-2CD2225Y) reports `PTZType=0` in its catalog, and the
+  hard gate made every PTZ call fail with `ErrPTZUnsupported` (the host mapped
+  it to HTTP 404), so the camera could not be moved at all. `SendPTZ`,
+  `SendPTZPreset`, `SendPTZCruise` and `SendFI` now send the command and let
+  the device answer by default — GB/T 28181 PTZ instructions are idempotent
+  and harmless on fixed cameras. `WithPTZTypeGate()` restores the old strict
+  behavior for hosts that want fail-fast capability checks, and
+  `SetChannelPTZTypeOverride` / `ClearChannelPTZTypeOverride` carve out
+  per-channel exceptions (keyed by channel ID, preserved across catalog
+  refreshes).
+
 ## [v0.16.0] — 2026-11-11
 
 ### Fixed

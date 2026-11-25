@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -259,24 +260,98 @@ var (
 	ErrChannelNotFound = fmt.Errorf("gb28181: channel not found")
 	// ErrDeviceOffline means the channel's device is not currently registered/online.
 	ErrDeviceOffline = fmt.Errorf("gb28181: device offline")
-	// ErrPTZUnsupported means the channel reports PTZType 0 (no PTZ).
+	// ErrPTZUnsupported means the channel reports PTZType 0 (no PTZ) and the
+	// opt-in catalog gate is enabled (WithPTZTypeGate). The catalog field is
+	// advisory and is ignored by default: a real pan/tilt camera can report 0
+	// (#174), so commands are sent and the device answers.
 	ErrPTZUnsupported = fmt.Errorf("gb28181: channel does not support PTZ")
-	// ErrZoomUnsupported means a pan/tilt-only channel (PTZType 1) got a zoom command.
+	// ErrZoomUnsupported means a pan/tilt-only channel (PTZType 1) got a zoom
+	// command while the opt-in catalog gate is enabled. Ignored by default,
+	// like ErrPTZUnsupported.
 	ErrZoomUnsupported = fmt.Errorf("gb28181: channel does not support zoom")
 )
 
-// PTZController sends GB/T 28181 PTZ control commands to registered channels
-// over the SIP MESSAGE transport. It validates capability (PTZType) and
-// device liveness before sending.
-type PTZController struct {
-	devices *DeviceManager
-	sender  MessageSender
-	seq     atomic.Int64 // MANSCDP SN sequence
+// PTZControllerOption configures a PTZController.
+type PTZControllerOption func(*PTZController)
+
+// WithPTZTypeGate enables the strict, catalog-driven capability gate: a
+// channel reporting PTZType 0 rejects every PTZ/preset/cruise/FI command with
+// ErrPTZUnsupported, and one reporting PTZType 1 rejects zoom with
+// ErrZoomUnsupported. By default the gate is OFF because catalog PTZType is
+// not trustworthy — real pan/tilt cameras have been observed reporting 0
+// (#174) — and GB/T 28181 PTZ commands are idempotent and harmless on fixed
+// cameras. Hosts that prefer to fail fast can opt in; per-channel overrides
+// (SetChannelPTZTypeOverride) then carve out exceptions.
+func WithPTZTypeGate() PTZControllerOption {
+	return func(c *PTZController) { c.strictPTZType = true }
 }
 
-// NewPTZController creates a controller sending through sender.
-func NewPTZController(devices *DeviceManager, sender MessageSender) *PTZController {
-	return &PTZController{devices: devices, sender: sender}
+// PTZController sends GB/T 28181 PTZ control commands to registered channels
+// over the SIP MESSAGE transport. It always validates device liveness; the
+// catalog PTZ capability check is opt-in via WithPTZTypeGate.
+type PTZController struct {
+	devices       *DeviceManager
+	sender        MessageSender
+	strictPTZType bool
+	overrides     sync.Map     // channelID -> int (0/1/2)
+	seq           atomic.Int64 // MANSCDP SN sequence
+}
+
+// NewPTZController creates a controller sending through sender. Options are
+// optional; without any, the catalog PTZType gate is disabled (commands are
+// sent and the device decides).
+func NewPTZController(devices *DeviceManager, sender MessageSender, opts ...PTZControllerOption) *PTZController {
+	c := &PTZController{devices: devices, sender: sender}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// SetChannelPTZTypeOverride forces the PTZType used by the opt-in catalog
+// gate for channelID (0 = no PTZ, 1 = pan/tilt, 2 = pan/tilt/zoom). It wins
+// over the catalog value and survives catalog refreshes, which replace the
+// Channel object. The override matters only when WithPTZTypeGate is enabled;
+// without the gate every channel is allowed. An out-of-range ptzType returns
+// an error and leaves the previous override untouched.
+func (c *PTZController) SetChannelPTZTypeOverride(channelID string, ptzType int) error {
+	if ptzType < 0 || ptzType > 2 {
+		return fmt.Errorf("gb28181: PTZType override must be 0, 1 or 2 (got %d)", ptzType)
+	}
+	c.overrides.Store(channelID, ptzType)
+	return nil
+}
+
+// ClearChannelPTZTypeOverride removes a channel's PTZType override, falling
+// back to the catalog value on the next gate check.
+func (c *PTZController) ClearChannelPTZTypeOverride(channelID string) {
+	c.overrides.Delete(channelID)
+}
+
+// effectivePTZType returns the override when set, else the catalog value.
+func (c *PTZController) effectivePTZType(ch *Channel) int {
+	if v, ok := c.overrides.Load(ch.ID); ok {
+		return v.(int)
+	}
+	return ch.PTZType
+}
+
+// checkPTZCapability enforces the opt-in catalog gate. When the gate is off
+// (the default) it never rejects, so a misreported PTZType cannot block a
+// real pan/tilt camera.
+func (c *PTZController) checkPTZCapability(ch *Channel, zoom bool) error {
+	if !c.strictPTZType {
+		return nil
+	}
+	switch c.effectivePTZType(ch) {
+	case 0:
+		return ErrPTZUnsupported
+	case 1:
+		if zoom {
+			return ErrZoomUnsupported
+		}
+	}
+	return nil
 }
 
 // locateChannel resolves a channel ID across all registered devices,
@@ -291,8 +366,8 @@ func (c *PTZController) locateChannel(channelID string) (*Channel, *Device, erro
 }
 
 // SendPTZ sends a PTZ command for channelID. The channel is located across all
-// registered devices. Errors cover unknown channel, offline device, missing
-// PTZ capability, pan/tilt-only devices rejecting zoom, and send failures.
+// registered devices. Errors cover unknown channel, offline device, the opt-in
+// catalog gate (PTZType 0 / pan-tilt-only zoom), and send failures.
 func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 	ch, dev, err := c.locateChannel(channelID)
 	if err != nil {
@@ -301,11 +376,9 @@ func (c *PTZController) SendPTZ(channelID, direction string, speed byte) error {
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
-	if ch.PTZType == 0 {
-		return ErrPTZUnsupported
-	}
-	if (direction == DirZoomIn || direction == DirZoomOut) && ch.PTZType == 1 {
-		return ErrZoomUnsupported
+	zoom := direction == DirZoomIn || direction == DirZoomOut
+	if err := c.checkPTZCapability(ch, zoom); err != nil {
+		return err
 	}
 
 	cmd, err := BuildPTZCommand(direction, speed)
@@ -325,8 +398,8 @@ func (c *PTZController) SendPTZPreset(channelID, action string, preset byte) err
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
-	if ch.PTZType == 0 {
-		return ErrPTZUnsupported
+	if err := c.checkPTZCapability(ch, false); err != nil {
+		return err
 	}
 	cmd, err := BuildPTZPresetCommand(action, preset)
 	if err != nil {
@@ -345,8 +418,8 @@ func (c *PTZController) SendPTZCruise(channelID, action string, cruise, value by
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
-	if ch.PTZType == 0 {
-		return ErrPTZUnsupported
+	if err := c.checkPTZCapability(ch, false); err != nil {
+		return err
 	}
 	if action == CruiseStop {
 		return c.SendPTZ(channelID, DirStop, 0)
@@ -359,7 +432,7 @@ func (c *PTZController) SendPTZCruise(channelID, action string, cruise, value by
 }
 
 // SendFI sends an FI lens instruction (iris open/close, focus near/far, stop)
-// for channelID. Requires a PTZ-capable channel, like the preset/cruise paths.
+// for channelID. Subject to the same opt-in catalog gate as the PTZ paths.
 func (c *PTZController) SendFI(channelID, action string, speed byte) error {
 	ch, dev, err := c.locateChannel(channelID)
 	if err != nil {
@@ -368,8 +441,8 @@ func (c *PTZController) SendFI(channelID, action string, speed byte) error {
 	if dev.Status.Load() != DeviceOnline {
 		return ErrDeviceOffline
 	}
-	if ch.PTZType == 0 {
-		return ErrPTZUnsupported
+	if err := c.checkPTZCapability(ch, false); err != nil {
+		return err
 	}
 	cmd, err := BuildFICommand(action, speed)
 	if err != nil {

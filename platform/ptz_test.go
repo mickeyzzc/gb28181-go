@@ -75,7 +75,7 @@ func (f *fakeMessageSender) SendMessage(deviceID string, body []byte) error {
 
 // newPTZTestEnv registers one online PTZ-capable device + channel and returns
 // the controller with a recording sender.
-func newPTZTestEnv(t *testing.T, ptzType int) (*PTZController, *fakeMessageSender, *DeviceManager) {
+func newPTZTestEnv(t *testing.T, ptzType int, opts ...PTZControllerOption) (*PTZController, *fakeMessageSender, *DeviceManager) {
 	t.Helper()
 	m := NewDeviceManager(time.Minute)
 	dev := &Device{ID: "34020000001310000001", Name: "Front Gate", NetAddr: "192.168.1.50:5060"}
@@ -85,7 +85,7 @@ func newPTZTestEnv(t *testing.T, ptzType int) (*PTZController, *fakeMessageSende
 	m.RegisterChannel(dev.ID, ch)
 
 	sender := &fakeMessageSender{}
-	return NewPTZController(m, sender), sender, m
+	return NewPTZController(m, sender, opts...), sender, m
 }
 
 func TestPTZ_SendPTZ_Success(t *testing.T) {
@@ -114,20 +114,89 @@ func TestPTZ_SendPTZ_DeviceOffline(t *testing.T) {
 	require.ErrorIs(t, err, ErrDeviceOffline)
 }
 
-func TestPTZ_SendPTZ_PTZUnsupported(t *testing.T) {
-	c, _, _ := newPTZTestEnv(t, 0)
-	err := c.SendPTZ("34020000001320000001", DirUp, 0x20)
-	require.ErrorIs(t, err, ErrPTZUnsupported)
+// Catalog PTZType is advisory: real pan/tilt cameras have been observed
+// reporting 0 (Hikvision DS-2CD2225Y, #174). By default the controller sends
+// the command and lets the device answer; only the opt-in gate rejects.
+func TestPTZ_SendPTZ_DefaultAllowsReportedNoPTZ(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 0)
+
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20))
+	require.Contains(t, sender.body, "<PTZCmd>A50F0102200000D7</PTZCmd>")
+
+	// Preset / cruise / FI share the same relaxed default.
+	require.NoError(t, c.SendPTZPreset("34020000001320000001", PresetCall, 1))
+	require.NoError(t, c.SendPTZCruise("34020000001320000001", CruiseStart, 1, 0))
+	require.NoError(t, c.SendFI("34020000001320000001", FIIrisOpen, 0x40))
 }
 
-func TestPTZ_SendPTZ_ZoomOnPanTiltOnly(t *testing.T) {
-	c, _, _ := newPTZTestEnv(t, 1)
+// A reported PTZType 1 (pan/tilt only) must not hard-reject zoom in the
+// default mode either — catalog fields are advisory (#174).
+func TestPTZ_SendPTZ_DefaultAllowsZoomOnReportedPanTiltOnly(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 1)
+
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20))
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirZoomIn, 0x20))
+	require.Contains(t, sender.body, "<PTZCmd>A50F0110000020E5</PTZCmd>")
+}
+
+func TestPTZ_StrictGate_RejectsAllPTZPaths(t *testing.T) {
+	c, sender, _ := newPTZTestEnv(t, 0, WithPTZTypeGate())
+
+	require.ErrorIs(t, c.SendPTZ("34020000001320000001", DirUp, 0x20), ErrPTZUnsupported)
+	require.ErrorIs(t, c.SendPTZPreset("34020000001320000001", PresetSet, 5), ErrPTZUnsupported)
+	require.ErrorIs(t, c.SendPTZCruise("34020000001320000001", CruiseAddPoint, 1, 5), ErrPTZUnsupported)
+	require.ErrorIs(t, c.SendFI("34020000001320000001", FIFocusNear, 0x20), ErrPTZUnsupported)
+	require.Empty(t, sender.body, "gated commands must not reach the wire")
+}
+
+func TestPTZ_StrictGate_ZoomOnPanTiltOnly(t *testing.T) {
+	c, _, _ := newPTZTestEnv(t, 1, WithPTZTypeGate())
 
 	// Pan/tilt commands are fine on PTZType 1.
 	require.NoError(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20))
 
 	err := c.SendPTZ("34020000001320000001", DirZoomIn, 0x20)
 	require.ErrorIs(t, err, ErrZoomUnsupported)
+}
+
+// A channel-level override wins over the catalog value and survives a catalog
+// refresh (which replaces the Channel object).
+func TestPTZ_ChannelPTZTypeOverride(t *testing.T) {
+	c, sender, m := newPTZTestEnv(t, 0, WithPTZTypeGate())
+
+	require.ErrorIs(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20), ErrPTZUnsupported)
+
+	require.NoError(t, c.SetChannelPTZTypeOverride("34020000001320000001", 2))
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20))
+	require.Contains(t, sender.body, "<PTZCmd>A50F0102200000D7</PTZCmd>")
+
+	// Catalog refresh builds a fresh Channel with PTZType back at 0; the
+	// override is keyed by channel ID on the controller, so it still applies.
+	m.RegisterChannel("34020000001310000001", &Channel{
+		ID: "34020000001320000001", Name: "Channel 1 (refreshed)", PTZType: 0,
+	})
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20))
+
+	c.ClearChannelPTZTypeOverride("34020000001320000001")
+	require.ErrorIs(t, c.SendPTZ("34020000001320000001", DirLeft, 0x20), ErrPTZUnsupported)
+}
+
+// An override can also tighten a channel the catalog marks PTZ-capable.
+func TestPTZ_ChannelPTZTypeOverrideTightens(t *testing.T) {
+	c, _, _ := newPTZTestEnv(t, 2, WithPTZTypeGate())
+
+	require.NoError(t, c.SetChannelPTZTypeOverride("34020000001320000001", 0))
+	require.ErrorIs(t, c.SendPTZ("34020000001320000001", DirUp, 0x20), ErrPTZUnsupported)
+
+	require.NoError(t, c.SetChannelPTZTypeOverride("34020000001320000001", 1))
+	require.ErrorIs(t, c.SendPTZ("34020000001320000001", DirZoomIn, 0x20), ErrZoomUnsupported)
+}
+
+func TestPTZ_ChannelPTZTypeOverrideInvalid(t *testing.T) {
+	c, _, _ := newPTZTestEnv(t, 2, WithPTZTypeGate())
+
+	require.Error(t, c.SetChannelPTZTypeOverride("34020000001320000001", 3))
+	require.NoError(t, c.SendPTZ("34020000001320000001", DirUp, 0x20), "invalid override must not apply")
 }
 
 func TestPTZ_SendPTZ_SenderError(t *testing.T) {
@@ -266,7 +335,7 @@ func TestPTZ_SendFI_Success(t *testing.T) {
 }
 
 func TestPTZ_SendFI_PTZUnsupported(t *testing.T) {
-	c, _, _ := newPTZTestEnv(t, 0)
+	c, _, _ := newPTZTestEnv(t, 0, WithPTZTypeGate())
 	err := c.SendFI("34020000001320000001", FIFocusNear, 0x20)
 	require.ErrorIs(t, err, ErrPTZUnsupported)
 }

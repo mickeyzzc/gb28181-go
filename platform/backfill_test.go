@@ -174,7 +174,7 @@ func TestSendPTZPresetPaths(t *testing.T) {
 }
 
 func TestSendPTZPresetUnsupported(t *testing.T) {
-	c, _, _ := newPTZTestEnv(t, 0)
+	c, _, _ := newPTZTestEnv(t, 0, WithPTZTypeGate())
 	err := c.SendPTZPreset("34020000001320000001", PresetSet, 5)
 	require.ErrorIs(t, err, ErrPTZUnsupported)
 }

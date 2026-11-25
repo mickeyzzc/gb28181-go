@@ -91,6 +91,26 @@ bus := sip.NewEventBus(64) // 有损:慢消费者丢事件,绝不阻塞
 - 接收路径：RTP 重组（UDP 与 TCP 被动）、抖动缓冲、SSRC 锁定、
   MPEG-PS 解复用回 NAL。
 
+## PTZ 控制
+
+`platform.NewPTZController(devices, sender)` 构造 § A.3/A.4 的 PTZ、预置位、
+巡航、FI 镜头与辅助开关指令发送器。**目录里的 `PTZType` 默认只当参考值**：
+真实云台机也会把它报成 0（海康 DS-2CD2225Y，#174），因此控制器默认照发
+指令、由设备应答——国标 PTZ 指令本身幂等，固定枪机收到也无副作用。
+
+```go
+ctrl := platform.NewPTZController(devices, sipServer) // 默认：不按目录值拦截
+
+// 严格模式（可选）：恢复按目录能力拦截——PTZType 0 全部拒绝
+// （ErrPTZUnsupported），仅云台（1）拒绝变倍（ErrZoomUnsupported）。
+strict := platform.NewPTZController(devices, sipServer, platform.WithPTZTypeGate())
+
+// 通道级覆盖：严格模式下给个别误报通道开/关能力，按通道 ID 生效，
+// 目录刷新（重建 Channel）后仍保留。
+_ = strict.SetChannelPTZTypeOverride("34020000001320000001", 2)
+strict.ClearChannelPTZTypeOverride("34020000001320000001")
+```
+
 ## 真机怪癖补丁
 
 服务器带着从真实设备学来的补丁：投机 ACK、对话框重置、REGISTER
