@@ -94,6 +94,29 @@ The bus is deliberately lossy — events are notifications, not a queue.
 - The receive path: RTP reassembly (UDP and TCP-passive), jitter
   buffer, SSRC latch, MPEG-PS demux back to NAL units.
 
+## PTZ control
+
+`platform.NewPTZController(devices, sender)` builds the § A.3/A.4 senders for
+PTZ, preset, cruise, FI lens and auxiliary-switch instructions. **The catalog
+`PTZType` is advisory by default**: real pan/tilt cameras have been observed
+reporting 0 (Hikvision DS-2CD2225Y, #174), so the controller sends the command
+and lets the device answer — GB/T 28181 PTZ instructions are idempotent and
+harmless on a fixed camera.
+
+```go
+ctrl := platform.NewPTZController(devices, sipServer) // default: no gate
+
+// Strict mode (opt-in): restore catalog-driven rejection — PTZType 0 rejects
+// every PTZ path (ErrPTZUnsupported), pan/tilt-only (1) rejects zoom
+// (ErrZoomUnsupported).
+strict := platform.NewPTZController(devices, sipServer, platform.WithPTZTypeGate())
+
+// Per-channel override: carve out exceptions under strict mode. Keyed by
+// channel ID and preserved across catalog refreshes (Channel rebuilds).
+_ = strict.SetChannelPTZTypeOverride("34020000001320000001", 2)
+strict.ClearChannelPTZTypeOverride("34020000001320000001")
+```
+
 ## Firmware-quirk patches
 
 The server carries patches learned from real devices: speculative ACK,
